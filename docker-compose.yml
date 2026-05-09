@@ -1,0 +1,68 @@
+# ============================================================================
+# TaxMind Books — local development services.
+#
+# Default `docker compose up` brings up postgres + redis (the P0.01 acceptance
+# criterion). The backend service is registered under the `app` profile and
+# only starts when explicitly requested:
+#
+#   docker compose up                        # postgres + redis only
+#   docker compose --profile app up          # also brings up backend
+#
+# This keeps P0.01 self-contained while letting P0.02 land the backend
+# Dockerfile without further changes here.
+# ============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: taxmind-postgres
+    environment:
+      POSTGRES_USER: taxmind
+      POSTGRES_PASSWORD: taxmind
+      POSTGRES_DB: taxmind_books
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taxmind -d taxmind_books"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: taxmind-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    profiles: ["app"]
+    container_name: taxmind-backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:

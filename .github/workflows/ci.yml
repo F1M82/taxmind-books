@@ -1,0 +1,59 @@
+# ============================================================================
+# TaxMind Books — CI pipeline (skeleton).
+#
+# This is the P0.01 skeleton. Subsequent Phase 0 tasks fill it out:
+#   P0.04 — adds tools/lint/check_money_types.py invocation
+#   P0.10 — adds tenant_isolation test layer
+#   P0.11 — adds tools/lint/check_audit_emit.py invocation
+#   P0.20 — adds OpenAPI contract test invocation
+#   P0.32 — finalizes the full multi-stage pipeline per TESTING.md
+#   P0.33 — adds tools/lint/check_imports.py invocation
+#
+# Until the backend skeleton lands in P0.02, the lint and test steps are
+# placeholders that succeed trivially.
+# ============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ruff
+        run: pip install "ruff==0.6.9"
+      - name: Run ruff (skeleton — full lint enabled in P0.32)
+        run: ruff check . || true
+
+  type-check:
+    name: Type check
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "mypy enabled once backend skeleton (P0.02) lands"
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "pytest enabled once tests exist (P0.02+)"

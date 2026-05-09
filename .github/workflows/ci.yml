@@ -36,9 +36,11 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install ruff
-        run: pip install "ruff==0.6.9"
+        run: pip install "ruff==0.7.4"
       - name: Run ruff (skeleton — full lint enabled in P0.32)
         run: ruff check . || true
+      - name: Money types check (per docs/MONEY.md §Enforcement)
+        run: python tools/lint/check_money_types.py backend/app
 
   type-check:
     name: Type check

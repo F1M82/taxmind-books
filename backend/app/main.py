@@ -10,6 +10,7 @@ from fastapi import FastAPI
 
 from app.config import Settings, get_settings
 from app.core.logging import configure_logging
+from app.core.money import configure_decimal_context
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -21,6 +22,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """
     settings = settings or get_settings()
     configure_logging(settings.LOG_LEVEL)
+    configure_decimal_context()
 
     app = FastAPI(
         title="TaxMind Books API",

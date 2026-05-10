@@ -160,3 +160,43 @@ The discipline is unchanged:
 - The Tally Connector salvage (`tally_client.py`) remains the carry-forward from Qwen-Tallyonmobile.
 
 What's new in v1.2 is feature scope and the Optional-voucher safety mechanism. Nothing in the foundations changes.
+
+---
+
+## Patches
+
+Patches are post-amendment corrections to internal inconsistencies that
+surfaced during execution. They follow the same Section-1 stop-and-justify
+flow but are recorded inline here rather than as a new versioned document.
+
+### Patch 1 — `audit_logs.company_id` made nullable (10 May 2026)
+
+**Surfaced during:** P0.14 implementation (auth register endpoint).
+
+**Inconsistency.** `SCHEMA.sql` declared `audit_logs.company_id NOT NULL`,
+but `AUDIT.md` requires user-lifecycle events (`user.created`,
+`user.password_changed`, `user.deactivated`) to be audited — and at the
+moment those events fire, the user has no tenant scope. Self-registration
+in particular has no logged-in actor and no active company; writing the
+required `user.created` row was impossible.
+
+**Decision.** `audit_logs.company_id` becomes nullable. System events
+(those listed in AUDIT.md §"Tenant-scoped vs system events") are written
+with `company_id = NULL`. Tenant-scoped events are unchanged.
+
+**Migration.** `backend/alembic/versions/0005_audit_logs_company_id_nullable.py`:
+- `ALTER TABLE audit_logs ALTER COLUMN company_id DROP NOT NULL`
+- Replace `idx_audit_logs_company_created` with the same index plus a
+  `WHERE company_id IS NOT NULL` partial filter, so tenant-scoped reads
+  don't pay for system-event rows.
+
+**Model.** `AuditLog` no longer inherits `TenantScopedMixin` (which
+enforces NOT NULL) and declares `company_id` as a nullable FK
+explicitly. Tenant-scoped queries from the audit-log read API filter
+explicitly by `company_id`; system rows are reachable only via
+admin/superuser paths (Phase 5+).
+
+**Why this isn't a v1.2 amendment proper.** It changes nothing about
+product behavior, API contract, or user-visible flows. It corrects an
+internal inconsistency between two architecture documents. Tenant
+isolation guarantees are unchanged.

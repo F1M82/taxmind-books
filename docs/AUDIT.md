@@ -38,8 +38,8 @@ Reference (full DDL is in SCHEMA.sql):
 ```sql
 CREATE TABLE audit_logs (
     id            UUID PRIMARY KEY,
-    company_id    UUID NOT NULL REFERENCES companies(id),
-    user_id       UUID REFERENCES users(id),         -- nullable: system events
+    company_id    UUID REFERENCES companies(id),      -- nullable: system events (see below)
+    user_id       UUID REFERENCES users(id),          -- nullable: system events
     action        VARCHAR(40) NOT NULL,               -- e.g. "voucher.created"
     entity_type   VARCHAR(40) NOT NULL,               -- e.g. "voucher"
     entity_id     UUID NOT NULL,
@@ -53,12 +53,48 @@ CREATE TABLE audit_logs (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_audit_logs_company_created ON audit_logs (company_id, created_at DESC);
+CREATE INDEX idx_audit_logs_company_created ON audit_logs (company_id, created_at DESC)
+    WHERE company_id IS NOT NULL;
 CREATE INDEX idx_audit_logs_entity ON audit_logs (entity_type, entity_id);
-CREATE INDEX idx_audit_logs_user ON audit_logs (user_id, created_at DESC);
+CREATE INDEX idx_audit_logs_user ON audit_logs (user_id, created_at DESC)
+    WHERE user_id IS NOT NULL;
 ```
 
 The `audit_logs` table has additional database-level protections (see *Append-only enforcement* below).
+
+### Tenant-scoped vs system events
+
+Most audit rows are **tenant-scoped** — they belong to a specific company,
+and `company_id` is the active company at the moment of the action.
+
+A small set of events have **no tenant scope** at the time they occur:
+
+| Action | Why no company |
+|---|---|
+| `user.created` | The new user is not a member of any company until they create or are added to one. |
+| `user.password_changed` | Password is on the global `users` row, not tied to a company. |
+| `user.deactivated` | Same — user lifecycle, not company state. |
+| `device.registered` / `device.unregistered` | Push notification tokens are bound to a user, not a company. |
+| `account.deletion_requested` / `cancelled` / `completed` | The deletion request is at the user level. |
+| `data_export.requested` / `completed` | Cross-company by design. |
+
+For these events, audit rows are written with `company_id = NULL`. The
+column was made nullable in v1.2 Patch 1 (see `AMENDMENTS_v1.2.md`).
+`AuditEmitter.emit_system_event()` (or passing `company=None` on the
+`AuditContext`) is the canonical path.
+
+**Read-API behavior.** The tenant-scoped audit-log API
+(`GET /api/v1/audit-logs/`) filters explicitly by the active company,
+so system rows never leak into a tenant's view. They are reached only
+via admin/superuser paths, which are out of scope until Phase 5.
+
+**Auto-scoping note.** `AuditLog` does NOT inherit
+`TenantScopedMixin`. The auto-injected `WHERE company_id = X` from
+`get_scoped_session` would silently exclude system rows from any
+tenant's audit query — which is the desired behavior — but more
+importantly the mixin enforces NOT NULL at the column level. The
+read API applies the company filter explicitly in service code, where
+it is visible to reviewers and to the tenant-isolation tests.
 
 ## Action vocabulary
 

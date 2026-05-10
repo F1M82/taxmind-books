@@ -88,9 +88,14 @@ class AuditContext:
 
     Created in the API layer (from request) and passed to services.
     Workers create their own AuditContext from task arguments.
+
+    `company` is optional: system events (user lifecycle, device
+    registration, account deletion, data export) have no tenant scope
+    and write rows with `company_id = NULL`. See AUDIT.md §"Tenant-
+    scoped vs system events".
     """
 
-    company: Company
+    company: Company | None
     user: User | None
     ip_address: str | None
     user_agent: str | None
@@ -136,7 +141,7 @@ class AuditEmitter:
             raise ValueError(f"unknown audit action: {action!r}")
         log = AuditLog(
             id=uuid4(),
-            company_id=self.ctx.company.id,
+            company_id=self.ctx.company.id if self.ctx.company else None,
             user_id=self.ctx.user.id if self.ctx.user else None,
             action=action,
             entity_type=entity_type,

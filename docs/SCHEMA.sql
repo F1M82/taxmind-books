@@ -498,11 +498,21 @@ CREATE INDEX idx_recon_matches_tier ON recon_matches (reconciliation_id, tier);
 
 -- =============================================================================
 -- 11. audit_logs (append-only; see AUDIT.md)
+-- -----------------------------------------------------------------------------
+-- company_id is NULLABLE so global / system events (user.created,
+-- user.password_changed, user.deactivated, etc.) — which have no tenant
+-- scope at the time they occur — can still be audited as required by
+-- AUDIT.md §"What is financially significant".
+--
+-- Tenant-scoped queries from the audit-log read API filter explicitly
+-- on `company_id = <active>` and so naturally exclude NULL rows. System
+-- rows are accessible only via admin/superuser paths (Phase 5+).
+-- See docs/AMENDMENTS_v1.2.md §"Patch 1".
 -- =============================================================================
 
 CREATE TABLE audit_logs (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    company_id    UUID NOT NULL REFERENCES companies(id) ON DELETE RESTRICT,
+    company_id    UUID REFERENCES companies(id) ON DELETE RESTRICT,
     user_id       UUID REFERENCES users(id) ON DELETE SET NULL,
     action        VARCHAR(40) NOT NULL,
     entity_type   VARCHAR(40) NOT NULL,
@@ -521,7 +531,11 @@ CREATE TABLE audit_logs (
     )
 );
 
-CREATE INDEX idx_audit_logs_company_created ON audit_logs (company_id, created_at DESC);
+-- Partial index: company-scoped queries only need rows that belong to
+-- a tenant. System-event rows (company_id IS NULL) are reached via
+-- admin paths that don't use this index.
+CREATE INDEX idx_audit_logs_company_created ON audit_logs (company_id, created_at DESC)
+    WHERE company_id IS NOT NULL;
 CREATE INDEX idx_audit_logs_entity ON audit_logs (entity_type, entity_id);
 CREATE INDEX idx_audit_logs_user ON audit_logs (user_id, created_at DESC)
     WHERE user_id IS NOT NULL;

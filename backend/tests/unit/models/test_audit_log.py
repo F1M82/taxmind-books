@@ -16,8 +16,20 @@ def test_audit_log_tablename() -> None:
     assert AuditLog.__tablename__ == "audit_logs"
 
 
-def test_audit_log_is_tenant_scoped() -> None:
-    assert issubclass(AuditLog, TenantScopedMixin)
+def test_audit_log_not_tenant_scoped_mixin() -> None:
+    """AuditLog is intentionally NOT a TenantScopedMixin subclass.
+
+    The mixin enforces NOT NULL on company_id; per AMENDMENTS_v1.2
+    Patch 1, system events (user.created, user.password_changed,
+    user.deactivated, etc.) carry company_id = NULL. Tenant scoping
+    for the audit-log read API is applied explicitly in service code.
+    """
+    assert not issubclass(AuditLog, TenantScopedMixin)
+
+
+def test_audit_log_company_id_is_nullable() -> None:
+    col = AuditLog.__table__.columns["company_id"]
+    assert col.nullable is True
 
 
 def test_audit_log_columns_match_schema() -> None:

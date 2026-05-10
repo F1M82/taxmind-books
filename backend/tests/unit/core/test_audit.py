@@ -160,6 +160,28 @@ def test_emit_with_no_user_writes_null_user_id() -> None:
     assert log.user_id is None
 
 
+def test_emit_with_no_company_writes_null_company_id() -> None:
+    """System events (user.created at registration) have ctx.company = None."""
+    db = _FakeSession()
+    ctx = AuditContext(
+        company=None,
+        user=None,
+        ip_address="127.0.0.1",
+        user_agent="pytest/1.0",
+        request_id=uuid4(),
+        source="api",
+    )
+    emitter = AuditEmitter(db, ctx)
+    log = emitter.emit(
+        action="user.created",
+        entity_type="user",
+        entity_id=uuid4(),
+        old_value=None,
+        new_value={"email": "u@example.com"},
+    )
+    assert log.company_id is None
+
+
 def test_emit_computes_diff_for_update() -> None:
     db = _FakeSession()
     emitter = AuditEmitter(db, _make_ctx())  # type: ignore[arg-type]

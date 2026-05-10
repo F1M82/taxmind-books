@@ -83,9 +83,14 @@ def updated_at_col() -> Mapped[datetime]:
 class TenantScopedMixin:
     """Mixin marker for models scoped to a company.
 
-    Carries the `company_id` FK and an index on it. The auto-scoping
-    session (added in P0.10) filters on this column whenever a query
-    targets a `TenantScopedMixin` subclass.
+    Carries the `company_id` FK. The auto-scoping session (added in
+    P0.10) filters on this column whenever a query targets a
+    `TenantScopedMixin` subclass.
+
+    Each tenant-scoped model declares its own index(es) on `company_id`
+    in `__table_args__` so the names match `docs/SCHEMA.sql` exactly
+    (e.g. `idx_ledgers_company`, not the auto-generated
+    `idx_ledgers_company_id`).
 
     Tables that have non-default FK semantics (e.g. CASCADE rather than
     RESTRICT, or no FK at all) declare their own `company_id` instead
@@ -96,5 +101,4 @@ class TenantScopedMixin:
         PG_UUID(as_uuid=True),
         ForeignKey("companies.id", ondelete="RESTRICT"),
         nullable=False,
-        index=True,
     )

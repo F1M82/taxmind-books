@@ -174,9 +174,13 @@ def test_decode_token_rejects_expired() -> None:
 def test_decode_token_rejects_bad_signature() -> None:
     cfg = _settings()
     token = create_access_token(uuid4(), settings=cfg)
-    # Flip the last char of the signature segment.
+    # Replace the entire signature segment with a similar-shaped but
+    # definitely-wrong value. Single-char flip can occasionally collide
+    # under base64url padding, so do a wholesale replacement.
     head, payload, sig = token.split(".")
-    tampered = f"{head}.{payload}.{sig[:-1]}{('A' if sig[-1] != 'A' else 'B')}"
+    replacement = "X" * len(sig)
+    assert replacement != sig
+    tampered = f"{head}.{payload}.{replacement}"
     with pytest.raises(TokenInvalid):
         decode_token(tampered, settings=cfg)
 

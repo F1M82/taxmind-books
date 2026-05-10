@@ -58,9 +58,10 @@ def _build_audit_ctx(
     request: Request,
     *,
     user: User | None,
+    company=None,  # type: ignore[no-untyped-def]
 ) -> AuditContext:
     return AuditContext(
-        company=None,
+        company=company,
         user=user,
         ip_address=_coerce_ip(
             request.client.host if request.client else None
@@ -76,9 +77,12 @@ def _system_audit_emitter(request: Request, db: Session) -> AuditEmitter:
 
 
 def _user_audit_emitter(
-    request: Request, db: Session, user: User
+    request: Request,
+    db: Session,
+    user: User,
+    company=None,  # type: ignore[no-untyped-def]
 ) -> AuditEmitter:
-    return AuditEmitter(db, _build_audit_ctx(request, user=user))
+    return AuditEmitter(db, _build_audit_ctx(request, user=user, company=company))
 
 
 # ---------------------------------------------------------------------

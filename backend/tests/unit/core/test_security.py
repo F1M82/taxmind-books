@@ -32,7 +32,7 @@ def _settings() -> Settings:
         SECRET_KEY="test-secret-key-x",
         CONNECTOR_JWT_SECRET="test-connector-secret-x",
         ACCESS_TOKEN_EXPIRE_MINUTES=30,
-        REFRESH_TOKEN_EXPIRE_DAYS=14,
+        REFRESH_TOKEN_EXPIRE_DAYS=7,
     )
 
 
@@ -123,12 +123,12 @@ def test_refresh_token_distinguishable_from_access() -> None:
     assert decode_token(refresh, settings=cfg).type == REFRESH_TOKEN_TYPE
 
 
-def test_refresh_token_expiry_14d() -> None:
+def test_refresh_token_expiry_7d() -> None:
     cfg = _settings()
     token = create_refresh_token(uuid4(), settings=cfg)
     payload = decode_token(token, settings=cfg)
     delta = payload.exp - datetime.now(UTC)
-    assert timedelta(days=13, hours=23) <= delta <= timedelta(days=14, hours=1)
+    assert timedelta(days=6, hours=23) <= delta <= timedelta(days=7, hours=1)
 
 
 # ---------------- decode_token ----------------

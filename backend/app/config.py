@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     SECRET_KEY: SecretStr = Field(..., description="App-wide secret for signing/encryption")
     JWT_ALGORITHM: str = Field(default="HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, ge=1)
-    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=14, ge=1)
+    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, ge=1)
 
     # ---------------- Required: connector ----------------
     CONNECTOR_JWT_SECRET: SecretStr = Field(

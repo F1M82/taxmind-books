@@ -22,6 +22,7 @@ dependencies = [
   "bcrypt>=4.2,<5",
   "pyjwt>=2.10,<3",
   "email-validator>=2.2,<3",
+  "python-multipart>=0.0.18,<0.1",
 ]
 
 [project.optional-dependencies]

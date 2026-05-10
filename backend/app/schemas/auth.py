@@ -49,3 +49,48 @@ class UserOut(TaxMindBooksBase):
     firm_name: str | None = Field(default=None)
     is_active: bool
     created_at: datetime
+
+
+class TokenUserOut(TaxMindBooksBase):
+    """Trimmed user payload nested inside the /login response."""
+
+    id: UUID
+    email: EmailStr
+    full_name: str
+    is_ca: bool
+    firm_name: str | None = None
+
+
+class TokenResponse(TaxMindBooksBase):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int  # seconds
+    user: TokenUserOut
+
+
+class RefreshRequest(TaxMindBooksBase):
+    refresh_token: str
+
+
+class CompanyMembershipOut(TaxMindBooksBase):
+    id: UUID
+    name: str
+    role: str  # CompanyRole.value
+
+
+class MeResponse(TaxMindBooksBase):
+    """Response for GET /auth/me — user + their company memberships."""
+
+    id: UUID
+    email: EmailStr
+    full_name: str
+    is_ca: bool
+    firm_name: str | None = None
+    is_active: bool
+    companies: list[CompanyMembershipOut]
+
+
+class PasswordChangeRequest(TaxMindBooksBase):
+    current_password: PasswordStr
+    new_password: PasswordStr

@@ -57,6 +57,42 @@ class VoucherCreate(TaxMindBooksBase):
     tds_section: Annotated[str, StringConstraints(max_length=10)] | None = None
 
 
+class VoucherUpdate(TaxMindBooksBase):
+    """Mutable subset of a posted voucher.
+
+    Per API.md §"PATCH /vouchers/{id}": only `narration` and
+    `reference` are mutable post-creation. Any other field in the
+    body causes `voucher_immutable_field`.
+    """
+
+    narration: str | None = None
+    reference: Annotated[str, StringConstraints(max_length=100)] | None = None
+
+
+class VoucherCancelRequest(TaxMindBooksBase):
+    reason: Annotated[str, StringConstraints(min_length=1, max_length=500)]
+
+
+class VoucherListItem(TaxMindBooksBase):
+    id: UUID
+    voucher_type: str
+    voucher_number: str | None = None
+    date: date
+    narration: str | None = None
+    reference: str | None = None
+    total_amount: Money
+    status: str
+    source: str
+    gst_applicable: bool
+    tally_posted_at: datetime | None = None
+    created_at: datetime
+
+
+class VoucherListResponse(TaxMindBooksBase):
+    items: list[VoucherListItem]
+    meta: dict[str, str | int | None]
+
+
 class VoucherEntryOut(TaxMindBooksBase):
     id: UUID
     ledger_id: UUID

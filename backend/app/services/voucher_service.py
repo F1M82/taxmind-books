@@ -12,7 +12,10 @@ from app.core.audit import AuditEmitter
 from app.core.exceptions import (
     LedgerNotFound,
     ValidationFailed,
+    VoucherAlreadyCancelled,
     VoucherEntriesUnbalanced,
+    VoucherImmutableField,
+    VoucherNotFound,
 )
 from app.models.ledger import Ledger
 from app.models.user import User
@@ -23,7 +26,7 @@ from app.models.voucher import (
     VoucherStatus,
     VoucherType,
 )
-from app.schemas.voucher import VoucherCreate
+from app.schemas.voucher import VoucherCreate, VoucherUpdate
 
 
 def _voucher_snapshot(v: Voucher) -> dict[str, Any]:
@@ -171,6 +174,140 @@ class VoucherService:
                 "place_of_supply is required when gst_applicable is true.",
                 details={"field": "place_of_supply"},
             )
+
+    # ------------------------------------------------------------------
+    # Read
+    # ------------------------------------------------------------------
+
+    def get(self, voucher_id: UUID) -> Voucher:
+        voucher = (
+            self.db.query(Voucher)
+            .filter(
+                Voucher.id == voucher_id,
+                Voucher.company_id == self.company_id,
+            )
+            .first()
+        )
+        if voucher is None:
+            raise VoucherNotFound("Voucher not found.")
+        return voucher
+
+    def list(
+        self,
+        *,
+        voucher_type: str | None,
+        date_from,  # type: ignore[no-untyped-def]
+        date_to,  # type: ignore[no-untyped-def]
+        status_filter: str | None,
+        ledger_id: UUID | None,
+        source: str | None,
+        limit: int,
+    ) -> tuple[list[Voucher], int]:
+        from sqlalchemy import select
+
+        q = self.db.query(Voucher).filter(
+            Voucher.company_id == self.company_id
+        )
+        if voucher_type:
+            q = q.filter(
+                Voucher.voucher_type == VoucherType(voucher_type)
+            )
+        if date_from is not None:
+            q = q.filter(Voucher.date >= date_from)
+        if date_to is not None:
+            q = q.filter(Voucher.date <= date_to)
+        if status_filter:
+            q = q.filter(Voucher.status == VoucherStatus(status_filter))
+        if source:
+            q = q.filter(Voucher.source == source)
+        if ledger_id is not None:
+            sub = (
+                select(LedgerEntry.voucher_id)
+                .where(
+                    LedgerEntry.ledger_id == ledger_id,
+                    LedgerEntry.company_id == self.company_id,
+                )
+                .scalar_subquery()
+            )
+            q = q.filter(Voucher.id.in_(sub))
+        total = q.count()
+        rows = (
+            q.order_by(Voucher.date.desc(), Voucher.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return rows, total
+
+    # ------------------------------------------------------------------
+    # Update
+    # ------------------------------------------------------------------
+
+    # Mutable fields per API.md.
+    _MUTABLE_FIELDS = frozenset({"narration", "reference"})
+
+    def update(
+        self, voucher_id: UUID, data: VoucherUpdate, raw_keys: set[str]
+    ) -> Voucher:
+        """Apply a PATCH. `raw_keys` is the set of fields the client
+        actually sent (model_dump(exclude_unset=True).keys()) so we
+        can fail loudly on attempts to modify immutable fields.
+        """
+        offending = raw_keys - self._MUTABLE_FIELDS
+        if offending:
+            raise VoucherImmutableField(
+                "Voucher field is not mutable post-creation.",
+                details={"fields": sorted(offending)},
+            )
+
+        voucher = self.get(voucher_id)
+        if voucher.status == VoucherStatus.cancelled:
+            raise VoucherAlreadyCancelled(
+                "Cannot modify a cancelled voucher.",
+            )
+
+        old = _voucher_snapshot(voucher)
+        for k in raw_keys:
+            setattr(voucher, k, getattr(data, k))
+        self.db.flush()
+        new = _voucher_snapshot(voucher)
+        self.audit.emit(
+            action="voucher.updated",
+            entity_type="voucher",
+            entity_id=voucher.id,
+            old_value=old,
+            new_value=new,
+        )
+        return voucher
+
+    # ------------------------------------------------------------------
+    # Cancel
+    # ------------------------------------------------------------------
+
+    def cancel(self, voucher_id: UUID, reason: str) -> Voucher:
+        voucher = self.get(voucher_id)
+        if voucher.status == VoucherStatus.cancelled:
+            raise VoucherAlreadyCancelled(
+                "Voucher already cancelled.",
+            )
+        old = _voucher_snapshot(voucher)
+        voucher.status = VoucherStatus.cancelled
+        self.db.flush()
+        new = _voucher_snapshot(voucher)
+        # `reason` is included in the audit row's new_value but not on
+        # the voucher itself — Phase-0 model has no cancel_reason col.
+        new["cancel_reason"] = reason
+        self.audit.emit(
+            action="voucher.cancelled",
+            entity_type="voucher",
+            entity_id=voucher.id,
+            old_value=old,
+            new_value=new,
+        )
+        return voucher
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     def _validate_ledger_ownership(self, data: VoucherCreate) -> None:
         ledger_ids = {e.ledger_id for e in data.entries}

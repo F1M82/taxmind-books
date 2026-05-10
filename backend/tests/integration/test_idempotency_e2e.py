@@ -132,7 +132,7 @@ def test_missing_key_when_required_is_400(
         "/_probe/idem-required", headers=_h(u, c), json={"x": 1}
     )
     assert r.status_code == 400
-    assert r.json()["detail"]["error"]["code"] == "idempotency_key_required"
+    assert r.json()["error"]["code"] == "idempotency_key_required"
 
 
 def test_malformed_key_is_400(
@@ -148,7 +148,7 @@ def test_malformed_key_is_400(
         json={"x": 1},
     )
     assert r.status_code == 400
-    assert r.json()["detail"]["error"]["code"] == "idempotency_key_invalid"
+    assert r.json()["error"]["code"] == "idempotency_key_invalid"
 
 
 # ---------------- mismatch cases ----------------
@@ -175,7 +175,7 @@ def test_same_key_different_body_returns_409_replay(
         json={"x": 999},  # different body
     )
     assert r2.status_code == 409
-    assert r2.json()["detail"]["error"]["code"] == "idempotency_replay"
+    assert r2.json()["error"]["code"] == "idempotency_replay"
 
 
 def test_same_key_different_path_returns_409_misuse(
@@ -199,7 +199,7 @@ def test_same_key_different_path_returns_409_misuse(
         json={"x": 1},
     )
     assert r2.status_code == 409
-    assert r2.json()["detail"]["error"]["code"] == "idempotency_key_misuse"
+    assert r2.json()["error"]["code"] == "idempotency_key_misuse"
 
 
 # ---------------- scope boundary ----------------
@@ -309,5 +309,5 @@ def test_in_progress_returns_409(
         json={"x": 1},
     )
     assert r.status_code == 409
-    assert r.json()["detail"]["error"]["code"] == "idempotency_in_progress"
+    assert r.json()["error"]["code"] == "idempotency_in_progress"
     assert r.headers.get("Retry-After") == "5"

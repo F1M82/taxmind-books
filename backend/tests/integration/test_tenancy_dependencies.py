@@ -135,7 +135,7 @@ def test_active_company_nonmember_returns_404(
         },
     )
     assert r.status_code == 404
-    assert r.json()["detail"] == "Company not found"
+    assert r.json()["error"]["code"] == "company_not_found"
 
 
 def test_active_company_suspended_returns_404(

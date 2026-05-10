@@ -28,6 +28,15 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session, with_loader_criteria
 
 from app.core.database import SCOPE_BYPASS_OPTION, SessionLocal, get_db
+from app.core.exceptions import CompanyNotFound, InsufficientRole
+from app.core.security import (
+    ACCESS_TOKEN_TYPE,
+    TokenError,
+    decode_token,
+)
+from app.models.base import TenantScopedMixin
+from app.models.company import Company, CompanyRole, CompanyStatus, UserCompany
+from app.models.user import User
 
 __all__ = [
     "SCOPE_BYPASS_OPTION",
@@ -39,14 +48,6 @@ __all__ = [
     "oauth2_scheme",
     "require_role",
 ]
-from app.core.security import (
-    ACCESS_TOKEN_TYPE,
-    TokenError,
-    decode_token,
-)
-from app.models.base import TenantScopedMixin
-from app.models.company import Company, CompanyRole, CompanyStatus, UserCompany
-from app.models.user import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
@@ -104,10 +105,6 @@ def get_active_company(
     company is suspended/missing — by design, to prevent existence
     enumeration of company IDs the user cannot see.
     """
-    not_found = HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND, detail="Company not found"
-    )
-
     membership = (
         db.query(UserCompany)
         .filter(
@@ -117,11 +114,11 @@ def get_active_company(
         .first()
     )
     if membership is None:
-        raise not_found
+        raise CompanyNotFound("Company not found.")
 
     company = db.query(Company).filter(Company.id == x_company_id).first()
     if company is None or company.status != CompanyStatus.active:
-        raise not_found
+        raise CompanyNotFound("Company not found.")
 
     return company
 
@@ -146,9 +143,7 @@ def get_active_membership(
     )
     # Defensive: get_active_company already verified membership.
     if membership is None:  # pragma: no cover
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Company not found"
-        )
+        raise CompanyNotFound("Company not found.")
     return membership
 
 
@@ -179,10 +174,7 @@ def require_role(
         company: Company = Depends(get_active_company),
     ) -> Company:
         if membership.role.value not in allowed:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Insufficient role",
-            )
+            raise InsufficientRole("Insufficient role.")
         return company
 
     return checker

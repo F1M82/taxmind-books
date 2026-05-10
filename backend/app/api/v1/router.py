@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1 import auth
+from app.api.v1 import auth, companies
 
 api_v1 = APIRouter(prefix="/api/v1")
 api_v1.include_router(auth.router)
+api_v1.include_router(companies.router)

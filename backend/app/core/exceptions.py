@@ -181,5 +181,13 @@ class LedgerInUse(Conflict):
     code = "ledger_in_use"
 
 
+class UserNotFound(NotFound):
+    code = "user_not_found"
+
+
+class AlreadyMember(Conflict):
+    code = "already_member"
+
+
 class ConnectorOffline(Unavailable):
     code = "connector_offline"

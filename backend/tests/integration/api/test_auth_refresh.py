@@ -14,7 +14,7 @@ from app.core.security import (
 )
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
-from tests.integration.conftest import make_user
+from tests._db_fixtures import make_user
 
 
 def test_refresh_with_valid_token_returns_new_pair(

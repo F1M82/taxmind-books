@@ -26,7 +26,7 @@ from app.models.company import CompanyRole
 from app.models.ledger import Ledger
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
-from tests.integration.conftest import (
+from tests._db_fixtures import (
     issue_token,
     make_company,
     make_membership,

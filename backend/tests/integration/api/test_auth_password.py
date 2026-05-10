@@ -7,7 +7,7 @@ from app.models.audit_log import AuditLog
 from app.models.user import User
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
-from tests.integration.conftest import issue_token, make_user
+from tests._db_fixtures import issue_token, make_user
 
 
 def _bearer(token: str) -> dict[str, str]:

@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app.api.errors import install_error_handlers
+from app.api.v1.router import api_v1
 from app.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.money import configure_decimal_context
@@ -31,6 +32,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description="Backend API for TaxMind Books — Phase 0 skeleton",
     )
     install_error_handlers(app)
+    app.include_router(api_v1)
 
     @app.get("/")
     def root() -> dict[str, str]:

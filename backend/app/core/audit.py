@@ -136,13 +136,26 @@ class AuditEmitter:
         entity_id: UUID,
         old_value: dict[str, Any] | None,
         new_value: dict[str, Any] | None,
+        actor_user_id: UUID | None = None,
     ) -> AuditLog:
+        """Append one audit row to the current session.
+
+        `actor_user_id` overrides `ctx.user.id`. Used for self-registration
+        (`user.created`) where the new user is the actor but the
+        request was unauthenticated, so `ctx.user` is None.
+        """
         if action not in _ALLOWED_ACTIONS:
             raise ValueError(f"unknown audit action: {action!r}")
+        if actor_user_id is not None:
+            user_id = actor_user_id
+        elif self.ctx.user is not None:
+            user_id = self.ctx.user.id
+        else:
+            user_id = None
         log = AuditLog(
             id=uuid4(),
             company_id=self.ctx.company.id if self.ctx.company else None,
-            user_id=self.ctx.user.id if self.ctx.user else None,
+            user_id=user_id,
             action=action,
             entity_type=entity_type,
             entity_id=entity_id,

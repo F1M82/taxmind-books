@@ -41,6 +41,13 @@ SessionLocal: sessionmaker[Session] = sessionmaker(
 )
 
 
+# Execution-options key used by the auto-scoping session listener
+# (`app.api.deps.get_scoped_session`). Lives here so non-API callers
+# (workers, idempotency handler) can opt out without importing from
+# the API layer.
+SCOPE_BYPASS_OPTION = "skip_tenant_scope"
+
+
 def get_db() -> Generator[Session, None, None]:
     """FastAPI dependency: yields a session, ensures cleanup on completion.
 

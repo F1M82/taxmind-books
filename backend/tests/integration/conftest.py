@@ -250,6 +250,37 @@ def build_test_app() -> FastAPI:
         rows = db.query(Ledger).all()
         return {"names": [r.name for r in rows]}
 
+    # ----------- Idempotency probe endpoints -----------
+    from app.core.idempotency import IdempotencyHandler
+
+    @app.post("/_probe/idem-required", status_code=201)
+    async def idem_required(
+        body: dict,
+        db: Session = Depends(deps.get_scoped_session),
+        idem: IdempotencyHandler = Depends(deps.get_idempotency_handler),
+    ):  # type: ignore[no-untyped-def]
+        replay = await idem.check(required=True)
+        if replay is not None:
+            return replay
+        result = {"echo": body, "created_id": str(uuid4())}
+        idem.store_response(status_code=201, body=result)
+        db.commit()
+        return result
+
+    @app.post("/_probe/idem-required-other", status_code=201)
+    async def idem_required_other(
+        body: dict,
+        db: Session = Depends(deps.get_scoped_session),
+        idem: IdempotencyHandler = Depends(deps.get_idempotency_handler),
+    ):  # type: ignore[no-untyped-def]
+        replay = await idem.check(required=True)
+        if replay is not None:
+            return replay
+        result = {"other": True, "echo": body}
+        idem.store_response(status_code=201, body=result)
+        db.commit()
+        return result
+
     return app
 
 

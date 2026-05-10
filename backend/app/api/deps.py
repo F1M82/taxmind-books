@@ -23,11 +23,22 @@ from __future__ import annotations
 from collections.abc import Callable, Generator
 from uuid import UUID
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session, with_loader_criteria
 
-from app.core.database import SessionLocal, get_db
+from app.core.database import SCOPE_BYPASS_OPTION, SessionLocal, get_db
+
+__all__ = [
+    "SCOPE_BYPASS_OPTION",
+    "get_active_company",
+    "get_active_membership",
+    "get_current_user",
+    "get_idempotency_handler",
+    "get_scoped_session",
+    "oauth2_scheme",
+    "require_role",
+]
 from app.core.security import (
     ACCESS_TOKEN_TYPE,
     TokenError,
@@ -182,9 +193,6 @@ def require_role(
 # ---------------------------------------------------------------------
 
 
-SCOPE_BYPASS_OPTION = "skip_tenant_scope"
-
-
 def get_scoped_session(
     company: Company = Depends(get_active_company),
 ) -> Generator[Session, None, None]:
@@ -227,3 +235,25 @@ def get_scoped_session(
         yield db
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------
+# 5. Idempotency handler
+# ---------------------------------------------------------------------
+
+
+def get_idempotency_handler(
+    request: Request,
+    company: Company = Depends(get_active_company),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_scoped_session),
+):  # type: ignore[no-untyped-def]
+    """Per-request `IdempotencyHandler` bound to (active company, user, request)."""
+    from app.core.idempotency import IdempotencyHandler
+
+    return IdempotencyHandler(
+        request=request,
+        db=db,
+        company_id=company.id,
+        user_id=user.id,
+    )

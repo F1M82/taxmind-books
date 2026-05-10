@@ -7,8 +7,10 @@ list below as they land.
 
 from __future__ import annotations
 
+from app.models.audit_log import AuditLog
 from app.models.base import Base, TenantScopedMixin
 from app.models.company import Company, UserCompany
+from app.models.idempotency_key import IdempotencyKey
 from app.models.ledger import BalanceType, Ledger
 from app.models.user import User
 from app.models.voucher import (
@@ -20,10 +22,12 @@ from app.models.voucher import (
 )
 
 __all__ = [
+    "AuditLog",
     "BalanceType",
     "Base",
     "Company",
     "EntryType",
+    "IdempotencyKey",
     "Ledger",
     "LedgerEntry",
     "TenantScopedMixin",

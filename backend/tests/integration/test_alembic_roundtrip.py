@@ -55,6 +55,8 @@ def clean_db(db_or_skip: str) -> str:
     """Drop the alembic schema artifacts so the round-trip starts clean."""
     engine = create_engine(db_or_skip)
     with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS idempotency_keys CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS audit_logs CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS ledger_entries CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS vouchers CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS ledgers CASCADE"))
@@ -68,6 +70,9 @@ def clean_db(db_or_skip: str) -> str:
         conn.execute(text("DROP TYPE IF EXISTS balance_type CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS company_status CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS company_role CASCADE"))
+        conn.execute(
+            text("DROP FUNCTION IF EXISTS prevent_audit_modification() CASCADE")
+        )
         conn.execute(text("DROP FUNCTION IF EXISTS set_updated_at() CASCADE"))
     engine.dispose()
     return db_or_skip
@@ -88,6 +93,8 @@ def test_alembic_upgrade_creates_initial_tables(clean_db: str) -> None:
         "ledgers",
         "vouchers",
         "ledger_entries",
+        "audit_logs",
+        "idempotency_keys",
     }.issubset(tables)
 
     # Triggers attached
@@ -146,6 +153,8 @@ def test_alembic_downgrade_then_upgrade_is_clean(clean_db: str) -> None:
         "ledgers",
         "vouchers",
         "ledger_entries",
+        "audit_logs",
+        "idempotency_keys",
     ):
         assert t not in tables
     engine.dispose()
@@ -162,5 +171,7 @@ def test_alembic_downgrade_then_upgrade_is_clean(clean_db: str) -> None:
         "ledgers",
         "vouchers",
         "ledger_entries",
+        "audit_logs",
+        "idempotency_keys",
     }.issubset(tables)
     engine.dispose()

@@ -55,11 +55,16 @@ def clean_db(db_or_skip: str) -> str:
     """Drop the alembic schema artifacts so the round-trip starts clean."""
     engine = create_engine(db_or_skip)
     with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS ledger_entries CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS vouchers CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS ledgers CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS user_companies CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS companies CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+        conn.execute(text("DROP TYPE IF EXISTS entry_type CASCADE"))
+        conn.execute(text("DROP TYPE IF EXISTS voucher_status CASCADE"))
+        conn.execute(text("DROP TYPE IF EXISTS voucher_type CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS balance_type CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS company_status CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS company_role CASCADE"))
@@ -76,7 +81,14 @@ def test_alembic_upgrade_creates_initial_tables(clean_db: str) -> None:
     engine = create_engine(clean_db)
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
-    assert {"users", "companies", "user_companies", "ledgers"}.issubset(tables)
+    assert {
+        "users",
+        "companies",
+        "user_companies",
+        "ledgers",
+        "vouchers",
+        "ledger_entries",
+    }.issubset(tables)
 
     # Triggers attached
     with engine.connect() as conn:
@@ -92,6 +104,7 @@ def test_alembic_upgrade_creates_initial_tables(clean_db: str) -> None:
         "trg_companies_updated_at",
         "trg_user_companies_updated_at",
         "trg_ledgers_updated_at",
+        "trg_vouchers_updated_at",
     }.issubset(trigger_names)
 
     # gin trigram index
@@ -103,6 +116,17 @@ def test_alembic_upgrade_creates_initial_tables(clean_db: str) -> None:
             )
         )
         assert result.scalar() == "idx_ledgers_name_trgm"
+
+    # voucher_number uniqueness is DEFERRABLE INITIALLY DEFERRED
+    with engine.connect() as conn:
+        result = conn.execute(
+            text(
+                "SELECT condeferrable, condeferred FROM pg_constraint "
+                "WHERE conname = 'uq_vouchers_company_number_type'"
+            )
+        ).one()
+        assert result.condeferrable is True
+        assert result.condeferred is True
     engine.dispose()
 
 
@@ -115,10 +139,15 @@ def test_alembic_downgrade_then_upgrade_is_clean(clean_db: str) -> None:
     engine = create_engine(clean_db)
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
-    assert "users" not in tables
-    assert "companies" not in tables
-    assert "user_companies" not in tables
-    assert "ledgers" not in tables
+    for t in (
+        "users",
+        "companies",
+        "user_companies",
+        "ledgers",
+        "vouchers",
+        "ledger_entries",
+    ):
+        assert t not in tables
     engine.dispose()
 
     # Re-upgrade must succeed without orphan-state errors.
@@ -126,5 +155,12 @@ def test_alembic_downgrade_then_upgrade_is_clean(clean_db: str) -> None:
     engine = create_engine(clean_db)
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
-    assert {"users", "companies", "user_companies", "ledgers"}.issubset(tables)
+    assert {
+        "users",
+        "companies",
+        "user_companies",
+        "ledgers",
+        "vouchers",
+        "ledger_entries",
+    }.issubset(tables)
     engine.dispose()

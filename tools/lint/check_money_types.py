@@ -25,9 +25,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # Names that almost certainly hold money. Used for both annotation and
-# paise-math heuristics.
+# paise-math heuristics. `money` is matched too so identifiers like
+# `MoneyColumn` or `MyMoney` count as money-named.
 MONEY_NAME_RE = re.compile(
-    r"(?i)(amount|balance|total|price|tax|gst|tds|cgst|sgst|igst|fee|charge)"
+    r"(?i)(amount|balance|total|price|tax|gst|tds|cgst|sgst|igst|fee|charge|money)"
+)
+
+# Suffixes that demote a money-named identifier to a non-money one.
+# `gst_rate` is a percentage, `confidence_score` is a probability,
+# `voucher_number` is an identifier, etc. — none of these hold money.
+NON_MONEY_SUFFIX_RE = re.compile(
+    r"(?i)_(rate|score|count|index|number|days|months|years|id)$"
 )
 
 # Required precision/scale for any Numeric column that holds money,
@@ -52,6 +60,8 @@ class Violation:
 
 
 def _is_money_name(name: str) -> bool:
+    if NON_MONEY_SUFFIX_RE.search(name):
+        return False
     return bool(MONEY_NAME_RE.search(name))
 
 
@@ -99,6 +109,9 @@ class _Checker(ast.NodeVisitor):
         self.path = path
         self.violations: list[Violation] = []
         self._in_schemas = "schemas" in path.parts and "tests" not in path.parts
+        # Stack of assignment-target names so visit_Call can scope M002
+        # to Numeric(...) calls inside money-named assignments.
+        self._target_stack: list[str | None] = []
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         target = node.target
@@ -120,7 +133,17 @@ class _Checker(ast.NodeVisitor):
                     ),
                 )
             )
+        self._target_stack.append(name)
         self.generic_visit(node)
+        self._target_stack.pop()
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        name: str | None = None
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            name = node.targets[0].id
+        self._target_stack.append(name)
+        self.generic_visit(node)
+        self._target_stack.pop()
 
     def visit_arg(self, node: ast.arg) -> None:
         if node.annotation and _is_money_name(node.arg) and _is_float_annotation(
@@ -138,13 +161,23 @@ class _Checker(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
-        # M002: Numeric(p, s) with wrong precision/scale
+        # M002: Numeric(p, s) with wrong precision/scale, scoped to
+        # surrounding money-named assignments. Numeric(4, 3) for
+        # `confidence_score` or Numeric(5, 2) for `gst_rate` is
+        # legitimate and must not be flagged.
         if isinstance(node.func, ast.Name) and node.func.id == "Numeric":
             p, s = _numeric_call_args(node)
+            current_target = (
+                self._target_stack[-1] if self._target_stack else None
+            )
+            target_is_money = (
+                current_target is not None and _is_money_name(current_target)
+            )
             if (
                 p is not None
                 and s is not None
                 and (p != EXPECTED_PRECISION or s != EXPECTED_SCALE)
+                and target_is_money
             ):
                 self.violations.append(
                     Violation(
@@ -153,8 +186,9 @@ class _Checker(ast.NodeVisitor):
                         line=node.lineno,
                         col=node.col_offset,
                         message=(
-                            f"Numeric({p}, {s}) used for what looks like money; "
-                            f"use MoneyColumn from app.core.money"
+                            f"Numeric({p}, {s}) used for `{current_target}`; "
+                            f"money columns must use MoneyColumn from "
+                            f"app.core.money"
                         ),
                     )
                 )

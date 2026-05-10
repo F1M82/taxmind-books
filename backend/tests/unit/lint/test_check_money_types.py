@@ -97,6 +97,34 @@ def test_m002_accepts_correct_numeric_precision(
     assert cmt.check_path(p) == []
 
 
+def test_m002_does_not_flag_non_money_numeric(
+    write_file,  # type: ignore[no-untyped-def]
+) -> None:
+    """Non-money Numeric like confidence_score / gst_rate must pass."""
+    p = write_file(
+        "m002c.py",
+        "from sqlalchemy import Numeric\n"
+        "confidence_score = Numeric(4, 3)\n"
+        "gst_rate = Numeric(5, 2)\n"
+        "ratio = Numeric(8, 6)\n",
+    )
+    assert cmt.check_path(p) == []
+
+
+def test_m002_does_not_flag_rate_score_suffixes(
+    write_file,  # type: ignore[no-untyped-def]
+) -> None:
+    """Names ending in _rate / _score / _count are not money."""
+    p = write_file(
+        "m002d.py",
+        "from sqlalchemy import Numeric\n"
+        "tax_rate = Numeric(5, 2)\n"
+        "tds_score = Numeric(4, 3)\n"
+        "voucher_number = Numeric(8, 0)\n",
+    )
+    assert cmt.check_path(p) == []
+
+
 def test_m003_flags_decimal_from_float_literal(
     write_file,  # type: ignore[no-untyped-def]
 ) -> None:

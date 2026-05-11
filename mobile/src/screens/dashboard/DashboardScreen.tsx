@@ -2,9 +2,16 @@ import React from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { useAuth } from "../../context/AuthContext";
+import { useActiveCompany } from "../../context/CompanyContext";
+import ConnectorStatusCard from "./ConnectorStatusCard";
 
-export default function DashboardScreen(): React.ReactElement {
+export default function DashboardScreen({
+  onOpenCompanies,
+}: {
+  onOpenCompanies: () => void;
+}): React.ReactElement {
   const { user, signOut } = useAuth();
+  const { activeCompanyId, loading: companyLoading } = useActiveCompany();
   if (user === null) {
     return (
       <View style={styles.container}>
@@ -12,27 +19,36 @@ export default function DashboardScreen(): React.ReactElement {
       </View>
     );
   }
+  const activeCompany =
+    activeCompanyId === null
+      ? null
+      : user.companies.find((c) => c.id === activeCompanyId) ?? null;
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>Welcome, {user.full_name}</Text>
       <Text style={styles.line}>{user.email}</Text>
-      {user.is_ca && user.firm_name !== null && (
-        <Text style={styles.line}>{user.firm_name}</Text>
-      )}
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Companies</Text>
-        {user.companies.length === 0 ? (
-          <Text>You don't belong to any company yet.</Text>
-        ) : (
-          user.companies.map((c) => (
-            <View key={c.id} style={styles.companyRow}>
-              <Text style={styles.companyName}>{c.name}</Text>
-              <Text style={styles.companyRole}>{c.role}</Text>
-            </View>
-          ))
-        )}
-      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="open-companies"
+        onPress={onOpenCompanies}
+        style={({ pressed }) => [
+          styles.companyChip,
+          pressed && { opacity: 0.85 },
+        ]}
+      >
+        <Text style={styles.companyChipLabel}>ACTIVE COMPANY</Text>
+        <Text style={styles.companyChipValue}>
+          {companyLoading
+            ? "Loading…"
+            : activeCompany !== null
+            ? `${activeCompany.name} · ${activeCompany.role}`
+            : "Tap to create your first company"}
+        </Text>
+      </Pressable>
+
+      {activeCompanyId !== null && <ConnectorStatusCard />}
 
       <Pressable
         accessibilityRole="button"
@@ -50,22 +66,16 @@ const styles = StyleSheet.create({
   container: { padding: 24, gap: 12 },
   title: { fontSize: 24, fontWeight: "600" },
   line: { fontSize: 16, color: "#444" },
-  card: {
-    marginTop: 16,
-    padding: 16,
+  companyChip: {
+    padding: 14,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
+    borderColor: "#2c3e50",
     borderRadius: 8,
-    gap: 8,
+    marginTop: 12,
+    gap: 2,
   },
-  cardTitle: { fontSize: 18, fontWeight: "600", marginBottom: 4 },
-  companyRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 6,
-  },
-  companyName: { fontSize: 16 },
-  companyRole: { fontSize: 14, color: "#666" },
+  companyChipLabel: { fontSize: 12, color: "#666", letterSpacing: 1 },
+  companyChipValue: { fontSize: 16, fontWeight: "600", color: "#2c3e50" },
   signOut: {
     marginTop: 24,
     padding: 12,

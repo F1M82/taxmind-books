@@ -163,9 +163,19 @@ def _violates(import_target: str, forbidden_prefixes: frozenset[str]) -> str | N
     return None
 
 
-def _is_exempt_line(source_lines: list[str], lineno: int) -> bool:
-    if 0 < lineno <= len(source_lines):
-        return _EXEMPT_MARKER in source_lines[lineno - 1]
+def _is_exempt_span(
+    source_lines: list[str], start_lineno: int, end_lineno: int | None
+) -> bool:
+    """True if `# imports-exempt:` appears anywhere in the import's span.
+
+    Covers both single-line `from x import y  # imports-exempt: …` and
+    multi-line `from x import (\n    y,  # imports-exempt: …\n)` forms
+    (ruff's preferred shape for long lines).
+    """
+    last = end_lineno if end_lineno is not None else start_lineno
+    for ln in range(start_lineno, last + 1):
+        if 0 < ln <= len(source_lines) and _EXEMPT_MARKER in source_lines[ln - 1]:
+            return True
     return False
 
 
@@ -184,7 +194,7 @@ def check_path(path: Path, repo_root: Path) -> list[Violation]:
 
     violations: list[Violation] = []
     for node in _iter_imports(tree):
-        if _is_exempt_line(source_lines, node.lineno):
+        if _is_exempt_span(source_lines, node.lineno, node.end_lineno):
             continue
         for target in _module_path(node):
             hit = _violates(target, forbidden)

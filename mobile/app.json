@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "TaxMind Books",
+    "slug": "taxmind-books",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.taxmindbooks.app"
+    },
+    "android": {
+      "package": "com.taxmindbooks.app"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "extra": {
+      "API_BASE_URL": "http://localhost:8000"
+    }
+  }
+}

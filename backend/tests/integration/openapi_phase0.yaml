@@ -1,0 +1,69 @@
+# Phase-0 endpoint reference, extracted from docs/API.md.
+#
+# `tests/integration/test_openapi_contract.py` reads this file and the
+# live FastAPI /openapi.json and fails the build if there is drift —
+# i.e., a path/method here that isn't in the spec, or vice versa.
+#
+# We deliberately track only path+method, not response schemas or
+# status codes, because:
+#   - Status codes leak from FastAPI's defaults (always includes 422)
+#     plus our domain exceptions, which aren't declared per-route.
+#   - Phase 0 ships the *surface*; Phase 1+ may add explicit response
+#     declarations and a tighter contract test.
+#
+# WebSocket endpoints (e.g. /api/v1/connector/ws) don't appear in
+# /openapi.json and are intentionally absent here.
+endpoints:
+  # ---- Auth ----
+  - path: /api/v1/auth/register
+    methods: [POST]
+  - path: /api/v1/auth/login
+    methods: [POST]
+  - path: /api/v1/auth/refresh
+    methods: [POST]
+  - path: /api/v1/auth/me
+    methods: [GET]
+  - path: /api/v1/auth/password
+    methods: [POST]
+
+  # ---- Companies ----
+  - path: /api/v1/companies/
+    methods: [POST, GET]
+  - path: /api/v1/companies/{company_id}
+    methods: [GET, PATCH]
+  - path: /api/v1/companies/{company_id}/members
+    methods: [POST]
+
+  # ---- Ledgers ----
+  - path: /api/v1/ledgers/
+    methods: [POST, GET]
+  - path: /api/v1/ledgers/{ledger_id}
+    methods: [GET, PATCH, DELETE]
+
+  # ---- Vouchers ----
+  - path: /api/v1/vouchers/
+    methods: [POST, GET]
+  - path: /api/v1/vouchers/{voucher_id}
+    methods: [GET, PATCH]
+  - path: /api/v1/vouchers/{voucher_id}/cancel
+    methods: [POST]
+
+  # ---- Audit log read ----
+  - path: /api/v1/audit-logs/
+    methods: [GET]
+
+  # ---- Connector HTTP surface (WS is not OpenAPI'd) ----
+  - path: /api/v1/connector/enrollment-codes
+    methods: [POST]
+  - path: /api/v1/connector/enroll
+    methods: [POST]
+  - path: /api/v1/connector/status
+    methods: [GET]
+  - path: /api/v1/connector/sync/{company_id}
+    methods: [POST]
+
+  # ---- Liveness / placeholder ----
+  - path: /
+    methods: [GET]
+  - path: /health
+    methods: [GET]

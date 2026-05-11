@@ -109,6 +109,26 @@ async def create_voucher(
         status_code=201, body=out.model_dump(mode="json")
     )
     db.commit()
+
+    # Enqueue Tally posting (no-op when no connector is online; the
+    # task itself retries via Celery backoff on ConnectorOffline).
+    from uuid import uuid4
+
+    from app.services.tally.voucher_dispatcher import enqueue_voucher_post
+
+    try:
+        enqueue_voucher_post(
+            voucher_id=voucher.id,
+            company_id=company.id,
+            user_id=user.id,
+            request_id=uuid4(),
+        )
+    except Exception:  # noqa: BLE001 — broker outage must not 500 the create
+        import logging
+
+        logging.getLogger("app.api.v1.vouchers").exception(
+            "failed to enqueue post_voucher_to_tally for %s", voucher.id
+        )
     return out
 
 

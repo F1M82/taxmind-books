@@ -24,6 +24,11 @@ _REQUIRED_ENV = {
     "SECRET_KEY": "test-secret-key-do-not-use-in-prod",
     "CONNECTOR_JWT_SECRET": "test-connector-secret-do-not-use-in-prod",
     "APP_ENV": "test",
+    # Suppress the Celery dispatch in `enqueue_voucher_post` so we don't
+    # block on a non-existent Redis broker during tests. Tests that
+    # actually exercise the dispatcher do so by calling
+    # `dispatch_voucher_to_tally` directly.
+    "TAXMIND_SKIP_TALLY_DISPATCH": "1",
 }
 
 # Seed env at conftest import time so test-module imports of `app.main`

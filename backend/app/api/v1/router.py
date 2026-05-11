@@ -13,6 +13,7 @@ from app.api.v1 import (
     auth,
     companies,
     connector,
+    connector_ws,
     ledgers,
     vouchers,
 )
@@ -24,3 +25,4 @@ api_v1.include_router(ledgers.router)
 api_v1.include_router(vouchers.router)
 api_v1.include_router(audit_logs.router)
 api_v1.include_router(connector.router)
+api_v1.include_router(connector_ws.router)

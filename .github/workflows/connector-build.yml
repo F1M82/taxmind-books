@@ -1,0 +1,65 @@
+name: connector-build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "connector/**"
+      - ".github/workflows/connector-build.yml"
+  pull_request:
+    paths:
+      - "connector/**"
+      - ".github/workflows/connector-build.yml"
+  release:
+    types: [created]
+  workflow_dispatch: {}
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: connector
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install connector + build tooling
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install pyinstaller
+
+      - name: Run connector tests
+        shell: pwsh
+        run: pytest -q
+
+      - name: Build single-file .exe
+        shell: pwsh
+        run: python installer/build_exe.py
+
+      - name: Smoke-check the produced binary
+        shell: pwsh
+        run: |
+          Test-Path dist\TaxMindBooksConnector.exe -PathType Leaf
+          Get-Item dist\TaxMindBooksConnector.exe | Select-Object FullName, Length
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: connector-exe-${{ github.sha }}
+          path: connector/dist/TaxMindBooksConnector.exe
+          retention-days: 30
+
+      - name: Attach to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: connector/dist/TaxMindBooksConnector.exe

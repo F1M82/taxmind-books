@@ -136,6 +136,8 @@ connector/dist/
 connector/build/
 connector/installer/dist/
 connector/installer/build/
+connector/installer/icon.ico
+connector/*.spec
 *.spec.bak
 
 # ---------- Alembic local ----------

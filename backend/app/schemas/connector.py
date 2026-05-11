@@ -28,3 +28,21 @@ class EnrollResponse(TaxMindBooksBase):
     company_id: UUID
     connector_token: str
     expires_in_days: int
+
+
+class ConnectorStatusOut(TaxMindBooksBase):
+    """`GET /connector/status` response per API.md.
+
+    Connected: operational fields are populated.
+    Disconnected: only company_id + connected (+ last_seen_at if any
+    prior connection persisted; Phase 0 has no DB-backed history,
+    so disconnected = nulls).
+    """
+
+    company_id: UUID
+    connected: bool
+    last_seen_at: datetime | None = None
+    tally_running: bool | None = None
+    tally_version: str | None = None
+    connector_version: str | None = None
+    queued_outbound_count: int | None = None

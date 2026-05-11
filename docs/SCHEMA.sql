@@ -635,6 +635,35 @@ CREATE INDEX idx_idempotency_keys_expires ON idempotency_keys (expires_at);
 
 
 -- =============================================================================
+-- 14a. connector_enrollment_codes (one-time codes for connector enrollment)
+-- -----------------------------------------------------------------------------
+-- The mobile app calls POST /api/v1/connector/enrollment-codes (owner only)
+-- to request a code; the backend stores SHA-256(code) here. The connector
+-- on the user's PC consumes the code via POST /api/v1/connector/enroll
+-- and receives a 1-year connector token (JWT).
+-- See AMENDMENTS_v1.2.md §"Patch 2".
+-- =============================================================================
+
+CREATE TABLE connector_enrollment_codes (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id   UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    created_by   UUID REFERENCES users(id) ON DELETE SET NULL,
+    code_hash    VARCHAR(64) NOT NULL,
+    consumed_at  TIMESTAMPTZ,
+    expires_at   TIMESTAMPTZ NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_connector_enrollment_codes_hash UNIQUE (code_hash)
+);
+
+CREATE INDEX idx_connector_enrollment_codes_company
+    ON connector_enrollment_codes (company_id, created_at DESC);
+CREATE INDEX idx_connector_enrollment_codes_pending
+    ON connector_enrollment_codes (expires_at)
+    WHERE consumed_at IS NULL;
+
+
+-- =============================================================================
 -- Updated-at triggers
 -- -----------------------------------------------------------------------------
 -- Every table with an updated_at column gets a trigger to bump it.

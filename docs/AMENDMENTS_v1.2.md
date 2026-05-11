@@ -200,3 +200,31 @@ admin/superuser paths (Phase 5+).
 product behavior, API contract, or user-visible flows. It corrects an
 internal inconsistency between two architecture documents. Tenant
 isolation guarantees are unchanged.
+
+### Patch 2 — `connector_enrollment_codes` table (10 May 2026)
+
+**Surfaced during:** P0.23 implementation (connector enrollment endpoint).
+
+**Gap.** `CONNECTOR_PROTOCOL.md` describes the enrollment ceremony
+(mobile app issues a one-time 15-minute code; connector exchanges
+it for a 1-year connector token), but `SCHEMA.sql` did not model
+the storage. The flow needs persistent state — codes must survive
+process restarts and be denormalized from the connector token JWT.
+
+**Decision.** Add a `connector_enrollment_codes` table:
+
+  - `id`, `company_id` (FK companies, CASCADE on delete),
+    `created_by` (FK users, SET NULL on delete),
+  - `code_hash VARCHAR(64) NOT NULL` — SHA-256 of the raw code; the
+    raw value is returned to the caller exactly once and never
+    persisted, so a leaked DB doesn't grant the attacker live codes.
+  - `consumed_at`, `expires_at`, `created_at`.
+  - Unique on `code_hash`; partial index on `expires_at WHERE
+    consumed_at IS NULL` for the daily-sweep cleanup task.
+
+Migration `0006_connector_enrollment_codes.py`. No backfill — Phase 0
+has no production deployments yet.
+
+**Why this isn't an amendment proper.** Pure additive table. No
+existing API contract changes. No tenant-isolation impact (the table
+is keyed by `company_id` with CASCADE).

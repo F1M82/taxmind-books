@@ -61,6 +61,9 @@ def migrated_engine() -> Generator[str, None, None]:
     # Drop everything so we start clean.
     e = create_engine(url)
     with e.begin() as conn:
+        conn.execute(
+            text("DROP TABLE IF EXISTS connector_enrollment_codes CASCADE")
+        )
         conn.execute(text("DROP TABLE IF EXISTS idempotency_keys CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS audit_logs CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS ledger_entries CASCADE"))
@@ -126,9 +129,10 @@ def _reset_tenancy_tables(migrated_engine: str) -> Generator[None, None, None]:
     with e.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE TABLE idempotency_keys, audit_logs, "
-                "ledger_entries, vouchers, ledgers, user_companies, "
-                "companies, users RESTART IDENTITY CASCADE"
+                "TRUNCATE TABLE connector_enrollment_codes, "
+                "idempotency_keys, audit_logs, ledger_entries, "
+                "vouchers, ledgers, user_companies, companies, users "
+                "RESTART IDENTITY CASCADE"
             )
         )
     e.dispose()

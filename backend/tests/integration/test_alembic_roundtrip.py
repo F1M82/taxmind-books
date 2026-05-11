@@ -55,6 +55,9 @@ def clean_db(db_or_skip: str) -> str:
     """Drop the alembic schema artifacts so the round-trip starts clean."""
     engine = create_engine(db_or_skip)
     with engine.begin() as conn:
+        conn.execute(
+            text("DROP TABLE IF EXISTS connector_enrollment_codes CASCADE")
+        )
         conn.execute(text("DROP TABLE IF EXISTS idempotency_keys CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS audit_logs CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS ledger_entries CASCADE"))

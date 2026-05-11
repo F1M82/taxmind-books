@@ -160,6 +160,87 @@ def create_refresh_token(
     )
 
 
+# ---------------------------------------------------------------------
+# Connector tokens (separate secret per CONNECTOR_PROTOCOL.md)
+# ---------------------------------------------------------------------
+
+
+CONNECTOR_TOKEN_KIND = "connector"
+CONNECTOR_TOKEN_DEFAULT_EXPIRE_DAYS = 365
+
+
+@dataclass(frozen=True)
+class ConnectorTokenPayload:
+    sub: str  # connector id
+    company_id: str
+    exp: datetime
+    raw: dict[str, Any]
+
+
+def create_connector_token(
+    *,
+    connector_id: UUID | str,
+    company_id: UUID | str,
+    expires_days: int = CONNECTOR_TOKEN_DEFAULT_EXPIRE_DAYS,
+    settings: Settings | None = None,
+) -> str:
+    """Create a long-lived connector token (default 1 year).
+
+    Signed with `CONNECTOR_JWT_SECRET` (distinct from the user JWT
+    secret) so a user-token compromise can't forge connectors and
+    vice versa.
+    """
+    cfg = settings or get_settings()
+    now = datetime.now(UTC)
+    payload: dict[str, Any] = {
+        "sub": str(connector_id),
+        "company_id": str(company_id),
+        "kind": CONNECTOR_TOKEN_KIND,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(days=expires_days)).timestamp()),
+    }
+    return jwt.encode(
+        payload,
+        cfg.CONNECTOR_JWT_SECRET.get_secret_value(),
+        algorithm=cfg.JWT_ALGORITHM,
+    )
+
+
+def decode_connector_token(
+    token: str, *, settings: Settings | None = None
+) -> ConnectorTokenPayload:
+    cfg = settings or get_settings()
+    try:
+        decoded = jwt.decode(
+            token,
+            cfg.CONNECTOR_JWT_SECRET.get_secret_value(),
+            algorithms=[cfg.JWT_ALGORITHM],
+        )
+    except jwt.ExpiredSignatureError as exc:
+        raise TokenExpired(str(exc)) from exc
+    except jwt.PyJWTError as exc:
+        raise TokenInvalid(str(exc)) from exc
+
+    sub = decoded.get("sub")
+    company_id = decoded.get("company_id")
+    kind = decoded.get("kind")
+    exp = decoded.get("exp")
+    if not isinstance(sub, str) or not sub:
+        raise TokenInvalid("missing sub claim")
+    if not isinstance(company_id, str) or not company_id:
+        raise TokenInvalid("missing company_id claim")
+    if kind != CONNECTOR_TOKEN_KIND:
+        raise TokenInvalid("not a connector token")
+    if not isinstance(exp, int):
+        raise TokenInvalid("missing exp claim")
+    return ConnectorTokenPayload(
+        sub=sub,
+        company_id=company_id,
+        exp=datetime.fromtimestamp(exp, tz=UTC),
+        raw=decoded,
+    )
+
+
 def decode_token(
     token: str,
     *,

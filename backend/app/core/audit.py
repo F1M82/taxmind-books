@@ -20,8 +20,12 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
-from app.models.audit_log import AuditLog  # imports-exempt: AuditEmitter constructs AuditLog rows; this is the documented cross-cutting exception to the core→models rule
-from app.models.company import Company  # imports-exempt: AuditContext carries the active Company (type-only at runtime; companies are tenant roots, not domain models)
+from app.models.audit_log import (
+    AuditLog,  # imports-exempt: AuditEmitter constructs AuditLog rows; this is the documented cross-cutting exception to the core→models rule
+)
+from app.models.company import (
+    Company,  # imports-exempt: AuditContext carries the active Company (type-only at runtime; companies are tenant roots, not domain models)
+)
 from app.models.user import User  # imports-exempt: AuditContext carries the actor User
 
 # ---------------------------------------------------------------------

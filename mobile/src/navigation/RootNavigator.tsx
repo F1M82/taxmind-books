@@ -12,6 +12,9 @@ import RegisterScreen from "../screens/auth/RegisterScreen";
 import CompanyCreateScreen from "../screens/companies/CompanyCreateScreen";
 import CompanyListScreen from "../screens/companies/CompanyListScreen";
 import DashboardScreen from "../screens/dashboard/DashboardScreen";
+import LedgerListScreen from "../screens/ledgers/LedgerListScreen";
+import VoucherEntryScreen from "../screens/vouchers/VoucherEntryScreen";
+import VoucherListScreen from "../screens/vouchers/VoucherListScreen";
 
 type AuthStackParamList = {
   Login: undefined;
@@ -22,6 +25,9 @@ type AppStackParamList = {
   Dashboard: undefined;
   Companies: undefined;
   CreateCompany: undefined;
+  Ledgers: undefined;
+  Vouchers: undefined;
+  NewVoucher: undefined;
 };
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -61,6 +67,8 @@ function AppFlow(): React.ReactElement {
         {(props: NativeStackScreenProps<AppStackParamList, "Dashboard">) => (
           <DashboardScreen
             onOpenCompanies={() => props.navigation.navigate("Companies")}
+            onOpenLedgers={() => props.navigation.navigate("Ledgers")}
+            onOpenVouchers={() => props.navigation.navigate("Vouchers")}
           />
         )}
       </AppStack.Screen>
@@ -81,6 +89,31 @@ function AppFlow(): React.ReactElement {
               props.navigation.reset({
                 index: 0,
                 routes: [{ name: "Dashboard" }],
+              })
+            }
+            onCancel={() => props.navigation.goBack()}
+          />
+        )}
+      </AppStack.Screen>
+      <AppStack.Screen
+        name="Ledgers"
+        component={LedgerListScreen}
+        options={{ title: "Ledgers" }}
+      />
+      <AppStack.Screen name="Vouchers" options={{ title: "Vouchers" }}>
+        {(props: NativeStackScreenProps<AppStackParamList, "Vouchers">) => (
+          <VoucherListScreen
+            onCreate={() => props.navigation.navigate("NewVoucher")}
+          />
+        )}
+      </AppStack.Screen>
+      <AppStack.Screen name="NewVoucher" options={{ title: "New voucher" }}>
+        {(props: NativeStackScreenProps<AppStackParamList, "NewVoucher">) => (
+          <VoucherEntryScreen
+            onCreated={() =>
+              props.navigation.reset({
+                index: 1,
+                routes: [{ name: "Dashboard" }, { name: "Vouchers" }],
               })
             }
             onCancel={() => props.navigation.goBack()}

@@ -46,3 +46,11 @@ class ConnectorStatusOut(TaxMindBooksBase):
     tally_version: str | None = None
     connector_version: str | None = None
     queued_outbound_count: int | None = None
+
+
+class SyncTriggerResponse(TaxMindBooksBase):
+    """`POST /connector/sync/{company_id}` 202 response."""
+
+    task_id: UUID
+    status: str
+    estimated_duration_seconds: int

@@ -18,6 +18,7 @@ Close codes per CONNECTOR_PROTOCOL.md §"Close codes":
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from typing import Any
@@ -241,7 +242,5 @@ async def _send_protocol_error(
         "ts": datetime.now(UTC).isoformat(),
         "payload": {"code": "protocol_error", "message": message},
     }
-    try:
+    with contextlib.suppress(Exception):
         await conn.ws.send_text(json.dumps(env, separators=(",", ":")))
-    except Exception:  # noqa: BLE001 — error path; nothing else to do
-        pass

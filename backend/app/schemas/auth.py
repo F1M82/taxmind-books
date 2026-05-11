@@ -7,10 +7,10 @@ only; login / refresh / me / password change land in P0.15.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
 from pydantic import EmailStr, Field, StringConstraints
-from typing_extensions import Annotated
 
 from app.schemas.common import TaxMindBooksBase
 

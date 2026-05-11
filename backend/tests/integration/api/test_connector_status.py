@@ -13,6 +13,7 @@ from app.services.tally.connector_registry import (
 )
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
+
 from tests._db_fixtures import (
     issue_token,
     make_company,
@@ -24,9 +25,9 @@ from tests._db_fixtures import (
 @pytest.fixture(autouse=True)
 def _reset_registry() -> None:
     reg = get_registry()
-    reg._by_company.clear()  # noqa: SLF001
+    reg._by_company.clear()
     yield
-    reg._by_company.clear()  # noqa: SLF001
+    reg._by_company.clear()
 
 
 def _h(user, company) -> dict[str, str]:  # type: ignore[no-untyped-def]

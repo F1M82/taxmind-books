@@ -19,13 +19,11 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.core.audit import AuditContext, AuditEmitter
-from app.models.company import Company
-from app.models.user import User
 from app.models.voucher import LedgerEntry, Voucher
 from app.services.tally.connector_registry import (
     CommandTimeout,

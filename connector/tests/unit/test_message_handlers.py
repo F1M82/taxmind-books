@@ -7,6 +7,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import pytest
+
 from connector.message_handlers import (
     CompanyMismatch,
     _voucher_from_args,

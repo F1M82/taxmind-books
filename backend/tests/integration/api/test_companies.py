@@ -8,6 +8,7 @@ from app.models.audit_log import AuditLog
 from app.models.company import CompanyRole, UserCompany
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
+
 from tests._db_fixtures import (
     issue_token,
     make_company,
@@ -282,7 +283,7 @@ def test_add_member_admin_cannot_add_owner_only(
 ) -> None:
     """Per API.md: members endpoint requires owner role specifically."""
     admin = make_user(db_session, email="admin@ex.com")
-    invitee = make_user(db_session, email="other@ex.com")
+    make_user(db_session, email="other@ex.com")
     company = make_company(db_session)
     make_membership(db_session, admin, company, role=CompanyRole.admin)
 
@@ -330,7 +331,7 @@ def test_add_member_writes_audit(
     client: TestClient, db_session: Session
 ) -> None:
     owner = make_user(db_session)
-    invitee = make_user(db_session, email="audit-mem@ex.com")
+    make_user(db_session, email="audit-mem@ex.com")
     company = make_company(db_session)
     make_membership(db_session, owner, company, role=CompanyRole.owner)
     r = client.post(

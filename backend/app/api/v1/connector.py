@@ -31,13 +31,12 @@ from app.schemas.connector import (
     SyncTriggerResponse,
 )
 from app.services.connector_service import (
+    ConnectorEnrollmentService,
     _CodeAlreadyConsumed,
     _CodeExpired,
     _CodeNotFound,
-    ConnectorEnrollmentService,
 )
 from app.services.tally.connector_registry import (
-    ConnectorOffline,
     get_registry,
 )
 
@@ -180,7 +179,7 @@ async def trigger_sync(
                 company.id,
                 result.get("status"),
             )
-        except Exception:  # noqa: BLE001 — background task
+        except Exception:
             logger.exception(
                 "sync_masters %s failed for %s", task_id, company.id
             )

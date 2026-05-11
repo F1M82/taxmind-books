@@ -7,6 +7,8 @@ from decimal import Decimal
 
 import httpx
 import pytest
+from pytest_httpx import HTTPXMock
+
 from connector.tally_client import (
     LedgerEntryInput,
     TallyClient,
@@ -19,7 +21,6 @@ from connector.tally_client import (
     _fiscal_year_start,
     _parse_tally_date,
 )
-from pytest_httpx import HTTPXMock
 
 
 @pytest.fixture

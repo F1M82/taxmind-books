@@ -10,6 +10,7 @@ line-length = 100
 target-version = "py311"
 extend-exclude = [
     "backend/alembic/versions",
+    "salvage",
     "**/node_modules",
     "**/.venv",
     "**/build",
@@ -32,13 +33,43 @@ select = [
     "RUF",  # ruff-specific
 ]
 ignore = [
-    "E501",   # handled by formatter
+    "E501",    # handled by formatter
     "PLR0913", # too many args (we accept this in service signatures)
+    "PLR0911", # too many return statements (some validators need this)
+    "PLR2004", # magic value in comparison (status codes, line numbers, etc.)
+    "B008",    # function-call-in-default-arg — required by FastAPI Depends(...)
+    "S101",    # use of `assert` — disallowed only by S106-style runtime checks
+    "RUF002",  # ambiguous unicode in docstrings (em-dash etc.)
+    "RUF006",  # asyncio dangling task — fire-and-forget background dispatches
+    "SIM103",  # needless bool — readability often wins
+    "PLW0603", # global statement — process-singleton accessors use it
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"**/tests/**" = ["S101", "PLR2004"]  # allow assert + magic numbers in tests
+# Allow assert / magic numbers / "hardcoded password" string literals
+# (test secrets are literals by design) inside tests.
+"**/tests/**" = ["S101", "PLR2004", "S105", "S106", "S107"]
 "backend/alembic/env.py" = ["E402"]
+# Tally client speaks to a local Tally HTTP server we trust; the XML
+# parser usage is intentional and the input is not adversarial.
+"connector/connector/tally_client.py" = ["S314"]
+# Salvage tree is read-only reference material from the prior repo;
+# not in the active build graph.
+"salvage/**" = ["S314", "ALL"]
+# Connector reconnect jitter is non-cryptographic by design (thundering-
+# herd avoidance, not a security concern).
+"connector/connector/ws_client.py" = ["S311"]
+# Build script invokes PyInstaller via subprocess — shell=False with
+# a fully literal arg list is the safe default.
+"connector/installer/build_exe.py" = ["S603"]
+# Audit-emit lint pattern uses ast.walk and shares the type pattern
+# match the same way Python 3.10+ recommends.
+"tools/lint/check_audit_emit.py" = ["SIM117"]
+# Module-level token-kind constants ("access", "refresh", "connector"),
+# OAuth2 `token_type="bearer"`, and similar identifiers are NOT
+# passwords; suppress S105/S106 in the auth surface.
+"backend/app/core/security.py" = ["S105"]
+"backend/app/api/v1/auth.py" = ["S106"]
 
 [tool.ruff.format]
 quote-style = "double"

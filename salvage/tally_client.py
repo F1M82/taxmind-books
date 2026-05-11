@@ -10,10 +10,11 @@ Configuration in TallyPrime:
     ODBC → Enable Tally HTTP Server → Yes → Port: 9000
 """
 
-import httpx
 import xml.etree.ElementTree as ET
-from typing import List, Dict, Optional, Any
-from datetime import date, datetime
+from datetime import date
+from typing import Any
+
+import httpx
 
 
 def _fiscal_year_start() -> str:
@@ -56,9 +57,9 @@ class TallyClient:
     async def get_ledger(
         self,
         party_name: str,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None
-    ) -> Dict[str, Any]:
+        from_date: str | None = None,
+        to_date: str | None = None
+    ) -> dict[str, Any]:
         """
         Get ledger transactions for a party.
 
@@ -107,7 +108,7 @@ class TallyClient:
 
             return self._parse_ledger_response(response.text, party_name)
 
-    async def get_all_ledgers(self) -> List[Dict[str, Any]]:
+    async def get_all_ledgers(self) -> list[dict[str, Any]]:
         """Get all ledger masters from Tally"""
         xml_request = """
         <ENVELOPE>
@@ -138,7 +139,7 @@ class TallyClient:
 
             return self._parse_ledgers_list(response.text)
 
-    async def get_all_groups(self) -> List[Dict[str, str]]:
+    async def get_all_groups(self) -> list[dict[str, str]]:
         """Get all ledger groups from Tally"""
         xml_request = """
         <ENVELOPE>
@@ -169,7 +170,7 @@ class TallyClient:
 
             return self._parse_groups_list(response.text)
 
-    async def post_voucher(self, voucher: Dict[str, Any]) -> Dict[str, Any]:
+    async def post_voucher(self, voucher: dict[str, Any]) -> dict[str, Any]:
         """
         Post a voucher to Tally.
 
@@ -205,9 +206,9 @@ class TallyClient:
 
     async def get_trial_balance(
         self,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None
-    ) -> Dict[str, Any]:
+        from_date: str | None = None,
+        to_date: str | None = None
+    ) -> dict[str, Any]:
         """Get trial balance from Tally"""
         from_date = from_date or _fiscal_year_start()
         to_date = to_date or _fiscal_year_end()
@@ -246,8 +247,8 @@ class TallyClient:
     async def get_outstanding(
         self,
         party_type: str = "Sundry Debtors",
-        as_of_date: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        as_of_date: str | None = None
+    ) -> list[dict[str, Any]]:
         """Get outstanding receivables/payables"""
         as_of_date = as_of_date or str(date.today())
 
@@ -287,7 +288,7 @@ class TallyClient:
 
     # ==================== XML PARSING HELPERS ====================
 
-    def _parse_ledger_response(self, xml_string: str, party_name: str) -> Dict[str, Any]:
+    def _parse_ledger_response(self, xml_string: str, party_name: str) -> dict[str, Any]:
         """Parse Tally ledger XML response"""
         transactions = []
 
@@ -320,7 +321,7 @@ class TallyClient:
         except ET.ParseError as e:
             raise Exception(f"XML parse error: {e}") from e
 
-    def _parse_ledgers_list(self, xml_string: str) -> List[Dict[str, Any]]:
+    def _parse_ledgers_list(self, xml_string: str) -> list[dict[str, Any]]:
         """Parse Tally ledgers list XML response"""
         ledgers = []
 
@@ -340,7 +341,7 @@ class TallyClient:
         except ET.ParseError as e:
             raise Exception(f"XML parse error: {e}") from e
 
-    def _parse_groups_list(self, xml_string: str) -> List[Dict[str, str]]:
+    def _parse_groups_list(self, xml_string: str) -> list[dict[str, str]]:
         """Parse Tally groups list XML response"""
         groups = []
 
@@ -358,7 +359,7 @@ class TallyClient:
         except ET.ParseError as e:
             raise Exception(f"XML parse error: {e}") from e
 
-    def _parse_trial_balance(self, xml_string: str) -> Dict[str, Any]:
+    def _parse_trial_balance(self, xml_string: str) -> dict[str, Any]:
         """Parse Tally trial balance XML response"""
         ledgers = []
         try:
@@ -372,7 +373,7 @@ class TallyClient:
             pass
         return {"status": "success", "data": ledgers}
 
-    def _parse_outstanding(self, xml_string: str) -> List[Dict[str, Any]]:
+    def _parse_outstanding(self, xml_string: str) -> list[dict[str, Any]]:
         """Parse Tally outstanding XML response"""
         items = []
         try:
@@ -387,7 +388,7 @@ class TallyClient:
             pass
         return items
 
-    def _build_voucher_xml(self, voucher: Dict[str, Any]) -> str:
+    def _build_voucher_xml(self, voucher: dict[str, Any]) -> str:
         """Build Tally voucher import XML"""
         voucher_type = voucher.get("voucher_type", "Receipt")
         date_str = voucher.get("date", str(date.today())).replace("-", "")
@@ -423,7 +424,7 @@ class TallyClient:
         </ENVELOPE>
         """
 
-    def _build_ledger_entries(self, voucher: Dict[str, Any]) -> str:
+    def _build_ledger_entries(self, voucher: dict[str, Any]) -> str:
         """Build ledger entries for voucher"""
         entries = []
         amount = voucher.get("amount", 0)

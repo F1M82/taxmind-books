@@ -20,7 +20,6 @@ from sqlalchemy import (
     Text,
 )
 
-
 # ---------------- Voucher ----------------
 
 

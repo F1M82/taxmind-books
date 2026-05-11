@@ -123,7 +123,7 @@ async def create_voucher(
             user_id=user.id,
             request_id=uuid4(),
         )
-    except Exception:  # noqa: BLE001 — broker outage must not 500 the create
+    except Exception:
         import logging
 
         logging.getLogger("app.api.v1.vouchers").exception(

@@ -15,6 +15,7 @@ from uuid import uuid4
 
 import pytest
 import websockets
+
 from connector.envelope import build_envelope, parse_envelope
 from connector.tally_client import TallyClient
 from connector.ws_client import ConnectorWSClient

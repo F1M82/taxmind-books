@@ -92,7 +92,7 @@ def _numeric_call_args(node: ast.Call) -> tuple[int | None, int | None]:
         first = node.args[0]
         if isinstance(first, ast.Constant) and isinstance(first.value, int):
             p = first.value
-    if len(node.args) >= 2:  # noqa: PLR2004 — Numeric() takes (precision, scale)
+    if len(node.args) >= 2:  # Numeric() takes (precision, scale)
         second = node.args[1]
         if isinstance(second, ast.Constant) and isinstance(second.value, int):
             s = second.value

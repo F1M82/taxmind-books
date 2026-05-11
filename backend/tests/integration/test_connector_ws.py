@@ -33,9 +33,9 @@ from starlette.testclient import WebSocketTestSession
 def _reset_registry() -> None:
     """Make sure each test starts with no live connector entries."""
     reg = get_registry()
-    reg._by_company.clear()  # noqa: SLF001 — test-only reset
+    reg._by_company.clear()
     yield
-    reg._by_company.clear()  # noqa: SLF001
+    reg._by_company.clear()
 
 
 def _wait_for_registry(company_id, timeout: float = 1.0):  # type: ignore[no-untyped-def]
@@ -158,17 +158,18 @@ def test_company_mismatch_closes_with_4003(client: TestClient) -> None:
     token = create_connector_token(
         connector_id=uuid4(), company_id=company_id
     )
-    with pytest.raises(Exception) as exc_info:
-        with _open(client, token=token, company_id=other_id):
-            pass
+    with pytest.raises(Exception) as exc_info, _open(client, token=token, company_id=other_id):
+        pass
     # WebSocketDisconnect carries the close code.
     assert getattr(exc_info.value, "code", None) == 4003
 
 
 def test_invalid_token_closes(client: TestClient) -> None:
-    with pytest.raises(Exception) as exc_info:
-        with _open(client, token="not.a.real.token", company_id=uuid4()):
-            pass
+    with (
+        pytest.raises(Exception) as exc_info,
+        _open(client, token="not.a.real.token", company_id=uuid4()),
+    ):
+        pass
     assert getattr(exc_info.value, "code", None) == 1008
 
 
@@ -186,9 +187,8 @@ def test_expired_token_closes_with_4002(client: TestClient) -> None:
         cfg.CONNECTOR_JWT_SECRET.get_secret_value(),
         algorithm=cfg.JWT_ALGORITHM,
     )
-    with pytest.raises(Exception) as exc_info:
-        with _open(client, token=expired, company_id=uuid4()):
-            pass
+    with pytest.raises(Exception) as exc_info, _open(client, token=expired, company_id=uuid4()):
+        pass
     assert getattr(exc_info.value, "code", None) == 4002
 
 
@@ -206,9 +206,8 @@ def test_user_token_kind_rejected(client: TestClient) -> None:
         cfg.CONNECTOR_JWT_SECRET.get_secret_value(),
         algorithm=cfg.JWT_ALGORITHM,
     )
-    with pytest.raises(Exception) as exc_info:
-        with _open(client, token=bogus, company_id=uuid4()):
-            pass
+    with pytest.raises(Exception) as exc_info, _open(client, token=bogus, company_id=uuid4()):
+        pass
     assert getattr(exc_info.value, "code", None) == 1008
 
 
@@ -219,11 +218,10 @@ def test_unsupported_protocol_version_closes_with_4400(
     token = create_connector_token(
         connector_id=uuid4(), company_id=company_id
     )
-    with pytest.raises(Exception) as exc_info:
-        with _open(
-            client, token=token, company_id=company_id, protocol_version="99"
-        ):
-            pass
+    with pytest.raises(Exception) as exc_info, _open(
+        client, token=token, company_id=company_id, protocol_version="99"
+    ):
+        pass
     assert getattr(exc_info.value, "code", None) == 4400
 
 

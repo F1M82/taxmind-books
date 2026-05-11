@@ -125,21 +125,20 @@ class CompanyService:
 
         # Apply only provided fields (model_dump exclude_unset).
         diff = data.model_dump(exclude_unset=True)
-        if "gstin" in diff and diff["gstin"] != company.gstin:
-            if diff["gstin"] is not None:
-                exists = (
-                    self.db.query(Company)
-                    .filter(
-                        Company.gstin == diff["gstin"],
-                        Company.id != company.id,
-                    )
-                    .first()
+        if "gstin" in diff and diff["gstin"] != company.gstin and diff["gstin"] is not None:
+            exists = (
+                self.db.query(Company)
+                .filter(
+                    Company.gstin == diff["gstin"],
+                    Company.id != company.id,
                 )
-                if exists is not None:
-                    raise GstinAlreadyRegistered(
-                        "GSTIN already registered.",
-                        details={"gstin": diff["gstin"]},
-                    )
+                .first()
+            )
+            if exists is not None:
+                raise GstinAlreadyRegistered(
+                    "GSTIN already registered.",
+                    details={"gstin": diff["gstin"]},
+                )
         for k, v in diff.items():
             setattr(company, k, v)
         self.db.flush()

@@ -14,13 +14,13 @@ import pytest
 from app.models.company import CompanyRole
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
+
 from tests._db_fixtures import (
     issue_token,
     make_company,
     make_membership,
     make_user,
 )
-
 
 pytestmark = pytest.mark.tenant_isolation
 
@@ -83,7 +83,7 @@ def test_user_cannot_add_member_to_other_company(
     client: TestClient, db_session: Session
 ) -> None:
     u1 = make_user(db_session, email="u1@ex.com")
-    target = make_user(db_session, email="target@ex.com")
+    make_user(db_session, email="target@ex.com")
     b = make_company(db_session)
     # u1 is NOT a member of B.
     r = client.post(

@@ -23,6 +23,7 @@ by the dispatcher's company_id verification.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import platform
 import random
@@ -120,7 +121,7 @@ class ConnectorWSClient:
                     exc.close_code,
                 )
                 return
-            except Exception:  # noqa: BLE001 — broad on the reconnect boundary
+            except Exception:
                 logger.exception("session ended; will reconnect")
                 # Exponential + jitter backoff.
                 jitter = random.uniform(-0.2, 0.2) * backoff
@@ -162,10 +163,8 @@ class ConnectorWSClient:
                 )
                 for t in pending:
                     t.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
                         await t
-                    except (asyncio.CancelledError, Exception):
-                        pass
                 # Surface any exception from whichever finished first.
                 for t in done:
                     if not t.cancelled():

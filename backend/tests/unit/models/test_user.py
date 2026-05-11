@@ -87,7 +87,7 @@ def test_user_has_indexes() -> None:
 def test_user_repr() -> None:
     u = User(
         email="alice@example.com",
-        hashed_password="x",  # noqa: S106 — placeholder, not a real credential
+        hashed_password="x",  # placeholder, not a real credential
         full_name="Alice",
     )
     s = repr(u)

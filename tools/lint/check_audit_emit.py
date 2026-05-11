@@ -132,7 +132,7 @@ class _ServiceVisitor(ast.NodeVisitor):
         for sub in ast.walk(node):
             if sub is node:
                 continue
-            if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if isinstance(sub, ast.FunctionDef | ast.AsyncFunctionDef):
                 # Don't descend into nested function bodies.
                 continue
             if isinstance(sub, ast.Call):

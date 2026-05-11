@@ -6,6 +6,7 @@ from app.core.security import decode_token
 from app.models.user import User
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
+
 from tests._db_fixtures import make_user
 
 

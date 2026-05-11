@@ -13,6 +13,7 @@ from app.models.company import CompanyRole
 from app.models.connector_enrollment import ConnectorEnrollmentCode
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
+
 from tests._db_fixtures import (
     issue_token,
     make_company,

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Annotated
 from uuid import UUID
 
 from pydantic import Field, StringConstraints
-from typing_extensions import Annotated
 
 from app.schemas.common import Money, TaxMindBooksBase
 

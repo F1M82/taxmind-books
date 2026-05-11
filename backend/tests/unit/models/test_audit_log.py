@@ -8,7 +8,6 @@ from app.models.idempotency_key import IdempotencyKey
 from sqlalchemy import DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import INET, JSONB
 
-
 # ---------------- AuditLog ----------------
 
 

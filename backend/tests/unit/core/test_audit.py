@@ -22,7 +22,6 @@ from app.core.audit import (
     _normalize_for_json,
 )
 
-
 # ---------------- Stubs ----------------
 
 

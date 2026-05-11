@@ -15,13 +15,13 @@ Exercises every branch of `IdempotencyHandler.check()`:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
 
 from app.core.idempotency import LOCK_TIMEOUT
 from app.models.company import CompanyRole
 from app.models.idempotency_key import IdempotencyKey
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
+
 from tests._db_fixtures import (
     issue_token,
     make_company,

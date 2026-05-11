@@ -19,20 +19,19 @@ from __future__ import annotations
 import time
 
 import jwt
-import pytest
 from app.config import get_settings
 from app.core.security import create_access_token, create_refresh_token
 from app.models.company import CompanyRole
 from app.models.ledger import Ledger
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
+
 from tests._db_fixtures import (
     issue_token,
     make_company,
     make_membership,
     make_user,
 )
-
 
 # ---------------- get_current_user ----------------
 

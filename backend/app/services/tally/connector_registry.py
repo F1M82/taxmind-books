@@ -18,6 +18,7 @@ change call sites.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from dataclasses import dataclass, field
@@ -109,7 +110,7 @@ class ConnectorConnection:
             }
             await self.ws.send_text(json.dumps(env, separators=(",", ":")))
             return await asyncio.wait_for(future, timeout=timeout_seconds)
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise CommandTimeout(
                 f"connector did not respond to {command!r} in "
                 f"{timeout_seconds}s"
@@ -155,10 +156,8 @@ class ConnectorRegistry:
                 # old one so callers fail fast and reconnect logic
                 # on their side kicks in.
                 existing.cancel_pending()
-                try:
+                with contextlib.suppress(Exception):
                     await existing.ws.close(code=4429, reason="superseded")
-                except Exception:  # noqa: BLE001
-                    pass
             self._by_company[conn.company_id] = conn
 
     async def deregister(self, conn: ConnectorConnection) -> None:

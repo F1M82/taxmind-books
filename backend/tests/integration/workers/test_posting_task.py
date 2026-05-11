@@ -8,7 +8,7 @@ for the registry.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -31,6 +31,7 @@ from app.services.tally.connector_registry import (
 )
 from app.services.tally.voucher_dispatcher import dispatch_voucher_to_tally
 from sqlalchemy.orm import Session
+
 from tests._db_fixtures import make_company, make_membership, make_user
 
 

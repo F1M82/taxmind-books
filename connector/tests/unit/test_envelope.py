@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+
 from connector.envelope import (
     PROTOCOL_VERSION,
     ProtocolError,

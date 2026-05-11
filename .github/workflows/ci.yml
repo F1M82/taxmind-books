@@ -54,6 +54,8 @@ jobs:
         run: python tools/lint/check_money_types.py backend/app
       - name: Audit emit check (docs/AUDIT.md §Mandatory-emit enforcement)
         run: python tools/lint/check_audit_emit.py backend/app/services
+      - name: Import-boundary check (docs/REPO_LAYOUT.md §Module boundaries)
+        run: python tools/lint/check_imports.py .
 
   # -------------------------------------------------------------------------
   # 2. Type check

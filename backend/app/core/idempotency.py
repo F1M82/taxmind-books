@@ -21,7 +21,7 @@ from fastapi import HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.database import SCOPE_BYPASS_OPTION
-from app.models.idempotency_key import IdempotencyKey
+from app.models.idempotency_key import IdempotencyKey  # imports-exempt: IdempotencyHandler constructs IdempotencyKey rows; documented cross-cutting exception to the core→models rule
 
 DEDUP_WINDOW = timedelta(hours=24)
 LOCK_TIMEOUT = timedelta(seconds=60)

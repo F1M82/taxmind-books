@@ -22,6 +22,31 @@ interface EntryDraft {
   entry_type: "Dr" | "Cr";
 }
 
+const VOUCHER_TYPES: VoucherType[] = [
+  "Receipt",
+  "Payment",
+  "Sales",
+  "Purchase",
+  "Journal",
+  "Contra",
+  "Debit Note",
+  "Credit Note",
+];
+
+// Hint text shown under the type selector. Mirrors the server-side
+// rules in `voucher_service._validate_type_rules` so users know what
+// shape of entry is expected before posting.
+const TYPE_HINT: Record<VoucherType, string> = {
+  Receipt: "Debit a Bank or Cash ledger; credit the party.",
+  Payment: "Credit a Bank or Cash ledger; debit the party or expense.",
+  Sales: "Debit the customer (Sundry Debtors); credit Sales.",
+  Purchase: "Debit Purchase; credit the supplier (Sundry Creditors).",
+  Journal: "Adjustment between non-Bank/Cash ledgers only.",
+  Contra: "Bank↔Cash transfer. Both sides must be Bank or Cash.",
+  "Debit Note": "Debit the supplier (Sundry Creditors) for a purchase return.",
+  "Credit Note": "Credit the customer (Sundry Debtors) for a sales return.",
+};
+
 function _uuid(): string {
   // RFC4122 v4 via crypto.getRandomValues (Expo / RN has it).
   const bytes = new Uint8Array(16);
@@ -42,7 +67,7 @@ export default function VoucherEntryScreen({
   onCreated: () => void;
   onCancel: () => void;
 }): React.ReactElement {
-  const [voucherType] = useState<VoucherType>("Receipt"); // Phase-0 P0.31: Receipt only; P0.36 broadens.
+  const [voucherType, setVoucherType] = useState<VoucherType>("Receipt");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [narration, setNarration] = useState("");
   const [reference, setReference] = useState("");
@@ -103,6 +128,8 @@ export default function VoucherEntryScreen({
           setError("Dr and Cr totals must match.");
         } else if (exc.code === "ledger_not_found") {
           setError("A selected ledger no longer exists in this company.");
+        } else if (exc.code === "voucher_type_rule_violation") {
+          setError(exc.message);
         } else if (exc.code === "validation_error") {
           setError("Some values failed validation. Check amounts and dates.");
         } else {
@@ -119,6 +146,41 @@ export default function VoucherEntryScreen({
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>New {voucherType}</Text>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.typeRow}
+      >
+        {VOUCHER_TYPES.map((t) => {
+          const active = t === voucherType;
+          return (
+            <Pressable
+              key={t}
+              accessibilityRole="button"
+              accessibilityLabel={`pick-type-${t}`}
+              accessibilityState={{ selected: active }}
+              onPress={() => setVoucherType(t)}
+              style={({ pressed }) => [
+                styles.typeChip,
+                active && styles.typeChipActive,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.typeChipText,
+                  active && styles.typeChipTextActive,
+                ]}
+              >
+                {t}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
+      <Text style={styles.hint}>{TYPE_HINT[voucherType]}</Text>
 
       <TextInput
         accessibilityLabel="voucher-date"
@@ -260,6 +322,22 @@ const styles = StyleSheet.create({
   container: { padding: 24, gap: 10 },
   title: { fontSize: 24, fontWeight: "600" },
   section: { fontSize: 18, fontWeight: "600", marginTop: 12 },
+  typeRow: { flexDirection: "row", gap: 8, paddingVertical: 4 },
+  typeChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#bdc3c7",
+    backgroundColor: "#fff",
+  },
+  typeChipActive: {
+    backgroundColor: "#2c3e50",
+    borderColor: "#2c3e50",
+  },
+  typeChipText: { color: "#2c3e50", fontWeight: "600" },
+  typeChipTextActive: { color: "#fff" },
+  hint: { color: "#7f8c8d", fontSize: 13 },
   input: {
     borderWidth: 1,
     borderColor: "#ccc",

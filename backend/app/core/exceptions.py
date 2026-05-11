@@ -177,6 +177,10 @@ class VoucherEntriesUnbalanced(ValidationFailed):
     code = "voucher_entries_unbalanced"
 
 
+class VoucherTypeRuleViolation(ValidationFailed):
+    code = "voucher_type_rule_violation"
+
+
 class LedgerInUse(Conflict):
     code = "ledger_in_use"
 

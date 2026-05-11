@@ -143,3 +143,83 @@ test("creates a balanced Receipt with idempotency key", async () => {
   ]);
   expect(onCreated).toHaveBeenCalled();
 });
+
+
+test("type selector switches the voucher_type sent to the API", async () => {
+  // P0.36: tapping a chip changes which voucher_type is posted.
+  mockListLedgers.mockResolvedValue({
+    items: [
+      {
+        id: "led-purch",
+        name: "Purchase A/c",
+        group_name: "Purchase Accounts",
+        opening_balance: "0.00",
+        balance_type: "Dr",
+        gstin: null,
+        is_active: true,
+      },
+      {
+        id: "led-supplier",
+        name: "Wholesale Co",
+        group_name: "Sundry Creditors",
+        opening_balance: "0.00",
+        balance_type: "Cr",
+        gstin: null,
+        is_active: true,
+      },
+    ],
+    meta: { next_cursor: null, total: 2 },
+  });
+  mockCreateVoucher.mockResolvedValue({
+    id: "v-2",
+    voucher_type: "Purchase",
+    voucher_number: null,
+    date: "2026-05-11",
+    narration: null,
+    reference: null,
+    total_amount: "100.00",
+    status: "posted",
+    source: "manual",
+    gst_applicable: false,
+    tally_posted_at: null,
+    created_at: "now",
+  });
+
+  const { getByLabelText, findByLabelText } = render(
+    <VoucherEntryScreen onCreated={jest.fn()} onCancel={jest.fn()} />,
+  );
+
+  // Switch type from default Receipt → Purchase.
+  await act(async () => {
+    fireEvent.press(getByLabelText("pick-type-Purchase"));
+  });
+
+  // Pick ledgers: Dr Purchase A/c, Cr Supplier.
+  await act(async () => {
+    fireEvent.press(getByLabelText("pick-ledger-0"));
+  });
+  const pick0 = await findByLabelText("pick-led-purch");
+  await act(async () => {
+    fireEvent.press(pick0);
+  });
+  await act(async () => {
+    fireEvent.press(getByLabelText("pick-ledger-1"));
+  });
+  const pick1 = await findByLabelText("pick-led-supplier");
+  await act(async () => {
+    fireEvent.press(pick1);
+  });
+
+  fireEvent.changeText(getByLabelText("entry-amount-0"), "100");
+  fireEvent.changeText(getByLabelText("entry-amount-1"), "100");
+
+  await act(async () => {
+    fireEvent.press(getByLabelText("post"));
+  });
+
+  await waitFor(() => {
+    expect(mockCreateVoucher).toHaveBeenCalled();
+  });
+  const [body] = mockCreateVoucher.mock.calls[0];
+  expect(body.voucher_type).toBe("Purchase");
+});

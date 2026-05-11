@@ -35,10 +35,16 @@ def _setup(db_session: Session):  # type: ignore[no-untyped-def]
     company = make_company(db_session)
     make_membership(db_session, user, company, role=CompanyRole.owner)
     bank = Ledger(
-        company_id=company.id, name="Bank", name_normalized="bank"
+        company_id=company.id,
+        name="Bank",
+        name_normalized="bank",
+        group_name="Bank Accounts",
     )
     party = Ledger(
-        company_id=company.id, name="Sharma", name_normalized="sharma"
+        company_id=company.id,
+        name="Sharma",
+        name_normalized="sharma",
+        group_name="Sundry Debtors",
     )
     db_session.add_all([bank, party])
     db_session.commit()

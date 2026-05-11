@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -16,6 +17,7 @@ from app.core.exceptions import (
     VoucherEntriesUnbalanced,
     VoucherImmutableField,
     VoucherNotFound,
+    VoucherTypeRuleViolation,
 )
 from app.models.ledger import Ledger
 from app.models.user import User
@@ -27,6 +29,11 @@ from app.models.voucher import (
     VoucherType,
 )
 from app.schemas.voucher import VoucherCreate, VoucherUpdate
+from app.services.voucher_groups import (
+    is_bank_or_cash,
+    is_sundry_creditors,
+    is_sundry_debtors,
+)
 
 
 def _voucher_snapshot(v: Voucher) -> dict[str, Any]:
@@ -86,7 +93,8 @@ class VoucherService:
     def create(self, data: VoucherCreate, actor: User) -> Voucher:
         self._validate_entries(data)
         self._validate_gst(data)
-        self._validate_ledger_ownership(data)
+        ledger_groups = self._validate_ledger_ownership(data)
+        self._validate_type_rules(data, ledger_groups)
 
         voucher = Voucher(
             company_id=self.company_id,
@@ -309,20 +317,206 @@ class VoucherService:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _validate_ledger_ownership(self, data: VoucherCreate) -> None:
+    def _validate_ledger_ownership(
+        self, data: VoucherCreate
+    ) -> dict[UUID, str | None]:
+        """Confirm every entry's ledger belongs to the active company.
+
+        Returns a `{ledger_id: group_name}` map so the caller can run
+        type-specific rules (Sales requires Sundry Debtors, etc.) without
+        a second query.
+        """
         ledger_ids = {e.ledger_id for e in data.entries}
-        owned_ids: set[UUID] = {
-            row.id
-            for row in self.db.query(Ledger.id)
+        rows = (
+            self.db.query(Ledger.id, Ledger.group_name)
             .filter(
                 Ledger.id.in_(ledger_ids),
                 Ledger.company_id == self.company_id,
             )
             .all()
-        }
-        missing = ledger_ids - owned_ids
+        )
+        groups: dict[UUID, str | None] = {row.id: row.group_name for row in rows}
+        missing = ledger_ids - set(groups.keys())
         if missing:
             raise LedgerNotFound(
                 "One or more ledgers do not belong to the active company.",
                 details={"missing_ledger_ids": [str(i) for i in missing]},
             )
+        return groups
+
+    # ------------------------------------------------------------------
+    # Per-type business rules (P0.36)
+    # ------------------------------------------------------------------
+    #
+    # Per docs/API.md § "POST /vouchers/" → Validation rules. The catalog
+    # below is exhaustive for the 8 Tally voucher types; rules trip 422
+    # `voucher_type_rule_violation` so clients can route the message to
+    # the right form field.
+
+    def _validate_type_rules(
+        self, data: VoucherCreate, ledger_groups: dict[UUID, str | None]
+    ) -> None:
+        validator = _TYPE_VALIDATORS.get(data.voucher_type)
+        if validator is None:
+            return  # schema-validated enum already excludes unknown types
+        entry_groups = [
+            (e.entry_type, ledger_groups.get(e.ledger_id)) for e in data.entries
+        ]
+        validator(data, ledger_groups, entry_groups)
+
+
+# ---------------------------------------------------------------------
+# Per-voucher-type rule functions (P0.36)
+# ---------------------------------------------------------------------
+#
+# Each takes (request, {ledger_id: group_name}, [(entry_type, group_name)])
+# and either returns or raises VoucherTypeRuleViolation. Module-level so
+# the dispatch dict below stays simple and testable in isolation.
+
+_RuleFn = Callable[
+    [VoucherCreate, dict[UUID, str | None], list[tuple[str, str | None]]],
+    None,
+]
+
+
+def _rule_sales(
+    data: VoucherCreate,
+    _ledger_groups: dict[UUID, str | None],
+    entry_groups: list[tuple[str, str | None]],
+) -> None:
+    if not any(is_sundry_debtors(g) for _t, g in entry_groups):
+        raise VoucherTypeRuleViolation(
+            "Sales voucher must include at least one Sundry Debtors "
+            "ledger entry.",
+            details={
+                "voucher_type": data.voucher_type,
+                "rule": "requires_sundry_debtors",
+            },
+        )
+
+
+def _rule_purchase(
+    data: VoucherCreate,
+    _ledger_groups: dict[UUID, str | None],
+    entry_groups: list[tuple[str, str | None]],
+) -> None:
+    if not any(is_sundry_creditors(g) for _t, g in entry_groups):
+        raise VoucherTypeRuleViolation(
+            "Purchase voucher must include at least one Sundry Creditors "
+            "ledger entry.",
+            details={
+                "voucher_type": data.voucher_type,
+                "rule": "requires_sundry_creditors",
+            },
+        )
+
+
+def _rule_contra(
+    data: VoucherCreate,
+    ledger_groups: dict[UUID, str | None],
+    _entry_groups: list[tuple[str, str | None]],
+) -> None:
+    offending = [
+        str(e.ledger_id)
+        for e in data.entries
+        if not is_bank_or_cash(ledger_groups.get(e.ledger_id))
+    ]
+    if offending:
+        raise VoucherTypeRuleViolation(
+            "Contra voucher entries must all be on Bank or Cash ledgers.",
+            details={
+                "voucher_type": data.voucher_type,
+                "rule": "all_bank_or_cash",
+                "offending_ledger_ids": offending,
+            },
+        )
+
+
+def _rule_receipt(
+    data: VoucherCreate,
+    _ledger_groups: dict[UUID, str | None],
+    entry_groups: list[tuple[str, str | None]],
+) -> None:
+    if not any(t == "Dr" and is_bank_or_cash(g) for t, g in entry_groups):
+        raise VoucherTypeRuleViolation(
+            "Receipt voucher must debit at least one Bank or Cash ledger.",
+            details={
+                "voucher_type": data.voucher_type,
+                "rule": "requires_bank_or_cash_dr",
+            },
+        )
+
+
+def _rule_payment(
+    data: VoucherCreate,
+    _ledger_groups: dict[UUID, str | None],
+    entry_groups: list[tuple[str, str | None]],
+) -> None:
+    if not any(t == "Cr" and is_bank_or_cash(g) for t, g in entry_groups):
+        raise VoucherTypeRuleViolation(
+            "Payment voucher must credit at least one Bank or Cash ledger.",
+            details={
+                "voucher_type": data.voucher_type,
+                "rule": "requires_bank_or_cash_cr",
+            },
+        )
+
+
+def _rule_journal(
+    data: VoucherCreate,
+    _ledger_groups: dict[UUID, str | None],
+    entry_groups: list[tuple[str, str | None]],
+) -> None:
+    if any(is_bank_or_cash(g) for _t, g in entry_groups):
+        raise VoucherTypeRuleViolation(
+            "Journal voucher must not touch Bank or Cash ledgers; "
+            "use Receipt, Payment, or Contra instead.",
+            details={
+                "voucher_type": data.voucher_type,
+                "rule": "no_bank_or_cash",
+            },
+        )
+
+
+def _rule_debit_note(
+    data: VoucherCreate,
+    _ledger_groups: dict[UUID, str | None],
+    entry_groups: list[tuple[str, str | None]],
+) -> None:
+    if not any(is_sundry_creditors(g) for _t, g in entry_groups):
+        raise VoucherTypeRuleViolation(
+            "Debit Note must include at least one Sundry Creditors "
+            "ledger entry (purchase return).",
+            details={
+                "voucher_type": data.voucher_type,
+                "rule": "requires_sundry_creditors",
+            },
+        )
+
+
+def _rule_credit_note(
+    data: VoucherCreate,
+    _ledger_groups: dict[UUID, str | None],
+    entry_groups: list[tuple[str, str | None]],
+) -> None:
+    if not any(is_sundry_debtors(g) for _t, g in entry_groups):
+        raise VoucherTypeRuleViolation(
+            "Credit Note must include at least one Sundry Debtors "
+            "ledger entry (sales return).",
+            details={
+                "voucher_type": data.voucher_type,
+                "rule": "requires_sundry_debtors",
+            },
+        )
+
+
+_TYPE_VALIDATORS: dict[str, _RuleFn] = {
+    "Sales": _rule_sales,
+    "Purchase": _rule_purchase,
+    "Contra": _rule_contra,
+    "Receipt": _rule_receipt,
+    "Payment": _rule_payment,
+    "Journal": _rule_journal,
+    "Debit Note": _rule_debit_note,
+    "Credit Note": _rule_credit_note,
+}

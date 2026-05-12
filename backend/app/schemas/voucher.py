@@ -84,6 +84,8 @@ class VoucherListItem(TaxMindBooksBase):
     status: str
     source: str
     gst_applicable: bool
+    is_optional_in_tally: bool = False
+    approved_to_regular_at: datetime | None = None
     tally_posted_at: datetime | None = None
     created_at: datetime
 
@@ -131,6 +133,12 @@ class VoucherOut(TaxMindBooksBase):
     tds_amount: Money
     tds_section: str | None = None
     tally_posted_at: datetime | None = None
+    is_optional_in_tally: bool = False
+    approved_to_regular_at: datetime | None = None
+    approved_to_regular_by: UUID | None = None
+    optional_rejection_reason: str | None = None
+    optional_rejected_at: datetime | None = None
+    optional_rejected_by: UUID | None = None
     created_by: UUID | None = None
     created_at: datetime
     entries: list[VoucherEntryOut]

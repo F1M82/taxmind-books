@@ -7,9 +7,6 @@ are its Dr/Cr lines. Both are tenant-scoped on `company_id`.
 Soft delete only: vouchers are cancelled by setting `status='cancelled'`,
 never hard-deleted (per `API.md`). Ledger entries inherit the cancellation
 via the cascade on `voucher_id`.
-
-The v1.2 Optional-voucher columns and the `'optional'` /
-`'rejected_optional'` status values land in P0.37 / migration 0010.
 """
 
 from __future__ import annotations
@@ -72,8 +69,10 @@ class VoucherType(str, PyEnum):
 class VoucherStatus(str, PyEnum):
     draft = "draft"
     pending_approval = "pending_approval"
+    optional = "optional"
     posted = "posted"
     cancelled = "cancelled"
+    rejected_optional = "rejected_optional"
 
 
 class EntryType(str, PyEnum):
@@ -161,6 +160,30 @@ class Voucher(Base, TenantScopedMixin):
     )
     tally_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # v1.2: Optional voucher flow
+    is_optional_in_tally: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("FALSE")
+    )
+    approved_to_regular_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    approved_to_regular_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    optional_rejection_reason: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    optional_rejected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    optional_rejected_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     created_by: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -246,6 +269,16 @@ class Voucher(Base, TenantScopedMixin):
             "idx_vouchers_unposted_to_tally",
             "company_id",
             postgresql_where="status = 'posted' AND tally_posted_at IS NULL",
+        ),
+        Index(
+            "idx_vouchers_optional_pending",
+            "company_id",
+            text("date DESC"),
+            postgresql_where=(
+                "is_optional_in_tally = TRUE "
+                "AND approved_to_regular_at IS NULL "
+                "AND status NOT IN ('cancelled', 'rejected_optional')"
+            ),
         ),
     )
 

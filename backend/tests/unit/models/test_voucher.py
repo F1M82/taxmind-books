@@ -60,6 +60,12 @@ def test_voucher_columns_match_schema() -> None:
         "tally_voucher_guid",
         "tally_post_attempts",
         "tally_last_error",
+        "is_optional_in_tally",
+        "approved_to_regular_at",
+        "approved_to_regular_by",
+        "optional_rejection_reason",
+        "optional_rejected_at",
+        "optional_rejected_by",
         "created_by",
         "approved_by",
         "approved_at",
@@ -161,6 +167,7 @@ def test_voucher_indexes_match_schema() -> None:
         "idx_vouchers_company_type_date",
         "idx_vouchers_source_ingestion",
         "idx_vouchers_unposted_to_tally",
+        "idx_vouchers_optional_pending",
     }.issubset(names)
 
 
@@ -177,13 +184,14 @@ def test_voucher_type_enum_values() -> None:
     }
 
 
-def test_voucher_status_enum_p07_values() -> None:
-    # P0.07 base values; v1.2 adds 'optional' and 'rejected_optional' in P0.37.
+def test_voucher_status_enum_values() -> None:
     assert {s.value for s in VoucherStatus} == {
         "draft",
         "pending_approval",
+        "optional",
         "posted",
         "cancelled",
+        "rejected_optional",
     }
 
 
@@ -193,10 +201,33 @@ def test_voucher_timestamps_have_tz() -> None:
         "updated_at",
         "tally_posted_at",
         "approved_at",
+        "approved_to_regular_at",
+        "optional_rejected_at",
     ):
         col = Voucher.__table__.columns[name]
         assert isinstance(col.type, DateTime)
         assert col.type.timezone is True
+
+
+def test_voucher_is_optional_in_tally_default_false() -> None:
+    col = Voucher.__table__.columns["is_optional_in_tally"]
+    assert isinstance(col.type, Boolean)
+    assert col.nullable is False
+    assert "FALSE" in str(col.server_default.arg).upper()
+
+
+def test_voucher_optional_reviewer_fks_set_null() -> None:
+    for name in ("approved_to_regular_by", "optional_rejected_by"):
+        col = Voucher.__table__.columns[name]
+        fk = next(iter(col.foreign_keys))
+        assert fk.ondelete == "SET NULL"
+        assert col.nullable is True
+
+
+def test_voucher_optional_rejection_reason_is_text() -> None:
+    col = Voucher.__table__.columns["optional_rejection_reason"]
+    assert isinstance(col.type, Text)
+    assert col.nullable is True
 
 
 # ---------------- LedgerEntry ----------------

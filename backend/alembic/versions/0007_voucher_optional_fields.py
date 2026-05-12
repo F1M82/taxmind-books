@@ -106,6 +106,15 @@ def downgrade() -> None:
     op.drop_column("vouchers", "approved_to_regular_at")
     op.drop_column("vouchers", "is_optional_in_tally")
 
+    # The partial index idx_vouchers_unposted_to_tally (P0.07) holds a
+    # literal `status = 'posted'` bound to the current voucher_status
+    # type; dropping the type out from under it during the ALTER below
+    # would leave the index referencing voucher_status_old and the
+    # USING cast would fail with `operator does not exist:
+    # voucher_status = voucher_status_old`. Drop the partial here and
+    # recreate it after the type has been rebuilt.
+    op.drop_index("idx_vouchers_unposted_to_tally", table_name="vouchers")
+
     # Postgres has no DROP VALUE for enums; rebuild the type without the
     # v1.2 values. Any rows still using them would block the cast — but
     # by contract no such rows exist when the v1.2 columns are gone.
@@ -121,3 +130,12 @@ def downgrade() -> None:
         "ALTER COLUMN status SET DEFAULT 'posted'"
     )
     op.execute("DROP TYPE voucher_status_old")
+
+    op.create_index(
+        "idx_vouchers_unposted_to_tally",
+        "vouchers",
+        ["company_id"],
+        postgresql_where=sa.text(
+            "status = 'posted' AND tally_posted_at IS NULL"
+        ),
+    )

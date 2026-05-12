@@ -28,6 +28,21 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";   -- for gen_random_uuid()
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";    -- for fuzzy ledger name matching
 
 -- Enum types ------------------------------------------------------------------
+--
+-- Migration rule for any enum that has partial-index consumers
+-- (voucher_status currently has idx_vouchers_unposted_to_tally and
+-- idx_vouchers_optional_pending; voucher_type and ingestion_status
+-- are likely future cases): the standard `ALTER TYPE ... RENAME TO
+-- ..._old; CREATE TYPE ...; ALTER COLUMN ... USING ::text::new_type;
+-- DROP TYPE ..._old` dance fails with `operator does not exist:
+-- new_type = old_type` because the partial index's `WHERE status =
+-- 'posted'` literal stays bound to the old type during the cast.
+-- Workaround: drop every partial index whose WHERE references the
+-- column being retyped, do the type swap, then recreate the indexes
+-- inside the same migration. See alembic/versions/0007 for the
+-- canonical example. Don't try to be clever with `ALTER TYPE ...
+-- ADD VALUE` — that path is fine for the upgrade direction but the
+-- downgrade is what bites you.
 
 CREATE TYPE company_status AS ENUM ('active', 'inactive', 'suspended');
 

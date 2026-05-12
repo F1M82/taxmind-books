@@ -142,10 +142,17 @@ CI builds the `.exe` on every push to `main` via
 
 ```bash
 cd mobile
-npm install --legacy-peer-deps
+npm ci --legacy-peer-deps
 npx tsc --noEmit
 npm test
 ```
+
+`npm ci` is the required install command — it installs the exact
+versions pinned in `mobile/package-lock.json` and refuses to update
+the lockfile. Run it on every fresh clone and in CI so two
+developers don't end up on different transitive dependency trees.
+If you intentionally need to add or upgrade a package, use `npm
+install <pkg>` and commit the updated lockfile in the same change.
 
 Expo dev server:
 

@@ -175,9 +175,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
       - name: Install mobile deps
         working-directory: mobile
-        run: npm install --legacy-peer-deps
+        # npm ci honors mobile/package-lock.json exactly and fails if the
+        # lockfile and package.json drift, which is what we want in CI.
+        run: npm ci --legacy-peer-deps
       - name: Type-check
         working-directory: mobile
         run: npx tsc --noEmit

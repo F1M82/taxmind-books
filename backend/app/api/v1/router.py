@@ -15,6 +15,7 @@ from app.api.v1 import (
     connector,
     connector_ws,
     dashboard,
+    devices,
     ledgers,
     onboarding,
     reports,
@@ -29,6 +30,7 @@ api_v1.include_router(vouchers.router)
 api_v1.include_router(reports.router)
 api_v1.include_router(dashboard.router)
 api_v1.include_router(onboarding.router)
+api_v1.include_router(devices.router)
 api_v1.include_router(audit_logs.router)
 api_v1.include_router(connector.router)
 api_v1.include_router(connector_ws.router)

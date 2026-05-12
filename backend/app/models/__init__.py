@@ -11,6 +11,7 @@ from app.models.audit_log import AuditLog
 from app.models.base import Base, TenantScopedMixin
 from app.models.company import Company, UserCompany
 from app.models.connector_enrollment import ConnectorEnrollmentCode
+from app.models.device_token import DevicePlatform, DeviceToken
 from app.models.idempotency_key import IdempotencyKey
 from app.models.ledger import BalanceType, Ledger
 from app.models.user import User
@@ -28,6 +29,8 @@ __all__ = [
     "Base",
     "Company",
     "ConnectorEnrollmentCode",
+    "DevicePlatform",
+    "DeviceToken",
     "EntryType",
     "IdempotencyKey",
     "Ledger",

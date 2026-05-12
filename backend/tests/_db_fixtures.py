@@ -58,9 +58,12 @@ def migrated_engine() -> Generator[str, None, None]:
     except (OperationalError, Exception) as exc:
         pytest.skip(f"Postgres not reachable at {url!s}: {exc}")
 
-    # Drop everything so we start clean.
+    # Drop everything so we start clean. New migrations that introduce
+    # tables/enums must extend this list — see also
+    # tests/integration/test_alembic_roundtrip.py for the same rule.
     e = create_engine(url)
     with e.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS device_tokens CASCADE"))
         conn.execute(
             text("DROP TABLE IF EXISTS connector_enrollment_codes CASCADE")
         )
@@ -73,6 +76,7 @@ def migrated_engine() -> Generator[str, None, None]:
         conn.execute(text("DROP TABLE IF EXISTS companies CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+        conn.execute(text("DROP TYPE IF EXISTS device_platform CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS entry_type CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS voucher_status CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS voucher_type CASCADE"))
@@ -129,7 +133,8 @@ def _reset_tenancy_tables(migrated_engine: str) -> Generator[None, None, None]:
     with e.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE TABLE connector_enrollment_codes, "
+                "TRUNCATE TABLE device_tokens, "
+                "connector_enrollment_codes, "
                 "idempotency_keys, audit_logs, ledger_entries, "
                 "vouchers, ledgers, user_companies, companies, users "
                 "RESTART IDENTITY CASCADE"

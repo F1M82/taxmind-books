@@ -55,6 +55,13 @@ def clean_db(db_or_skip: str) -> str:
     """Drop the alembic schema artifacts so the round-trip starts clean."""
     engine = create_engine(db_or_skip)
     with engine.begin() as conn:
+        # Drop tables and types added by every migration to date.
+        # New migrations that create their own tables/enums must
+        # extend this list — otherwise the round-trip test wedges on
+        # `type "X" already exists` after a partial-run regression.
+        # The same hazard is documented in docs/SCHEMA.sql for
+        # voucher_status; the rule applies to every enum.
+        conn.execute(text("DROP TABLE IF EXISTS device_tokens CASCADE"))
         conn.execute(
             text("DROP TABLE IF EXISTS connector_enrollment_codes CASCADE")
         )
@@ -67,6 +74,7 @@ def clean_db(db_or_skip: str) -> str:
         conn.execute(text("DROP TABLE IF EXISTS companies CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+        conn.execute(text("DROP TYPE IF EXISTS device_platform CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS entry_type CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS voucher_status CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS voucher_type CASCADE"))

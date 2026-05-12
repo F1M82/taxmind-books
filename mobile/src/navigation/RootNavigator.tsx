@@ -13,6 +13,7 @@ import CompanyCreateScreen from "../screens/companies/CompanyCreateScreen";
 import CompanyListScreen from "../screens/companies/CompanyListScreen";
 import DashboardScreen from "../screens/dashboard/DashboardScreen";
 import LedgerListScreen from "../screens/ledgers/LedgerListScreen";
+import OnboardingScreen from "../screens/onboarding/OnboardingScreen";
 import BalanceSheetScreen from "../screens/reports/BalanceSheetScreen";
 import OutstandingScreen from "../screens/reports/OutstandingScreen";
 import ProfitLossScreen from "../screens/reports/ProfitLossScreen";
@@ -36,6 +37,7 @@ type AppStackParamList = {
   ProfitLoss: undefined;
   BalanceSheet: undefined;
   Outstanding: undefined;
+  Onboarding: undefined;
 };
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -83,6 +85,7 @@ function AppFlow(): React.ReactElement {
               props.navigation.navigate("BalanceSheet")
             }
             onOpenOutstanding={() => props.navigation.navigate("Outstanding")}
+            onOpenOnboarding={() => props.navigation.navigate("Onboarding")}
           />
         )}
       </AppStack.Screen>
@@ -154,6 +157,24 @@ function AppFlow(): React.ReactElement {
         component={OutstandingScreen}
         options={{ title: "Outstanding" }}
       />
+      <AppStack.Screen name="Onboarding" options={{ title: "Onboarding" }}>
+        {(props: NativeStackScreenProps<AppStackParamList, "Onboarding">) => (
+          <OnboardingScreen
+            onOpenLedgers={() =>
+              props.navigation.reset({
+                index: 1,
+                routes: [{ name: "Dashboard" }, { name: "Ledgers" }],
+              })
+            }
+            onOpenNewVoucher={() =>
+              props.navigation.reset({
+                index: 1,
+                routes: [{ name: "Dashboard" }, { name: "NewVoucher" }],
+              })
+            }
+          />
+        )}
+      </AppStack.Screen>
     </AppStack.Navigator>
   );
 }

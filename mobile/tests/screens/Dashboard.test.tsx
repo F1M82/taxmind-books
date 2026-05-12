@@ -12,9 +12,15 @@ import DashboardScreen from "../../src/screens/dashboard/DashboardScreen";
 jest.setTimeout(15000);
 
 const mockGetDashboardHome = jest.fn();
+const mockGetOnboardingChecklist = jest.fn();
 
 jest.mock("../../src/api/dashboard", () => ({
   getDashboardHome: (...args: unknown[]) => mockGetDashboardHome(...args),
+}));
+
+jest.mock("../../src/api/onboarding", () => ({
+  getOnboardingChecklist: (...args: unknown[]) =>
+    mockGetOnboardingChecklist(...args),
 }));
 
 jest.mock("../../src/context/AuthContext", () => ({
@@ -41,10 +47,21 @@ const HANDLERS = {
   onOpenProfitLoss: jest.fn(),
   onOpenBalanceSheet: jest.fn(),
   onOpenOutstanding: jest.fn(),
+  onOpenOnboarding: jest.fn(),
 };
 
 beforeEach(() => {
   mockGetDashboardHome.mockReset();
+  mockGetOnboardingChecklist.mockReset();
+  // Default: onboarding past the hide threshold (4 of 5), so the
+  // tile stays out of the way and existing tile-presence assertions
+  // continue to pass. Tests that care about the tile override.
+  mockGetOnboardingChecklist.mockResolvedValue({
+    company_id: "c-1",
+    items: [],
+    completed_count: 4,
+    total_count: 5,
+  });
   Object.values(HANDLERS).forEach((h) => h.mockReset());
 });
 

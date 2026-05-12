@@ -10,10 +10,15 @@ import {
 } from "react-native";
 
 import { DashboardHomeResponse, getDashboardHome } from "../../api/dashboard";
+import {
+  OnboardingChecklistResponse,
+  getOnboardingChecklist,
+} from "../../api/onboarding";
 import AlertsList from "../../components/dashboard/AlertsList";
 import ConnectorTile from "../../components/dashboard/ConnectorTile";
 import GstTile from "../../components/dashboard/GstTile";
 import MetricsTile from "../../components/dashboard/MetricsTile";
+import OnboardingTile from "../../components/dashboard/OnboardingTile";
 import OutstandingTile from "../../components/dashboard/OutstandingTile";
 import { useAuth } from "../../context/AuthContext";
 import { useActiveCompany } from "../../context/CompanyContext";
@@ -26,6 +31,7 @@ export default function DashboardScreen({
   onOpenProfitLoss,
   onOpenBalanceSheet,
   onOpenOutstanding,
+  onOpenOnboarding,
 }: {
   onOpenCompanies: () => void;
   onOpenLedgers: () => void;
@@ -34,26 +40,41 @@ export default function DashboardScreen({
   onOpenProfitLoss: () => void;
   onOpenBalanceSheet: () => void;
   onOpenOutstanding: () => void;
+  onOpenOnboarding: () => void;
 }): React.ReactElement {
   const { user, signOut } = useAuth();
   const { activeCompanyId, loading: companyLoading } = useActiveCompany();
   const hasActive = activeCompanyId !== null;
 
   const [data, setData] = useState<DashboardHomeResponse | null>(null);
+  const [onboarding, setOnboarding] =
+    useState<OnboardingChecklistResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     if (!hasActive) {
       setData(null);
+      setOnboarding(null);
       return;
     }
     setError(null);
     setRefreshing(true);
     try {
-      setData(await getDashboardHome());
-    } catch {
-      setError("Could not load dashboard.");
+      // Independent fetches; the slower one bounds the perceived
+      // load time but neither blocks the other if it fails.
+      const [home, checklist] = await Promise.allSettled([
+        getDashboardHome(),
+        getOnboardingChecklist(),
+      ]);
+      if (home.status === "fulfilled") {
+        setData(home.value);
+      } else {
+        setError("Could not load dashboard.");
+      }
+      if (checklist.status === "fulfilled") {
+        setOnboarding(checklist.value);
+      }
     } finally {
       setRefreshing(false);
     }
@@ -122,6 +143,16 @@ export default function DashboardScreen({
               if (a.kind === "pending_approvals") onOpenVouchers();
             }}
           />
+
+          {onboarding !== null &&
+            onboarding.completed_count < onboarding.total_count - 1 && (
+              <View style={styles.tileRow}>
+                <OnboardingTile
+                  data={onboarding}
+                  onPress={onOpenOnboarding}
+                />
+              </View>
+            )}
 
           <View style={styles.tileRow}>
             <ConnectorTile connector={data.connector} />

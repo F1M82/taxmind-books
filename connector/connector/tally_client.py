@@ -11,10 +11,8 @@ Configuration in TallyPrime:
 
 Per CONNECTOR_PROTOCOL.md command catalog, this client exposes:
     ping, get_ledger, get_all_ledgers, get_all_groups,
-    post_voucher, get_trial_balance, get_outstanding
-
-The v1.2 Optional-voucher extensions (`as_optional` flag,
-approve_optional_voucher, reject_optional_voucher) land in P0.46.
+    post_voucher, get_trial_balance, get_outstanding,
+    approve_optional_voucher, reject_optional_voucher
 """
 
 from __future__ import annotations
@@ -77,6 +75,10 @@ class VoucherInput:
     `entries` is N-line by design (the salvaged 2-line shape was a
     Phase-0-blocker). The caller — backend voucher_dispatcher in
     P0.26 — assembles this from a `Voucher` + its `LedgerEntry` rows.
+
+    `as_optional` (v1.2) emits `<ISOPTIONAL>Yes</ISOPTIONAL>` so Tally
+    posts the voucher in the Optional state; a later
+    `approve_optional_voucher` call promotes it to Regular.
     """
 
     voucher_type: str
@@ -85,6 +87,7 @@ class VoucherInput:
     party_name: str
     narration: str
     entries: list[LedgerEntryInput]
+    as_optional: bool = False
 
 
 @dataclass(frozen=True)
@@ -317,6 +320,49 @@ class TallyClient:
         return {
             "status": "success",
             "voucher_number": voucher.voucher_number,
+            "as_optional": voucher.as_optional,
+            "raw": body,
+        }
+
+    # ------------------------------------------------------------------
+    # approve_optional_voucher  (v1.2)
+    # ------------------------------------------------------------------
+
+    async def approve_optional_voucher(
+        self, voucher_guid: str
+    ) -> dict[str, Any]:
+        """Promote an Optional voucher to Regular in Tally.
+
+        Issues an ACTION="Alter" against the voucher's REMOTEID that
+        flips `<ISOPTIONAL>` from Yes to No. Idempotent: re-running
+        against an already-Regular voucher is a no-op in Tally.
+        """
+        xml = self._build_alter_isoptional_xml(voucher_guid, optional=False)
+        body = await self._post_xml(xml)
+        return {
+            "status": "success",
+            "tally_voucher_guid": voucher_guid,
+            "raw": body,
+        }
+
+    # ------------------------------------------------------------------
+    # reject_optional_voucher  (v1.2)
+    # ------------------------------------------------------------------
+
+    async def reject_optional_voucher(
+        self, voucher_guid: str
+    ) -> dict[str, Any]:
+        """Delete an Optional voucher from Tally entirely.
+
+        Issues an ACTION="Delete" against the voucher's REMOTEID. The
+        caller is responsible for not invoking this on already-Regular
+        vouchers (the backend gates that).
+        """
+        xml = self._build_delete_voucher_xml(voucher_guid)
+        body = await self._post_xml(xml)
+        return {
+            "status": "success",
+            "tally_voucher_guid": voucher_guid,
             "raw": body,
         }
 
@@ -512,6 +558,9 @@ class TallyClient:
         entries_xml = "".join(
             self._build_entry_xml(e) for e in v.entries
         )
+        # Tally treats absence of ISOPTIONAL as "No"; emit only when
+        # we want the voucher posted as Optional.
+        optional_xml = "<ISOPTIONAL>Yes</ISOPTIONAL>" if v.as_optional else ""
         return (
             "<ENVELOPE>"
             "<HEADER>"
@@ -528,9 +577,53 @@ class TallyClient:
             f"<VOUCHERTYPENAME>{v.voucher_type}</VOUCHERTYPENAME>"
             f"<VOUCHERNUMBER>{v.voucher_number}</VOUCHERNUMBER>"
             f"<PARTYLEDGERNAME>{v.party_name}</PARTYLEDGERNAME>"
+            f"{optional_xml}"
             f"{entries_xml}"
             f"<NARRATION>{v.narration}</NARRATION>"
             "</VOUCHER>"
+            "</TALLYMESSAGE>"
+            "</REQUESTDATA>"
+            "</IMPORTDATA></BODY></ENVELOPE>"
+        )
+
+    def _build_alter_isoptional_xml(
+        self, voucher_guid: str, *, optional: bool
+    ) -> str:
+        """Build an ACTION='Alter' envelope that flips ISOPTIONAL."""
+        flag = "Yes" if optional else "No"
+        return (
+            "<ENVELOPE>"
+            "<HEADER>"
+            "<TALLYREQUEST>Import Data</TALLYREQUEST>"
+            "</HEADER>"
+            "<BODY><IMPORTDATA>"
+            "<REQUESTDESC>"
+            "<REPORTNAME>Vouchers</REPORTNAME>"
+            "</REQUESTDESC>"
+            "<REQUESTDATA>"
+            '<TALLYMESSAGE xmlns:UDF="TallyUDF">'
+            f'<VOUCHER REMOTEID="{voucher_guid}" ACTION="Alter">'
+            f"<ISOPTIONAL>{flag}</ISOPTIONAL>"
+            "</VOUCHER>"
+            "</TALLYMESSAGE>"
+            "</REQUESTDATA>"
+            "</IMPORTDATA></BODY></ENVELOPE>"
+        )
+
+    def _build_delete_voucher_xml(self, voucher_guid: str) -> str:
+        """Build an ACTION='Delete' envelope for a voucher."""
+        return (
+            "<ENVELOPE>"
+            "<HEADER>"
+            "<TALLYREQUEST>Import Data</TALLYREQUEST>"
+            "</HEADER>"
+            "<BODY><IMPORTDATA>"
+            "<REQUESTDESC>"
+            "<REPORTNAME>Vouchers</REPORTNAME>"
+            "</REQUESTDESC>"
+            "<REQUESTDATA>"
+            '<TALLYMESSAGE xmlns:UDF="TallyUDF">'
+            f'<VOUCHER REMOTEID="{voucher_guid}" ACTION="Delete"/>'
             "</TALLYMESSAGE>"
             "</REQUESTDATA>"
             "</IMPORTDATA></BODY></ENVELOPE>"

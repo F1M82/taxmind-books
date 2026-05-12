@@ -181,6 +181,14 @@ class VoucherTypeRuleViolation(ValidationFailed):
     code = "voucher_type_rule_violation"
 
 
+class VoucherNotOptional(Conflict):
+    code = "voucher_not_optional"
+
+
+class VoucherRejected(Conflict):
+    code = "voucher_rejected"
+
+
 class LedgerInUse(Conflict):
     code = "ledger_in_use"
 

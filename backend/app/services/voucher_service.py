@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -11,12 +12,17 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import AuditEmitter
 from app.core.exceptions import (
+    ConnectorOffline as ConnectorOfflineDomain,
+)
+from app.core.exceptions import (
     LedgerNotFound,
     ValidationFailed,
     VoucherAlreadyCancelled,
     VoucherEntriesUnbalanced,
     VoucherImmutableField,
     VoucherNotFound,
+    VoucherNotOptional,
+    VoucherRejected,
     VoucherTypeRuleViolation,
 )
 from app.models.ledger import Ledger
@@ -63,6 +69,22 @@ def _voucher_snapshot(v: Voucher) -> dict[str, Any]:
         "tds_applicable": v.tds_applicable,
         "tds_amount": str(v.tds_amount),
         "tds_section": v.tds_section,
+        "is_optional_in_tally": v.is_optional_in_tally,
+        "approved_to_regular_at": (
+            v.approved_to_regular_at.isoformat()
+            if v.approved_to_regular_at
+            else None
+        ),
+        "approved_to_regular_by": (
+            str(v.approved_to_regular_by) if v.approved_to_regular_by else None
+        ),
+        "optional_rejection_reason": v.optional_rejection_reason,
+        "optional_rejected_at": (
+            v.optional_rejected_at.isoformat() if v.optional_rejected_at else None
+        ),
+        "optional_rejected_by": (
+            str(v.optional_rejected_by) if v.optional_rejected_by else None
+        ),
         "entries": [
             {
                 "ledger_id": str(e.ledger_id),
@@ -306,6 +328,141 @@ class VoucherService:
         new["cancel_reason"] = reason
         self.audit.emit(
             action="voucher.cancelled",
+            entity_type="voucher",
+            entity_id=voucher.id,
+            old_value=old,
+            new_value=new,
+        )
+        return voucher
+
+    # ------------------------------------------------------------------
+    # Approve Optional → Regular  (v1.2, P0.46)
+    # ------------------------------------------------------------------
+
+    async def approve_to_regular(
+        self,
+        voucher_id: UUID,
+        *,
+        actor: User,
+        notes: str | None = None,
+        registry: Any = None,
+        timeout_seconds: int = 30,
+    ) -> Voucher:
+        """Flip an Optional voucher to Regular in Tally and in DB.
+
+        Calls the connector's `approve_optional_voucher` command;
+        only on success do we stamp the local row + audit. Idempotent
+        for already-Regular vouchers (returns without effect).
+        """
+        from app.services.tally.connector_registry import get_registry
+
+        voucher = self.get(voucher_id)
+        if voucher.status == VoucherStatus.cancelled:
+            raise VoucherAlreadyCancelled("Voucher already cancelled.")
+        if voucher.status == VoucherStatus.rejected_optional:
+            raise VoucherRejected("Voucher was already rejected.")
+        # Idempotency: already-Regular is a no-op success.
+        if not voucher.is_optional_in_tally:
+            return voucher
+
+        registry = registry or get_registry()
+        from app.services.tally.connector_registry import (
+            ConnectorOffline as RegistryOffline,
+        )
+
+        try:
+            result = await registry.send_command(
+                company_id=self.company_id,
+                command="approve_optional_voucher",
+                args={"tally_voucher_guid": voucher.tally_voucher_guid},
+                timeout_seconds=timeout_seconds,
+                idempotency_key=f"approve:{voucher.id}",
+            )
+        except RegistryOffline as exc:
+            raise ConnectorOfflineDomain(str(exc)) from exc
+        if result.get("status") != "success":
+            raise VoucherTypeRuleViolation(
+                "Connector rejected approve_optional_voucher.",
+                details={"connector_error": result.get("error")},
+            )
+
+        old = _voucher_snapshot(voucher)
+        voucher.is_optional_in_tally = False
+        voucher.approved_to_regular_at = datetime.now(UTC)
+        voucher.approved_to_regular_by = actor.id
+        voucher.status = VoucherStatus.posted
+        self.db.flush()
+        new = _voucher_snapshot(voucher)
+        if notes:
+            new["notes"] = notes
+        self.audit.emit(
+            action="voucher.approved_to_regular",
+            entity_type="voucher",
+            entity_id=voucher.id,
+            old_value=old,
+            new_value=new,
+        )
+        return voucher
+
+    # ------------------------------------------------------------------
+    # Reject Optional → delete from Tally  (v1.2, P0.46)
+    # ------------------------------------------------------------------
+
+    async def reject_optional(
+        self,
+        voucher_id: UUID,
+        *,
+        actor: User,
+        reason: str,
+        registry: Any = None,
+        timeout_seconds: int = 30,
+    ) -> Voucher:
+        from app.services.tally.connector_registry import get_registry
+
+        voucher = self.get(voucher_id)
+        if voucher.status == VoucherStatus.cancelled:
+            raise VoucherAlreadyCancelled("Voucher already cancelled.")
+        if voucher.status == VoucherStatus.rejected_optional:
+            # Idempotent re-reject: surface a 409 since the API contract
+            # promises voucher_not_optional / voucher_rejected; rejecting
+            # an already-rejected one isn't useful.
+            raise VoucherRejected("Voucher was already rejected.")
+        if not voucher.is_optional_in_tally:
+            raise VoucherNotOptional(
+                "Cannot reject a voucher that is not Optional in Tally; "
+                "use /cancel instead."
+            )
+
+        registry = registry or get_registry()
+        from app.services.tally.connector_registry import (
+            ConnectorOffline as RegistryOffline,
+        )
+
+        try:
+            result = await registry.send_command(
+                company_id=self.company_id,
+                command="reject_optional_voucher",
+                args={"tally_voucher_guid": voucher.tally_voucher_guid},
+                timeout_seconds=timeout_seconds,
+                idempotency_key=f"reject:{voucher.id}",
+            )
+        except RegistryOffline as exc:
+            raise ConnectorOfflineDomain(str(exc)) from exc
+        if result.get("status") != "success":
+            raise VoucherTypeRuleViolation(
+                "Connector rejected reject_optional_voucher.",
+                details={"connector_error": result.get("error")},
+            )
+
+        old = _voucher_snapshot(voucher)
+        voucher.status = VoucherStatus.rejected_optional
+        voucher.optional_rejection_reason = reason
+        voucher.optional_rejected_at = datetime.now(UTC)
+        voucher.optional_rejected_by = actor.id
+        self.db.flush()
+        new = _voucher_snapshot(voucher)
+        self.audit.emit(
+            action="voucher.rejected_optional",
             entity_type="voucher",
             entity_id=voucher.id,
             old_value=old,

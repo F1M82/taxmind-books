@@ -73,6 +73,29 @@ class VoucherCancelRequest(TaxMindBooksBase):
     reason: Annotated[str, StringConstraints(min_length=1, max_length=500)]
 
 
+class VoucherApproveToRegularRequest(TaxMindBooksBase):
+    notes: Annotated[str, StringConstraints(max_length=500)] | None = None
+
+
+class VoucherApproveToRegularOut(TaxMindBooksBase):
+    id: UUID
+    is_optional_in_tally: bool
+    approved_to_regular_at: datetime | None
+    approved_to_regular_by: UUID | None
+    status: str
+
+
+class VoucherRejectOptionalRequest(TaxMindBooksBase):
+    reason: Annotated[str, StringConstraints(min_length=1, max_length=500)]
+
+
+class VoucherRejectOptionalOut(TaxMindBooksBase):
+    id: UUID
+    status: str
+    optional_rejection_reason: str | None
+    optional_rejected_at: datetime | None
+
+
 class VoucherListItem(TaxMindBooksBase):
     id: UUID
     voucher_type: str

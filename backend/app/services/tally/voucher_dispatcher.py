@@ -140,6 +140,7 @@ async def dispatch_voucher_to_tally(
         "voucher_number": voucher.voucher_number or "",
         "party_name": party_name,
         "narration": voucher.narration or "",
+        "as_optional": bool(voucher.is_optional_in_tally),
         "entries": [
             {
                 "ledger_name": ledger_names.get(e.ledger_id, ""),
@@ -216,14 +217,20 @@ async def dispatch_voucher_to_tally(
         result.get("result", {}).get("tally_voucher_guid")
     )
     voucher.tally_last_error = None
+    posted_as_optional = bool(voucher.is_optional_in_tally)
     audit.emit(
-        action="voucher.posted_to_tally",
+        action=(
+            "voucher.posted_as_optional"
+            if posted_as_optional
+            else "voucher.posted_to_tally"
+        ),
         entity_type="voucher",
         entity_id=voucher.id,
         old_value=None,
         new_value={
             "tally_voucher_guid": voucher.tally_voucher_guid,
             "duration_ms": result.get("duration_ms"),
+            "as_optional": posted_as_optional,
         },
         actor_user_id=user_id,
         company_id_override=company_id,

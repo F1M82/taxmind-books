@@ -371,3 +371,108 @@ async def test_post_voucher_builds_n_line_envelope(
     assert "<ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>" in body
     assert "<AMOUNT>50000.00</AMOUNT>" in body
     assert "<AMOUNT>-50000.00</AMOUNT>" in body
+    # Default (as_optional=False) emits no ISOPTIONAL tag.
+    assert "<ISOPTIONAL>" not in body
+
+
+# ---------------- Optional voucher flow (v1.2) ----------------
+
+
+def _minimal_voucher(*, as_optional: bool = False) -> VoucherInput:
+    return VoucherInput(
+        voucher_type="Sales",
+        voucher_date=date(2026, 5, 8),
+        voucher_number="S-1",
+        party_name="Acme Co",
+        narration="AI extracted",
+        entries=[
+            LedgerEntryInput(
+                ledger_name="Acme Co",
+                amount=Decimal("10000.00"),
+                entry_type="Dr",
+            ),
+            LedgerEntryInput(
+                ledger_name="Sales",
+                amount=Decimal("10000.00"),
+                entry_type="Cr",
+            ),
+        ],
+        as_optional=as_optional,
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_voucher_as_optional_emits_isoptional_yes(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    captured: dict[str, str] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(200, text="<RESPONSE>OK</RESPONSE>")
+
+    httpx_mock.add_callback(_capture, url="http://localhost:9000")
+    result = await client.post_voucher(_minimal_voucher(as_optional=True))
+    assert result["status"] == "success"
+    assert result["as_optional"] is True
+    assert "<ISOPTIONAL>Yes</ISOPTIONAL>" in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_post_voucher_regular_omits_isoptional(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    captured: dict[str, str] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(200, text="<RESPONSE>OK</RESPONSE>")
+
+    httpx_mock.add_callback(_capture, url="http://localhost:9000")
+    result = await client.post_voucher(_minimal_voucher(as_optional=False))
+    assert result["as_optional"] is False
+    assert "<ISOPTIONAL>" not in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_approve_optional_voucher_alters_isoptional_to_no(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    captured: dict[str, str] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(200, text="<RESPONSE>OK</RESPONSE>")
+
+    httpx_mock.add_callback(_capture, url="http://localhost:9000")
+    result = await client.approve_optional_voucher("V-GUID-123")
+    assert result["status"] == "success"
+    assert result["tally_voucher_guid"] == "V-GUID-123"
+
+    body = captured["body"]
+    assert "<TALLYREQUEST>Import Data</TALLYREQUEST>" in body
+    assert 'REMOTEID="V-GUID-123"' in body
+    assert 'ACTION="Alter"' in body
+    assert "<ISOPTIONAL>No</ISOPTIONAL>" in body
+
+
+@pytest.mark.asyncio
+async def test_reject_optional_voucher_deletes_via_remoteid(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    captured: dict[str, str] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(200, text="<RESPONSE>OK</RESPONSE>")
+
+    httpx_mock.add_callback(_capture, url="http://localhost:9000")
+    result = await client.reject_optional_voucher("V-GUID-456")
+    assert result["status"] == "success"
+    assert result["tally_voucher_guid"] == "V-GUID-456"
+
+    body = captured["body"]
+    assert 'REMOTEID="V-GUID-456"' in body
+    assert 'ACTION="Delete"' in body
+    # Delete envelope must NOT carry any voucher payload.
+    assert "<ALLLEDGERENTRIES.LIST>" not in body

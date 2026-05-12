@@ -237,3 +237,75 @@ def test_voucher_from_args_decimal_amounts() -> None:
     assert v.voucher_date == date(2026, 5, 8)
     assert v.entries[0].amount == Decimal("1500.00")
     assert isinstance(v.entries[0].amount, Decimal)
+    assert v.as_optional is False
+
+
+def test_voucher_from_args_threads_as_optional_through() -> None:
+    v = _voucher_from_args(
+        {
+            "voucher_type": "Sales",
+            "date": "2026-05-08",
+            "voucher_number": "S-1",
+            "party_name": "Acme",
+            "narration": "AI",
+            "as_optional": True,
+            "entries": [
+                {"ledger_name": "Acme", "amount": "100", "entry_type": "Dr"},
+                {"ledger_name": "Sales", "amount": "100", "entry_type": "Cr"},
+            ],
+        }
+    )
+    assert v.as_optional is True
+
+
+# ---------------- Optional voucher commands (v1.2) ----------------
+
+
+@pytest.mark.asyncio
+async def test_approve_optional_voucher_dispatches_to_tally(
+    fake_tally: TallyClient,
+) -> None:
+    fake_tally.approve_optional_voucher = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "status": "success",
+            "tally_voucher_guid": "GUID-1",
+            "raw": "<OK/>",
+        }
+    )
+    result = await dispatch_command(
+        tally=fake_tally,
+        payload={
+            "command": "approve_optional_voucher",
+            "company_id": "C",
+            "args": {"tally_voucher_guid": "GUID-1"},
+        },
+        registered_company_id="C",
+    )
+    assert result["status"] == "success"
+    assert result["result"]["tally_voucher_guid"] == "GUID-1"
+    fake_tally.approve_optional_voucher.assert_awaited_once_with("GUID-1")
+
+
+@pytest.mark.asyncio
+async def test_reject_optional_voucher_dispatches_to_tally(
+    fake_tally: TallyClient,
+) -> None:
+    fake_tally.reject_optional_voucher = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "status": "success",
+            "tally_voucher_guid": "GUID-2",
+            "raw": "<OK/>",
+        }
+    )
+    result = await dispatch_command(
+        tally=fake_tally,
+        payload={
+            "command": "reject_optional_voucher",
+            "company_id": "C",
+            "args": {"tally_voucher_guid": "GUID-2"},
+        },
+        registered_company_id="C",
+    )
+    assert result["status"] == "success"
+    assert result["result"]["tally_voucher_guid"] == "GUID-2"
+    fake_tally.reject_optional_voucher.assert_awaited_once_with("GUID-2")

@@ -1,13 +1,11 @@
 """Dispatch backend `command` messages to the local TallyClient.
 
 Each backend command (`ping`, `sync_masters`, `post_voucher`,
-`get_trial_balance`, `get_outstanding`) maps to one handler that
-reads the `payload.args`, calls the appropriate `TallyClient`
-method, and returns a `result` dict for inclusion in the
-`command_result` reply envelope.
-
-Phase-0 v1.2 Optional voucher commands (`approve_optional_voucher`,
-`reject_optional_voucher`) are added in P0.46.
+`get_trial_balance`, `get_outstanding`, `approve_optional_voucher`,
+`reject_optional_voucher`) maps to one handler that reads
+`payload.args`, calls the appropriate `TallyClient` method, and
+returns a `result` dict for inclusion in the `command_result`
+reply envelope.
 """
 
 from __future__ import annotations
@@ -113,12 +111,36 @@ async def _handle_get_outstanding(
     }
 
 
+async def _handle_approve_optional_voucher(
+    tally: TallyClient, args: dict[str, Any]
+) -> dict[str, Any]:
+    guid = args.get("tally_voucher_guid")
+    if not isinstance(guid, str) or not guid:
+        raise ValueError(
+            "approve_optional_voucher.args.tally_voucher_guid is required"
+        )
+    return await tally.approve_optional_voucher(guid)
+
+
+async def _handle_reject_optional_voucher(
+    tally: TallyClient, args: dict[str, Any]
+) -> dict[str, Any]:
+    guid = args.get("tally_voucher_guid")
+    if not isinstance(guid, str) or not guid:
+        raise ValueError(
+            "reject_optional_voucher.args.tally_voucher_guid is required"
+        )
+    return await tally.reject_optional_voucher(guid)
+
+
 HANDLERS: dict[str, HandlerFn] = {
     "ping": _handle_ping,
     "sync_masters": _handle_sync_masters,
     "post_voucher": _handle_post_voucher,
     "get_trial_balance": _handle_get_trial_balance,
     "get_outstanding": _handle_get_outstanding,
+    "approve_optional_voucher": _handle_approve_optional_voucher,
+    "reject_optional_voucher": _handle_reject_optional_voucher,
 }
 
 
@@ -245,4 +267,5 @@ def _voucher_from_args(args: dict[str, Any]) -> VoucherInput:
         party_name=str(args.get("party_name", "")),
         narration=str(args.get("narration", "")),
         entries=entries,
+        as_optional=bool(args.get("as_optional", False)),
     )

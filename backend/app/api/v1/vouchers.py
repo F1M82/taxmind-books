@@ -20,12 +20,16 @@ from app.core.idempotency import IdempotencyHandler
 from app.models.company import Company
 from app.models.user import User
 from app.schemas.voucher import (
+    VoucherApproveToRegularOut,
+    VoucherApproveToRegularRequest,
     VoucherCancelRequest,
     VoucherCreate,
     VoucherEntryOut,
     VoucherListItem,
     VoucherListResponse,
     VoucherOut,
+    VoucherRejectOptionalOut,
+    VoucherRejectOptionalRequest,
     VoucherUpdate,
 )
 from app.services.voucher_service import VoucherService
@@ -59,6 +63,12 @@ def _to_out(v) -> VoucherOut:  # type: ignore[no-untyped-def]
         tds_amount=v.tds_amount,
         tds_section=v.tds_section,
         tally_posted_at=v.tally_posted_at,
+        is_optional_in_tally=v.is_optional_in_tally,
+        approved_to_regular_at=v.approved_to_regular_at,
+        approved_to_regular_by=v.approved_to_regular_by,
+        optional_rejection_reason=v.optional_rejection_reason,
+        optional_rejected_at=v.optional_rejected_at,
+        optional_rejected_by=v.optional_rejected_by,
         created_by=v.created_by,
         created_at=v.created_at,
         entries=[
@@ -177,6 +187,8 @@ def list_vouchers(
                 else str(v.status),
                 source=v.source,
                 gst_applicable=v.gst_applicable,
+                is_optional_in_tally=v.is_optional_in_tally,
+                approved_to_regular_at=v.approved_to_regular_at,
                 tally_posted_at=v.tally_posted_at,
                 created_at=v.created_at,
             )
@@ -249,3 +261,81 @@ def cancel_voucher(
     db.commit()
     db.refresh(voucher)
     return _to_out(voucher)
+
+
+# ---------------------------------------------------------------------
+# Approve Optional → Regular  (v1.2, P0.46)
+# ---------------------------------------------------------------------
+
+
+@router.post(
+    "/{voucher_id}/approve-to-regular",
+    response_model=VoucherApproveToRegularOut,
+)
+async def approve_voucher_to_regular(
+    voucher_id: UUID,
+    data: VoucherApproveToRegularRequest,
+    request: Request,
+    company: Company = Depends(get_active_company),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_scoped_session),
+    idem: IdempotencyHandler = Depends(get_idempotency_handler),
+) -> Response | VoucherApproveToRegularOut:
+    replay = await idem.check(required=True)
+    if replay is not None:
+        return replay
+
+    audit = _user_audit_emitter(request, db, user, company=company)
+    service = VoucherService(db, audit, company_id=company.id)
+    voucher = await service.approve_to_regular(
+        voucher_id, actor=user, notes=data.notes
+    )
+    db.commit()
+    db.refresh(voucher)
+
+    out = VoucherApproveToRegularOut(
+        id=voucher.id,
+        is_optional_in_tally=voucher.is_optional_in_tally,
+        approved_to_regular_at=voucher.approved_to_regular_at,
+        approved_to_regular_by=voucher.approved_to_regular_by,
+        status=voucher.status.value
+        if hasattr(voucher.status, "value")
+        else str(voucher.status),
+    )
+    idem.store_response(status_code=200, body=out.model_dump(mode="json"))
+    db.commit()
+    return out
+
+
+# ---------------------------------------------------------------------
+# Reject Optional voucher  (v1.2, P0.46)
+# ---------------------------------------------------------------------
+
+
+@router.post(
+    "/{voucher_id}/reject-optional",
+    response_model=VoucherRejectOptionalOut,
+)
+async def reject_voucher_optional(
+    voucher_id: UUID,
+    data: VoucherRejectOptionalRequest,
+    request: Request,
+    company: Company = Depends(get_active_company),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_scoped_session),
+) -> VoucherRejectOptionalOut:
+    audit = _user_audit_emitter(request, db, user, company=company)
+    service = VoucherService(db, audit, company_id=company.id)
+    voucher = await service.reject_optional(
+        voucher_id, actor=user, reason=data.reason
+    )
+    db.commit()
+    db.refresh(voucher)
+    return VoucherRejectOptionalOut(
+        id=voucher.id,
+        status=voucher.status.value
+        if hasattr(voucher.status, "value")
+        else str(voucher.status),
+        optional_rejection_reason=voucher.optional_rejection_reason,
+        optional_rejected_at=voucher.optional_rejected_at,
+    )

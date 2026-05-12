@@ -47,6 +47,10 @@ endpoints:
     methods: [GET, PATCH]
   - path: /api/v1/vouchers/{voucher_id}/cancel
     methods: [POST]
+  - path: /api/v1/vouchers/{voucher_id}/approve-to-regular
+    methods: [POST]
+  - path: /api/v1/vouchers/{voucher_id}/reject-optional
+    methods: [POST]
 
   # ---- Audit log read ----
   - path: /api/v1/audit-logs/

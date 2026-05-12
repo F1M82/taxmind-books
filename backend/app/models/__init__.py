@@ -7,6 +7,10 @@ list below as they land.
 
 from __future__ import annotations
 
+from app.models.account_deletion_request import (
+    AccountDeletionRequest,
+    AccountDeletionStatus,
+)
 from app.models.audit_log import AuditLog
 from app.models.base import Base, TenantScopedMixin
 from app.models.company import Company, UserCompany
@@ -24,6 +28,8 @@ from app.models.voucher import (
 )
 
 __all__ = [
+    "AccountDeletionRequest",
+    "AccountDeletionStatus",
     "AuditLog",
     "BalanceType",
     "Base",

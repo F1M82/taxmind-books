@@ -47,6 +47,9 @@ def migrated_db(db_or_skip: str) -> str:
     """Drop everything, run all migrations to head."""
     engine = create_engine(db_or_skip)
     with engine.begin() as conn:
+        conn.execute(
+            text("DROP TABLE IF EXISTS account_deletion_requests CASCADE")
+        )
         conn.execute(text("DROP TABLE IF EXISTS device_tokens CASCADE"))
         conn.execute(
             text("DROP TABLE IF EXISTS connector_enrollment_codes CASCADE")
@@ -60,6 +63,9 @@ def migrated_db(db_or_skip: str) -> str:
         conn.execute(text("DROP TABLE IF EXISTS companies CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+        conn.execute(
+            text("DROP TYPE IF EXISTS account_deletion_status CASCADE")
+        )
         conn.execute(text("DROP TYPE IF EXISTS device_platform CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS entry_type CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS voucher_status CASCADE"))

@@ -63,6 +63,9 @@ def migrated_engine() -> Generator[str, None, None]:
     # tests/integration/test_alembic_roundtrip.py for the same rule.
     e = create_engine(url)
     with e.begin() as conn:
+        conn.execute(
+            text("DROP TABLE IF EXISTS account_deletion_requests CASCADE")
+        )
         conn.execute(text("DROP TABLE IF EXISTS device_tokens CASCADE"))
         conn.execute(
             text("DROP TABLE IF EXISTS connector_enrollment_codes CASCADE")
@@ -76,6 +79,9 @@ def migrated_engine() -> Generator[str, None, None]:
         conn.execute(text("DROP TABLE IF EXISTS companies CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+        conn.execute(
+            text("DROP TYPE IF EXISTS account_deletion_status CASCADE")
+        )
         conn.execute(text("DROP TYPE IF EXISTS device_platform CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS entry_type CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS voucher_status CASCADE"))
@@ -133,7 +139,8 @@ def _reset_tenancy_tables(migrated_engine: str) -> Generator[None, None, None]:
     with e.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE TABLE device_tokens, "
+                "TRUNCATE TABLE account_deletion_requests, "
+                "device_tokens, "
                 "connector_enrollment_codes, "
                 "idempotency_keys, audit_logs, ledger_entries, "
                 "vouchers, ledgers, user_companies, companies, users "

@@ -22,7 +22,10 @@ def _build_app() -> Celery:
         "taxmind_books",
         broker=cfg.REDIS_URL,
         backend=cfg.REDIS_URL,
-        include=["app.workers.posting_tasks"],
+        include=[
+            "app.workers.posting_tasks",
+            "app.workers.lifecycle_tasks",
+        ],
     )
     app.conf.update(
         task_serializer="json",

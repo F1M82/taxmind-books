@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    account,
     audit_logs,
     auth,
     companies,
@@ -31,6 +32,7 @@ api_v1.include_router(reports.router)
 api_v1.include_router(dashboard.router)
 api_v1.include_router(onboarding.router)
 api_v1.include_router(devices.router)
+api_v1.include_router(account.router)
 api_v1.include_router(audit_logs.router)
 api_v1.include_router(connector.router)
 api_v1.include_router(connector_ws.router)

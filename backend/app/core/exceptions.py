@@ -203,3 +203,7 @@ class AlreadyMember(Conflict):
 
 class ConnectorOffline(Unavailable):
     code = "connector_offline"
+
+
+class OwnershipTransferRequired(Conflict):
+    code = "ownership_transfer_required"

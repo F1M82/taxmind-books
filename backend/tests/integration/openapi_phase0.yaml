@@ -76,6 +76,10 @@ endpoints:
   - path: /api/v1/devices/{device_id}
     methods: [DELETE]
 
+  # ---- Account lifecycle (DPDP) ----
+  - path: /api/v1/account/deletion-request
+    methods: [POST, DELETE]
+
   # ---- Audit log read ----
   - path: /api/v1/audit-logs/
     methods: [GET]

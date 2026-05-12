@@ -61,6 +61,9 @@ def clean_db(db_or_skip: str) -> str:
         # `type "X" already exists` after a partial-run regression.
         # The same hazard is documented in docs/SCHEMA.sql for
         # voucher_status; the rule applies to every enum.
+        conn.execute(
+            text("DROP TABLE IF EXISTS account_deletion_requests CASCADE")
+        )
         conn.execute(text("DROP TABLE IF EXISTS device_tokens CASCADE"))
         conn.execute(
             text("DROP TABLE IF EXISTS connector_enrollment_codes CASCADE")
@@ -74,6 +77,9 @@ def clean_db(db_or_skip: str) -> str:
         conn.execute(text("DROP TABLE IF EXISTS companies CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+        conn.execute(
+            text("DROP TYPE IF EXISTS account_deletion_status CASCADE")
+        )
         conn.execute(text("DROP TYPE IF EXISTS device_platform CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS entry_type CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS voucher_status CASCADE"))

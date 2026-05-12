@@ -38,10 +38,15 @@ from app.models.voucher import (
     VoucherType,
 )
 from app.services.reporting.outstanding import compute_outstanding
-from app.services.tally.connector_registry import (
-    ConnectorRegistry,
-    get_registry,
-)
+
+# Import the module, not the symbols, so test fixtures that
+# `monkeypatch.setattr(connector_registry, "get_registry", ...)` see
+# our late lookup. Direct `from ... import get_registry` would bind
+# the name at module load and the patch would miss us. See
+# CONNECTOR_PROTOCOL.md §"Patchable singletons" for the convention.
+from app.services.tally import connector_registry as _connector_registry_mod
+
+ConnectorRegistry = _connector_registry_mod.ConnectorRegistry
 
 # Thresholds for alert generation. Tunable; not user-facing.
 _CONNECTOR_STALE_SECONDS = 60
@@ -129,7 +134,9 @@ def build_dashboard(  # audit-exempt: read-only aggregation
     month_start = today_local.replace(day=1)
 
     connector = _connector_snapshot(
-        registry or get_registry(), company.id, now=now
+        registry or _connector_registry_mod.get_registry(),
+        company.id,
+        now=now,
     )
 
     today_metrics = _metrics_for_range(

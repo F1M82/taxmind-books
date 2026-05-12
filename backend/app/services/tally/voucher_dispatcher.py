@@ -25,11 +25,16 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import AuditContext, AuditEmitter
 from app.models.voucher import LedgerEntry, Voucher
+# Module import for late `get_registry` lookup; the exception classes
+# and the ConnectorRegistry type annotation are imported directly
+# because tests rely on class identity (for `except`) and types
+# aren't monkey-patched. See CONNECTOR_PROTOCOL.md §"Patchable
+# singletons" for the rule.
+from app.services.tally import connector_registry as _connector_registry_mod
 from app.services.tally.connector_registry import (
     CommandTimeout,
     ConnectorOffline,
     ConnectorRegistry,
-    get_registry,
 )
 
 logger = logging.getLogger("app.services.tally.voucher_dispatcher")
@@ -90,7 +95,7 @@ async def dispatch_voucher_to_tally(
     Returns the connector's command_result payload on success. The
     DB row is updated in-place and committed by the caller.
     """
-    registry = registry or get_registry()
+    registry = registry or _connector_registry_mod.get_registry()
 
     voucher = (
         db.query(Voucher)

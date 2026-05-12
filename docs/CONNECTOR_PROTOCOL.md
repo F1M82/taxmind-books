@@ -725,6 +725,50 @@ If the connector has never connected, the status returns `connected: false` and 
 - **Connector executing commands without verifying `company_id`.** Defense in depth.
 - **Re-using `request_id` across reconnects.** Each WS lifetime starts fresh.
 
+## Patchable singletons
+
+The connector subsystem leans on a few process-wide singletons —
+`connector_registry.get_registry()`, the voucher dispatcher, and
+(future) external clients like the FCM/APNs senders. Tests routinely
+monkeypatch these to inject fakes and assert behaviour without a real
+WebSocket or HTTP round-trip.
+
+For the patches to actually take effect, the consuming module must
+look the symbol up **lazily**, via the parent module, every call:
+
+```python
+# DO — the patch on connector_registry.get_registry is observed
+from app.services.tally import connector_registry as _connector_registry_mod
+...
+registry = _connector_registry_mod.get_registry()
+
+# DON'T — the patch is invisible to this module after import
+from app.services.tally.connector_registry import get_registry
+...
+registry = get_registry()
+```
+
+The second form binds `get_registry` to the importing module's
+namespace at import time; a later `monkeypatch.setattr(
+connector_registry, "get_registry", fake)` only updates the original
+module's attribute, not the bound name. Tests that look correct then
+silently exercise the real singleton.
+
+**The rule:** anything that's monkey-patched in tests — registry,
+dispatcher, external client factories, time / clock providers —
+imports the module, not the symbol. Exception classes and pure type
+aliases are exempt because tests rely on class identity for `except`
+and types aren't patched.
+
+Audited sites that follow the rule today:
+`app/services/dashboard_service.py`,
+`app/api/v1/connector.py`,
+`app/api/v1/connector_ws.py`,
+`app/services/tally/voucher_dispatcher.py`,
+`app/workers/posting_tasks.py`,
+`app/services/voucher_service.py` (already used function-local
+imports for the same reason).
+
 ## Test cases the human runs during validation
 
 Validation report includes:

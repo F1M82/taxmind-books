@@ -7,11 +7,15 @@ import logging
 from uuid import UUID
 
 from app.core.database import SessionLocal
+# Late lookup for the dispatcher: a test that mocks
+# voucher_dispatcher.dispatch_voucher_to_tally expects the worker to
+# pick up the patch. Exception classes are class identity — direct
+# import is fine. See CONNECTOR_PROTOCOL.md §"Patchable singletons".
+from app.services.tally import voucher_dispatcher as _voucher_dispatcher_mod
 from app.services.tally.connector_registry import (
     CommandTimeout,
     ConnectorOffline,
 )
-from app.services.tally.voucher_dispatcher import dispatch_voucher_to_tally
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger("app.workers.posting_tasks")
@@ -37,7 +41,7 @@ def post_voucher_to_tally(  # type: ignore[no-untyped-def]
     db = SessionLocal()
     try:
         asyncio.run(
-            dispatch_voucher_to_tally(
+            _voucher_dispatcher_mod.dispatch_voucher_to_tally(
                 db=db,
                 voucher_id=UUID(voucher_id),
                 company_id=UUID(company_id),

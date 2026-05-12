@@ -36,9 +36,12 @@ from app.services.connector_service import (
     _CodeExpired,
     _CodeNotFound,
 )
-from app.services.tally.connector_registry import (
-    get_registry,
-)
+# Module import (not `from ... import get_registry`) keeps the lookup
+# late so tests that monkeypatch connector_registry.get_registry see
+# the patch. Convention applies to every patchable callable —
+# registry, dispatcher, external clients. See CONNECTOR_PROTOCOL.md
+# §"Patchable singletons".
+from app.services.tally import connector_registry as _connector_registry_mod
 
 logger = logging.getLogger("app.api.v1.connector")
 
@@ -110,7 +113,7 @@ def connector_status(
     company: Company = Depends(get_active_company),
     user: User = Depends(get_current_user),
 ) -> ConnectorStatusOut:
-    snap = get_registry().status_for(company.id)
+    snap = _connector_registry_mod.get_registry().status_for(company.id)
     if snap is None:
         return ConnectorStatusOut(
             company_id=company.id, connected=False
@@ -154,7 +157,7 @@ async def trigger_sync(
     if replay is not None:
         return replay
 
-    registry = get_registry()
+    registry = _connector_registry_mod.get_registry()
     if not registry.is_online(company.id):
         raise ConnectorOfflineHTTP("Connector is not connected.")
 

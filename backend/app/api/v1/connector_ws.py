@@ -28,10 +28,8 @@ from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
 from app.core.security import TokenExpired, TokenInvalid, decode_connector_token
-from app.services.tally.connector_registry import (
-    ConnectorConnection,
-    get_registry,
-)
+from app.services.tally import connector_registry as _connector_registry_mod
+from app.services.tally.connector_registry import ConnectorConnection
 
 logger = logging.getLogger("app.api.v1.connector_ws")
 
@@ -100,7 +98,7 @@ async def connector_ws(ws: WebSocket) -> None:
         connector_id=connector_id,
         ws=ws,
     )
-    registry = get_registry()
+    registry = _connector_registry_mod.get_registry()
     await registry.register(conn)
 
     try:

@@ -1,0 +1,119 @@
+# Phase 0 Closeout
+
+Phase 0 is complete. All 46 numbered tasks from `PHASE_0_TASKS.md` shipped on `main`. This document records the as-built state.
+
+- Closing date: 2026-05-12
+- Branch: `main` @ `fd8f2aa`
+- Commits in Phase 0: 54 (46 numbered + 8 cross-cutting)
+- Code added: 52,031 insertions / 123 deletions across 254 files
+
+## Task ledger
+
+All 46 tasks, in numeric order, with the commit that landed each.
+
+| Task | Commit | Summary |
+|---|---|---|
+| P0.01 | `b2ab14b` | Repository bootstrap |
+| P0.02 | `083bfb4` | Backend skeleton + config + database |
+| P0.03 | `db29203` | Alembic migrations setup |
+| P0.04 | `0a95d5c` | Money handling primitives |
+| P0.05 | `96c96c1` | Initial users, companies, user_companies models + migration |
+| P0.06 | `505c895` | Ledger model + 0002 migration |
+| P0.07 | `8b66064` | Voucher + LedgerEntry models + 0003 migration |
+| P0.08 | `acc80e0` | AuditLog + idempotency_keys models + 0004 migration |
+| P0.09 | `b7a2f64` | Password hashing + JWT primitives |
+| P0.10 | `7dbd3ac` | Tenancy dependencies (auth + scoping foundation) |
+| P0.11 | `007f235` | Audit emitter + missing-emit lint |
+| P0.12 | `c939ecb` | Idempotency handler |
+| P0.13 | `7ebc40d` | Error handling middleware (standard envelope) |
+| P0.14 | `cce827f` | Auth: `POST /api/v1/auth/register` |
+| P0.15 | `0c63e93` | Auth: login + refresh + me + password |
+| P0.16 | `47cf15e` | Companies CRUD + members + first tenant_isolation tier |
+| P0.17 | `639614d` | Ledgers CRUD + fuzzy search |
+| P0.18 | `2afeff8` | Vouchers: `POST /api/v1/vouchers/` |
+| P0.19 | `7ee8bc0` | Vouchers: read, list, update, cancel |
+| P0.20 | `e263b5b` | Audit logs: `GET /api/v1/audit-logs/` |
+| P0.21 | `694b10e` | Connector: salvage `tally_client.py` |
+| P0.22 | `8a45aa8` | Connector WS client |
+| P0.23 | `682f029` | Connector enrollment endpoint + token issuance + v1.2 Patch 2 |
+| P0.24 | `3559e83` | Connector WS endpoint + `ConnectorRegistry` |
+| P0.25 | `92a5fc4` | Connector status endpoint |
+| P0.26 | `f661074` | Voucher dispatcher + Celery scaffolding |
+| P0.27 | `510515e` | Connector sync trigger endpoint |
+| P0.28 | `cd92608` | Connector PyInstaller build + connector-build CI |
+| P0.29 | `130c5ea` | Mobile: Expo bootstrap + auth screens |
+| P0.30 | `0fa0c37` | Mobile: company switcher + connector status card |
+| P0.31 | `717942a` | Mobile: ledger list + manual voucher entry |
+| P0.32 | `237fbdc` | CI: full pipeline per `TESTING.md` |
+| P0.33 | `ba3f43f` | Lint: import-boundary check (`check_imports.py`) |
+| P0.34 | `7ca4e6f` | OpenAPI contract test |
+| P0.35 | `107de51` | README rewrite + `docs/SETUP.md` |
+| P0.36 | `00ba126` | Manual voucher entry: all 8 voucher types |
+| P0.37 | `a72e83c` | Voucher Optional/Regular fields and rejection state |
+| P0.38 | `ce272cb` | Reports endpoints (trial balance, P&L, balance sheet, outstanding) |
+| P0.39 | `8ca3a4e` | Mobile reports screens |
+| P0.40 | `49b5f9a` | Dashboard endpoint: `GET /dashboard/home` |
+| P0.41 | `55529a0` | Mobile home dashboard screen (v1.2) |
+| P0.42 | `0df7aac` | Onboarding checklist endpoint |
+| P0.43 | `1f79829` | Mobile onboarding checklist screen + dashboard tile |
+| P0.44 | `e73aeb1` | Push notification: device registration + dispatch infra |
+| P0.45 | `35c4a94` | Account deletion request (DPDP Phase 0) |
+| P0.46 | `1a768f8` | Connector Optional voucher flow: post-as-optional, approve, reject |
+
+## Architectural patches
+
+Three deltas to the v1.2 architecture were applied during Phase 0. Each is documented in-tree; this section just names them.
+
+- **v1.2 Patch 1 — `audit_logs.company_id` made `NULL`-able** (`af61df2`). System events (`user.created`, `user.password_changed`, `user.deactivated`, device and account-lifecycle events) have no tenant scope, so the `NOT NULL` constraint was lifted and a partial index `(company_id, created_at DESC) WHERE company_id IS NOT NULL` replaced the previous full index. See `AMENDMENTS_v1.2.md` §"Patch 1" and the dependency note in `app/models/audit_log.py`.
+- **v1.2 Patch 2 — Connector enrollment code storage** (folded into P0.23, `682f029`). `CONNECTOR_PROTOCOL.md` specified the enrollment ceremony but didn't model the storage. `connector_enrollment_codes` (SHA-256 hash of the code, 15-minute expiry, per-company scope) was added so the issued connector token is bound to one company. See `AMENDMENTS_v1.2.md` §"Patch 2".
+- **Audit-FK / append-only trigger conflict** (`fd8f2aa`, docs-only). `audit_logs.user_id` is `ON DELETE SET NULL`, but the Layer-2 trigger refuses the resulting UPDATE — so a user with any audit history can never be hard-deleted. `AUDIT.md` now flags this directly. P0.45's deletion flow accommodates it by anonymising the user row rather than DELETE'ing.
+
+## Test totals
+
+| Tier | Tests | Suite command |
+|---|---|---|
+| Backend (`backend/tests`) | 519 passed | `pytest tests/integration/ tests/unit/` |
+| Connector (`connector/tests`) | 47 passed | `pytest` |
+| Mobile (`mobile`) | 35 passed (10 suites) | `npm test` |
+
+Totals are full-suite green at `fd8f2aa`. Tenant-isolation tests (`backend/tests/tenant_isolation/`) are part of the backend total but live in their own marker.
+
+## Code volume
+
+| Path | Files | Insertions |
+|---|---|---|
+| `backend/` | 168 | 24,449 |
+| `connector/` | 18 | 2,716 |
+| `mobile/` | 51 | 23,056 |
+| `tools/` | 5 | 973 |
+| `docs/` | 5 | 446 (–6) |
+
+Aggregate: 254 files, 52,031 insertions, 123 deletions, **9 alembic migrations** (0001 → 0009).
+
+## Known issues
+
+- **`audit_logs.user_id` cascade is dead.** Documented above. Effect on Phase 0: `account_lifecycle_service.process_due_deletion` anonymises rather than hard-deletes. Effect on Phase 1+: any future code that calls `DELETE FROM users` will hit `audit_logs is append-only` and roll back; the only safe paths are tightening the trigger via `pg_trigger_depth()` or toggling `session_replication_role = 'replica'`. Either deserves an `AMENDMENTS_v1.2.md` patch first.
+- **Migration numbering diverges from `PHASE_0_TASKS.md`.** Doc spec referenced `0011_device_tokens` and `0012_account_deletion_requests`; the actual migrations are sequential (`0008`, `0009`). The doc was the stale side. Not a runtime issue.
+- **Test-suite ordering sensitivity, worker tier.** A full `pytest tests/` run with discovery across `tenant_isolation/` plus `workers/` can show transient `test_posting_task` failures driven by shared registry state. `pytest tests/integration/ tests/unit/` is green; the isolated subset and rerun are green. The class of failure is in cross-suite global state, not in any tested behaviour.
+
+## Deferred to Phase 1
+
+Items deliberately stubbed in Phase 0; each has a named stub the Phase 1 worker can replace without rewiring callers.
+
+- **Real FCM / APNs clients.** `app/integrations/fcm_client.py` and `apns_client.py` are no-op shims that log intent and return `delivered=True`. The dispatch graph (`notification_service.send_to_user`) is wired against them; Phase 1 swaps in HTTP/2 calls + provider creds without touching service or API code.
+- **Real email infrastructure.** `account_lifecycle_service._send_account_email` is a log-only stub called on deletion request / cancellation / completion. Phase 1 plugs the real provider (SES / Postmark) when one is chosen.
+- **Data-export-on-delete.** `account_deletion_requests.final_export_s3_key` is declared in the schema and left `NULL` in Phase 0. Phase 1's `POST /api/v1/account/data-export` flow will populate it before the grace period ends.
+- **`first_invoice_extracted` checklist item.** The onboarding checklist (P0.42) exposes the item with `completed=False` always; the underlying `ingestions` table is a Phase-1+ artefact.
+
+## Follow-ups
+
+Small items that didn't justify their own task but should land before they accumulate.
+
+- Reconcile `SCHEMA.sql` with the actual `ON DELETE` clauses in the migrations (the schema doc omits the cascade behaviour on `audit_logs.user_id` that migration 0004 added).
+- Decide the long-term answer for `audit_logs.user_id` cascade vs the append-only trigger; pick one of the two paths in `AUDIT.md` §"Interaction with `audit_logs.user_id ON DELETE SET NULL`".
+- Wire a real Celery beat schedule for `app.workers.process_due_account_deletions` (daily); the task ships in Phase 0 but production scheduling is deploy-side and not yet expressed in code.
+- The full mobile test surface is 35; tenant-isolation and accessibility passes are sparse. Phase 1 can add depth without restructuring.
+
+---
+
+End of Phase 0.

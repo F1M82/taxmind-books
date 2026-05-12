@@ -13,6 +13,10 @@ import CompanyCreateScreen from "../screens/companies/CompanyCreateScreen";
 import CompanyListScreen from "../screens/companies/CompanyListScreen";
 import DashboardScreen from "../screens/dashboard/DashboardScreen";
 import LedgerListScreen from "../screens/ledgers/LedgerListScreen";
+import BalanceSheetScreen from "../screens/reports/BalanceSheetScreen";
+import OutstandingScreen from "../screens/reports/OutstandingScreen";
+import ProfitLossScreen from "../screens/reports/ProfitLossScreen";
+import TrialBalanceScreen from "../screens/reports/TrialBalanceScreen";
 import VoucherEntryScreen from "../screens/vouchers/VoucherEntryScreen";
 import VoucherListScreen from "../screens/vouchers/VoucherListScreen";
 
@@ -28,6 +32,10 @@ type AppStackParamList = {
   Ledgers: undefined;
   Vouchers: undefined;
   NewVoucher: undefined;
+  TrialBalance: undefined;
+  ProfitLoss: undefined;
+  BalanceSheet: undefined;
+  Outstanding: undefined;
 };
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -69,6 +77,12 @@ function AppFlow(): React.ReactElement {
             onOpenCompanies={() => props.navigation.navigate("Companies")}
             onOpenLedgers={() => props.navigation.navigate("Ledgers")}
             onOpenVouchers={() => props.navigation.navigate("Vouchers")}
+            onOpenTrialBalance={() => props.navigation.navigate("TrialBalance")}
+            onOpenProfitLoss={() => props.navigation.navigate("ProfitLoss")}
+            onOpenBalanceSheet={() =>
+              props.navigation.navigate("BalanceSheet")
+            }
+            onOpenOutstanding={() => props.navigation.navigate("Outstanding")}
           />
         )}
       </AppStack.Screen>
@@ -120,6 +134,26 @@ function AppFlow(): React.ReactElement {
           />
         )}
       </AppStack.Screen>
+      <AppStack.Screen
+        name="TrialBalance"
+        component={TrialBalanceScreen}
+        options={{ title: "Trial Balance" }}
+      />
+      <AppStack.Screen
+        name="ProfitLoss"
+        component={ProfitLossScreen}
+        options={{ title: "Profit & Loss" }}
+      />
+      <AppStack.Screen
+        name="BalanceSheet"
+        component={BalanceSheetScreen}
+        options={{ title: "Balance Sheet" }}
+      />
+      <AppStack.Screen
+        name="Outstanding"
+        component={OutstandingScreen}
+        options={{ title: "Outstanding" }}
+      />
     </AppStack.Navigator>
   );
 }

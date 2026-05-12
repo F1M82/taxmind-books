@@ -9,10 +9,18 @@ export default function DashboardScreen({
   onOpenCompanies,
   onOpenLedgers,
   onOpenVouchers,
+  onOpenTrialBalance,
+  onOpenProfitLoss,
+  onOpenBalanceSheet,
+  onOpenOutstanding,
 }: {
   onOpenCompanies: () => void;
   onOpenLedgers: () => void;
   onOpenVouchers: () => void;
+  onOpenTrialBalance: () => void;
+  onOpenProfitLoss: () => void;
+  onOpenBalanceSheet: () => void;
+  onOpenOutstanding: () => void;
 }): React.ReactElement {
   const { user, signOut } = useAuth();
   const { activeCompanyId, loading: companyLoading } = useActiveCompany();
@@ -56,36 +64,93 @@ export default function DashboardScreen({
       {hasActive && <ConnectorStatusCard />}
 
       {hasActive && (
-        <View style={styles.shortcuts}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="open-ledgers"
-            onPress={onOpenLedgers}
-            style={({ pressed }) => [
-              styles.shortcut,
-              pressed && { opacity: 0.85 },
-            ]}
-          >
-            <Text style={styles.shortcutTitle}>Ledgers</Text>
-            <Text style={styles.shortcutSubtitle}>
-              Browse + fuzzy search
-            </Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="open-vouchers"
-            onPress={onOpenVouchers}
-            style={({ pressed }) => [
-              styles.shortcut,
-              pressed && { opacity: 0.85 },
-            ]}
-          >
-            <Text style={styles.shortcutTitle}>Vouchers</Text>
-            <Text style={styles.shortcutSubtitle}>
-              Create + Tally status
-            </Text>
-          </Pressable>
-        </View>
+        <>
+          <View style={styles.shortcuts}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="open-ledgers"
+              onPress={onOpenLedgers}
+              style={({ pressed }) => [
+                styles.shortcut,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text style={styles.shortcutTitle}>Ledgers</Text>
+              <Text style={styles.shortcutSubtitle}>
+                Browse + fuzzy search
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="open-vouchers"
+              onPress={onOpenVouchers}
+              style={({ pressed }) => [
+                styles.shortcut,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text style={styles.shortcutTitle}>Vouchers</Text>
+              <Text style={styles.shortcutSubtitle}>
+                Create + Tally status
+              </Text>
+            </Pressable>
+          </View>
+          <Text style={styles.sectionLabel}>REPORTS</Text>
+          <View style={styles.shortcuts}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="open-trial-balance"
+              onPress={onOpenTrialBalance}
+              style={({ pressed }) => [
+                styles.shortcut,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text style={styles.shortcutTitle}>Trial Balance</Text>
+              <Text style={styles.shortcutSubtitle}>As-of snapshot</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="open-profit-loss"
+              onPress={onOpenProfitLoss}
+              style={({ pressed }) => [
+                styles.shortcut,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text style={styles.shortcutTitle}>Profit &amp; Loss</Text>
+              <Text style={styles.shortcutSubtitle}>Income vs expense</Text>
+            </Pressable>
+          </View>
+          <View style={styles.shortcuts}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="open-balance-sheet"
+              onPress={onOpenBalanceSheet}
+              style={({ pressed }) => [
+                styles.shortcut,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text style={styles.shortcutTitle}>Balance Sheet</Text>
+              <Text style={styles.shortcutSubtitle}>Assets vs liabilities</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="open-outstanding"
+              onPress={onOpenOutstanding}
+              style={({ pressed }) => [
+                styles.shortcut,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text style={styles.shortcutTitle}>Outstanding</Text>
+              <Text style={styles.shortcutSubtitle}>
+                Receivables / payables
+              </Text>
+            </Pressable>
+          </View>
+        </>
       )}
 
       <Pressable
@@ -129,6 +194,12 @@ const styles = StyleSheet.create({
   },
   shortcutTitle: { fontSize: 16, fontWeight: "600" },
   shortcutSubtitle: { fontSize: 12, color: "#666" },
+  sectionLabel: {
+    fontSize: 12,
+    color: "#666",
+    letterSpacing: 1,
+    marginTop: 12,
+  },
   signOut: {
     marginTop: 24,
     padding: 12,

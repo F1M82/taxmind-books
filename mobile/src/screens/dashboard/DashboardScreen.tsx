@@ -1,9 +1,22 @@
-import React from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useCallback, useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 
+import { DashboardHomeResponse, getDashboardHome } from "../../api/dashboard";
+import AlertsList from "../../components/dashboard/AlertsList";
+import ConnectorTile from "../../components/dashboard/ConnectorTile";
+import GstTile from "../../components/dashboard/GstTile";
+import MetricsTile from "../../components/dashboard/MetricsTile";
+import OutstandingTile from "../../components/dashboard/OutstandingTile";
 import { useAuth } from "../../context/AuthContext";
 import { useActiveCompany } from "../../context/CompanyContext";
-import ConnectorStatusCard from "./ConnectorStatusCard";
 
 export default function DashboardScreen({
   onOpenCompanies,
@@ -24,6 +37,32 @@ export default function DashboardScreen({
 }): React.ReactElement {
   const { user, signOut } = useAuth();
   const { activeCompanyId, loading: companyLoading } = useActiveCompany();
+  const hasActive = activeCompanyId !== null;
+
+  const [data, setData] = useState<DashboardHomeResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!hasActive) {
+      setData(null);
+      return;
+    }
+    setError(null);
+    setRefreshing(true);
+    try {
+      setData(await getDashboardHome());
+    } catch {
+      setError("Could not load dashboard.");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [hasActive]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
   if (user === null) {
     return (
       <View style={styles.container}>
@@ -31,16 +70,20 @@ export default function DashboardScreen({
       </View>
     );
   }
+
   const activeCompany =
     activeCompanyId === null
       ? null
       : user.companies.find((c) => c.id === activeCompanyId) ?? null;
-  const hasActive = activeCompanyId !== null;
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView
+      contentContainerStyle={styles.container}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={load} />
+      }
+    >
       <Text style={styles.title}>Welcome, {user.full_name}</Text>
-      <Text style={styles.line}>{user.email}</Text>
 
       <Pressable
         accessibilityRole="button"
@@ -61,10 +104,59 @@ export default function DashboardScreen({
         </Text>
       </Pressable>
 
-      {hasActive && <ConnectorStatusCard />}
+      {hasActive && data === null && error === null && (
+        <View style={styles.center}>
+          <ActivityIndicator />
+        </View>
+      )}
 
-      {hasActive && (
+      {hasActive && error !== null && (
+        <Text style={styles.error}>{error}</Text>
+      )}
+
+      {hasActive && data !== null && (
         <>
+          <AlertsList
+            alerts={data.alerts}
+            onPressAlert={(a) => {
+              if (a.kind === "pending_approvals") onOpenVouchers();
+            }}
+          />
+
+          <View style={styles.tileRow}>
+            <ConnectorTile connector={data.connector} />
+          </View>
+
+          <View style={styles.tileRow}>
+            <MetricsTile
+              label="TODAY"
+              vouchersCreated={data.today.vouchers_created}
+              pendingApproval={data.today.vouchers_pending_approval}
+              cashIn={data.today.cash_in}
+              cashOut={data.today.cash_out}
+              onPress={onOpenVouchers}
+              accessibilityLabel="tile-today"
+            />
+            <MetricsTile
+              label="THIS MONTH"
+              vouchersCreated={data.this_month.vouchers_created}
+              pendingApproval={data.this_month.vouchers_pending_approval}
+              cashIn={data.this_month.cash_in}
+              cashOut={data.this_month.cash_out}
+              onPress={onOpenProfitLoss}
+              accessibilityLabel="tile-this-month"
+            />
+          </View>
+
+          <View style={styles.tileRow}>
+            <OutstandingTile
+              outstanding={data.outstanding}
+              onPress={onOpenOutstanding}
+            />
+            <GstTile gst={data.gst_liability_indicative} />
+          </View>
+
+          <Text style={styles.sectionLabel}>SHORTCUTS</Text>
           <View style={styles.shortcuts}>
             <Pressable
               accessibilityRole="button"
@@ -95,6 +187,7 @@ export default function DashboardScreen({
               </Text>
             </Pressable>
           </View>
+
           <Text style={styles.sectionLabel}>REPORTS</Text>
           <View style={styles.shortcuts}>
             <Pressable
@@ -111,20 +204,6 @@ export default function DashboardScreen({
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="open-profit-loss"
-              onPress={onOpenProfitLoss}
-              style={({ pressed }) => [
-                styles.shortcut,
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              <Text style={styles.shortcutTitle}>Profit &amp; Loss</Text>
-              <Text style={styles.shortcutSubtitle}>Income vs expense</Text>
-            </Pressable>
-          </View>
-          <View style={styles.shortcuts}>
-            <Pressable
-              accessibilityRole="button"
               accessibilityLabel="open-balance-sheet"
               onPress={onOpenBalanceSheet}
               style={({ pressed }) => [
@@ -134,20 +213,6 @@ export default function DashboardScreen({
             >
               <Text style={styles.shortcutTitle}>Balance Sheet</Text>
               <Text style={styles.shortcutSubtitle}>Assets vs liabilities</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="open-outstanding"
-              onPress={onOpenOutstanding}
-              style={({ pressed }) => [
-                styles.shortcut,
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              <Text style={styles.shortcutTitle}>Outstanding</Text>
-              <Text style={styles.shortcutSubtitle}>
-                Receivables / payables
-              </Text>
             </Pressable>
           </View>
         </>
@@ -166,24 +231,26 @@ export default function DashboardScreen({
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 24, gap: 12 },
-  title: { fontSize: 24, fontWeight: "600" },
-  line: { fontSize: 16, color: "#444" },
+  container: { padding: 16, gap: 10 },
+  center: { padding: 24, alignItems: "center" },
+  title: { fontSize: 22, fontWeight: "600" },
   companyChip: {
     padding: 14,
     borderWidth: 1,
     borderColor: "#2c3e50",
     borderRadius: 8,
-    marginTop: 12,
     gap: 2,
   },
   companyChipLabel: { fontSize: 12, color: "#666", letterSpacing: 1 },
   companyChipValue: { fontSize: 16, fontWeight: "600", color: "#2c3e50" },
-  shortcuts: {
-    flexDirection: "row",
-    gap: 10,
+  tileRow: { flexDirection: "row", gap: 10 },
+  sectionLabel: {
+    fontSize: 12,
+    color: "#666",
+    letterSpacing: 1,
     marginTop: 8,
   },
+  shortcuts: { flexDirection: "row", gap: 10 },
   shortcut: {
     flex: 1,
     padding: 14,
@@ -194,14 +261,8 @@ const styles = StyleSheet.create({
   },
   shortcutTitle: { fontSize: 16, fontWeight: "600" },
   shortcutSubtitle: { fontSize: 12, color: "#666" },
-  sectionLabel: {
-    fontSize: 12,
-    color: "#666",
-    letterSpacing: 1,
-    marginTop: 12,
-  },
   signOut: {
-    marginTop: 24,
+    marginTop: 16,
     padding: 12,
     alignItems: "center",
     borderWidth: 1,
@@ -209,4 +270,5 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   signOutText: { color: "#c0392b", fontSize: 16 },
+  error: { color: "#c0392b" },
 });

@@ -52,6 +52,16 @@ endpoints:
   - path: /api/v1/vouchers/{voucher_id}/reject-optional
     methods: [POST]
 
+  # ---- Reports ----
+  - path: /api/v1/reports/trial-balance
+    methods: [GET]
+  - path: /api/v1/reports/profit-loss
+    methods: [GET]
+  - path: /api/v1/reports/balance-sheet
+    methods: [GET]
+  - path: /api/v1/reports/outstanding
+    methods: [GET]
+
   # ---- Audit log read ----
   - path: /api/v1/audit-logs/
     methods: [GET]

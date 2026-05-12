@@ -476,6 +476,14 @@ CREATE TRIGGER audit_logs_no_delete BEFORE DELETE ON audit_logs
 
 The ORM model `AuditLog` is read-only via class-level configuration (no setters generated). The `AuditEmitter` is the only path that constructs `AuditLog` instances. CI lints for any code outside `core/audit.py` constructing `AuditLog`.
 
+### Interaction with `audit_logs.user_id ON DELETE SET NULL`
+
+The FK from `audit_logs.user_id` to `users.id` is `ON DELETE SET NULL` in the migration (0004). That cascade fires an UPDATE on every referencing audit row, which the Layer-2 trigger refuses. **Net effect: a user with any audit history cannot be hard-deleted.** Anything attempting `DELETE FROM users WHERE id = ...` will roll back with `audit_logs is append-only`.
+
+This is intentional — audit immutability wins over the foreign key. DPDP-style erasure (P0.45) anonymises the user row instead of deleting it: PII fields are wiped (`email`, `full_name`, `phone`, `firm_name`, `ca_membership_no`, `hashed_password`), `is_active` flips to false, and the row stays so audit/voucher references remain joinable. See `account_lifecycle_service.process_due_deletion` for the implementation.
+
+If a future requirement genuinely needs hard-delete, the only safe options are (a) tightening the trigger to allow the specific `user_id → NULL` cascade via `pg_trigger_depth()`, or (b) toggling `session_replication_role = 'replica'` for the deletion transaction. Both deserve their own AUDIT.md amendment first.
+
 ## Mandatory-emit enforcement
 
 A service method that mutates a financially significant entity must call `audit.emit`. This is enforced by:

@@ -13,6 +13,13 @@ of that doc. Differences from the inlined spec:
 - ``httpx`` and ``psycopg`` are lazy-imported; if either is missing the
   affected section reports "skipped" rather than aborting the whole
   collection. The doc's philosophy is to record gaps in the artefact.
+- Sections 2 (static checks) and 4 (migration round-trip) intentionally
+  mirror ``.github/workflows/ci.yml`` — same commands, working
+  directories, and arg vectors — so the report cannot disagree with
+  CI on what counts as passing. mypy is advisory in CI (``|| true``)
+  and is reported the same way here. The migration round-trip is
+  exercised via ``test_alembic_roundtrip.py``, matching CI; no raw
+  ``alembic`` CLI invocations.
 
 Usage::
 
@@ -60,8 +67,6 @@ def _venv_tool(name: str) -> str:
 PYTHON = _venv_tool("python")
 PYTEST = _venv_tool("pytest")
 RUFF = _venv_tool("ruff")
-MYPY = _venv_tool("mypy")
-ALEMBIC = _venv_tool("alembic")
 
 
 # ---------------------------------------------------------------------
@@ -137,29 +142,66 @@ def collect_environment() -> dict[str, Any]:
     }
 
 
+def _ci_mypy() -> dict[str, Any]:
+    """Mypy step mirroring `.github/workflows/ci.yml` "type-check" job.
+
+    CI invokes ``python -m mypy app --ignore-missing-imports
+    --no-incremental || true`` from ``backend/``: the ``|| true`` makes
+    the step advisory (any non-zero exit still passes the gate). We
+    preserve that semantics by capturing mypy's output verbatim but
+    normalising the exit code to 0 — otherwise the validation report
+    would flag the section as drift while CI itself is green.
+    """
+    result = run_command(
+        [
+            PYTHON,
+            "-m",
+            "mypy",
+            "app",
+            "--ignore-missing-imports",
+            "--no-incremental",
+        ],
+        cwd=BACKEND_DIR,
+    )
+    result["raw_exit_code"] = result["exit_code"]
+    result["exit_code"] = 0
+    return result
+
+
 def collect_static_checks() -> dict[str, Any]:
+    """Static checks, aligned with the gates in
+    ``.github/workflows/ci.yml`` (job: ``lint`` + ``type-check``).
+
+    All commands are invoked from the repo root with the same arg
+    vectors CI uses, so the validation report and the CI lint job
+    cannot drift on what they consider passing.
+    """
     return {
-        "lint_ruff": run_command([RUFF, "check", "."], cwd=BACKEND_DIR),
-        "format_check": run_command(
-            [RUFF, "format", "--check", "."], cwd=BACKEND_DIR
-        ),
-        "type_check": run_command(
-            [MYPY, "app/", "--strict"], cwd=BACKEND_DIR
-        ),
+        "lint_ruff": run_command([RUFF, "check", "."], cwd=REPO_ROOT),
+        "type_check": _ci_mypy(),
         "lint_money": run_command(
-            [PYTHON, str(REPO_ROOT / "tools" / "lint" / "check_money_types.py"),
-             "app"],
-            cwd=BACKEND_DIR,
+            [
+                PYTHON,
+                str(REPO_ROOT / "tools" / "lint" / "check_money_types.py"),
+                "backend/app",
+            ],
+            cwd=REPO_ROOT,
         ),
         "lint_audit": run_command(
-            [PYTHON, str(REPO_ROOT / "tools" / "lint" / "check_audit_emit.py"),
-             "app/services"],
-            cwd=BACKEND_DIR,
+            [
+                PYTHON,
+                str(REPO_ROOT / "tools" / "lint" / "check_audit_emit.py"),
+                "backend/app/services",
+            ],
+            cwd=REPO_ROOT,
         ),
         "lint_imports": run_command(
-            [PYTHON, str(REPO_ROOT / "tools" / "lint" / "check_imports.py"),
-             "app"],
-            cwd=BACKEND_DIR,
+            [
+                PYTHON,
+                str(REPO_ROOT / "tools" / "lint" / "check_imports.py"),
+                ".",
+            ],
+            cwd=REPO_ROOT,
         ),
     }
 
@@ -197,19 +239,22 @@ def collect_test_results() -> dict[str, Any]:
 
 
 def collect_migration_results() -> dict[str, Any]:
-    """Round-trip the migrations against the configured DATABASE_URL."""
+    """Migration round-trip, aligned with CI.
+
+    ``.github/workflows/ci.yml`` does NOT invoke ``alembic`` directly;
+    the round-trip is exercised by
+    ``backend/tests/integration/test_alembic_roundtrip.py`` inside the
+    pytest run. We mirror that here — running the same test file — so
+    the validation report's verdict matches CI's.
+    """
     return {
-        "alembic_upgrade_head": run_command(
-            [ALEMBIC, "upgrade", "head"], cwd=BACKEND_DIR
-        ),
-        "alembic_downgrade_base": run_command(
-            [ALEMBIC, "downgrade", "base"], cwd=BACKEND_DIR
-        ),
-        "alembic_upgrade_again": run_command(
-            [ALEMBIC, "upgrade", "head"], cwd=BACKEND_DIR
-        ),
-        "alembic_check": run_command(
-            [ALEMBIC, "check"], cwd=BACKEND_DIR
+        "alembic_roundtrip": run_command(
+            [
+                PYTEST,
+                "tests/integration/test_alembic_roundtrip.py",
+                "-q",
+            ],
+            cwd=BACKEND_DIR,
         ),
     }
 
@@ -380,19 +425,8 @@ def _block(stdout: str, max_chars: int = 3000) -> str:
     return f"```\n{body}\n```" if body else "_(no output)_"
 
 
-def write_report(
-    out_path: Path,
-    phase: int,
-    base_url: str,
-    env: dict[str, Any],
-    static: dict[str, Any],
-    tests: dict[str, Any],
-    migrations: dict[str, Any],
-    smokes: dict[str, Any],
-    db: dict[str, Any],
-) -> None:
-    parts: list[str] = []
-    parts.append(
+def _section_header(phase: int, env: dict[str, Any]) -> str:
+    return (
         f"# Validation Report — Phase {phase}\n\n"
         f"**Generated:** {env['timestamp']}  \n"
         f"**Git SHA:** `{env['git_sha']}`  \n"
@@ -401,8 +435,9 @@ def write_report(
         "---\n"
     )
 
-    # ----- Section 1 -----
-    parts.append(
+
+def _section_1_environment(base_url: str, env: dict[str, Any]) -> str:
+    return (
         "\n## 1. Environment (auto-collected)\n\n"
         "| Field | Value |\n"
         "|---|---|\n"
@@ -417,92 +452,123 @@ def write_report(
         "---\n"
     )
 
-    # ----- Section 2 -----
-    static_rows = [
+
+def _rows_table(items: list[tuple[str, dict[str, Any]]]) -> str:
+    return "\n".join(
+        f"| {name} | {r['exit_code']} | {_verdict(r['exit_code'])} |"
+        for name, r in items
+    )
+
+
+def _failure_blocks(
+    items: list[tuple[str, dict[str, Any]]], use_stderr: bool = True
+) -> str:
+    chunks: list[str] = []
+    for name, r in items:
+        if r["exit_code"] != 0:
+            body = r["stdout"] or r["stderr"] if use_stderr else r["stdout"]
+            chunks.append(f"\n**{name}**\n{_block(body)}\n")
+    return "".join(chunks)
+
+
+def _section_2_static(static: dict[str, Any]) -> str:
+    mypy = static["type_check"]
+    mypy_label = (
+        f"mypy (advisory, raw exit={mypy.get('raw_exit_code', 0)})"
+    )
+    rows_data = [
         ("ruff lint", static["lint_ruff"]),
-        ("ruff format", static["format_check"]),
-        ("mypy strict", static["type_check"]),
+        (mypy_label, mypy),
         ("money types lint", static["lint_money"]),
         ("audit emit lint", static["lint_audit"]),
         ("import boundaries", static["lint_imports"]),
     ]
-    rows = "\n".join(
-        f"| {name} | {r['exit_code']} | {_verdict(r['exit_code'])} |"
-        for name, r in static_rows
+    mypy_block = (
+        "\n**mypy (advisory — full output)**\n"
+        f"{_block(mypy['stdout'] or mypy['stderr'])}\n"
+        if mypy.get("raw_exit_code", 0) != 0
+        else ""
     )
-    parts.append(
+    return (
         "\n## 2. Static checks (auto-collected)\n\n"
+        "Commands mirror `.github/workflows/ci.yml` (`lint` + "
+        "`type-check` jobs). mypy is advisory in CI (`|| true`); its "
+        "raw exit code is reported in the row label.\n\n"
         "| Check | Exit | Result |\n|---|---|---|\n"
-        f"{rows}\n\n"
+        f"{_rows_table(rows_data)}\n\n"
         "### Failure details (if any)\n"
+        f"{_failure_blocks(rows_data)}"
+        f"{mypy_block}"
+        "\n---\n"
     )
-    for name, r in static_rows:
-        if r["exit_code"] != 0:
-            parts.append(f"\n**{name}**\n{_block(r['stdout'] or r['stderr'])}\n")
-    parts.append("\n---\n")
 
-    # ----- Section 3 -----
-    test_rows = [
+
+def _section_3_tests(tests: dict[str, Any]) -> str:
+    rows_data = [
         ("unit", tests["unit_tests"]),
         ("integration", tests["integration_tests"]),
         ("tenant isolation", tests["tenant_isolation_tests"]),
     ]
-    rows = "\n".join(
-        f"| {name} | {r['exit_code']} | {_verdict(r['exit_code'])} |"
-        for name, r in test_rows
-    )
-    parts.append(
+    return (
         "\n## 3. Test suite (auto-collected)\n\n"
         "| Suite | Exit | Result |\n|---|---|---|\n"
-        f"{rows}\n\n"
+        f"{_rows_table(rows_data)}\n\n"
         "### Coverage\n"
         f"{_block(tests['coverage']['stdout'], 2000)}\n\n"
         "### Test failure details (if any)\n"
+        f"{_failure_blocks(rows_data, use_stderr=False)}"
+        "\n---\n"
     )
-    for name, r in test_rows:
-        if r["exit_code"] != 0:
-            parts.append(f"\n**{name}**\n{_block(r['stdout'])}\n")
-    parts.append("\n---\n")
 
-    # ----- Section 4 -----
-    mig_rows = [
-        ("upgrade head", migrations["alembic_upgrade_head"]),
-        ("downgrade base", migrations["alembic_downgrade_base"]),
-        ("upgrade head again", migrations["alembic_upgrade_again"]),
-        ("alembic check", migrations["alembic_check"]),
+
+def _section_4_migrations(migrations: dict[str, Any]) -> str:
+    rows_data = [
+        (
+            "alembic round-trip (test_alembic_roundtrip.py)",
+            migrations["alembic_roundtrip"],
+        ),
     ]
-    rows = "\n".join(
-        f"| {name} | {r['exit_code']} | {_verdict(r['exit_code'])} |"
-        for name, r in mig_rows
-    )
-    parts.append(
+    return (
         "\n## 4. Migration round-trip (auto-collected)\n\n"
+        "Mirrors `.github/workflows/ci.yml`: the round-trip lives in "
+        "`backend/tests/integration/test_alembic_roundtrip.py` and is "
+        "exercised inside the pytest run, not by raw `alembic` CLI "
+        "invocations.\n\n"
         "| Step | Exit | Result |\n|---|---|---|\n"
-        f"{rows}\n\n"
-        "---\n"
+        f"{_rows_table(rows_data)}\n\n"
+        "### Failure details (if any)\n"
+        f"{_failure_blocks(rows_data)}"
+        "\n---\n"
     )
 
-    # ----- Section 5 -----
-    parts.append("\n## 5. Smoke tests (auto-collected)\n\n")
+
+def _section_5_smokes(smokes: dict[str, Any]) -> str:
     if "__skipped__" in smokes:
-        parts.append(f"_Skipped: {smokes['__skipped__']}_\n")
+        body = f"_Skipped: {smokes['__skipped__']}_\n"
     else:
+        lines: list[str] = []
         for path, r in smokes.items():
             verdict = "ok" if r.get("ok") else "FAIL"
-            extra = (
-                f" — {r['error']}" if r.get("error") else ""
+            extra = f" — {r['error']}" if r.get("error") else ""
+            lines.append(
+                f"- `{path}` → {r.get('status')} ({verdict}){extra}\n"
             )
-            parts.append(f"- `{path}` → {r.get('status')} ({verdict}){extra}\n")
-    parts.append("\n---\n")
+        body = "".join(lines)
+    return f"\n## 5. Smoke tests (auto-collected)\n\n{body}\n---\n"
 
-    # ----- Section 6 -----
-    parts.append("\n## 6. Database introspection (auto-collected)\n\n")
+
+def _section_6_db(db: dict[str, Any]) -> str:
     if "__skipped__" in db:
-        parts.append(f"_Skipped: {db['__skipped__']}_\n")
+        body = f"_Skipped: {db['__skipped__']}_\n"
     elif "error" in db:
-        parts.append(f"_Error: {db['error']}_\n")
+        body = f"_Error: {db['error']}_\n"
     else:
-        parts.append(
+        money_rows = "".join(
+            f"| {c['table']} | {c['column']} | "
+            f"{c['precision']} | {c['scale']} |\n"
+            for c in db.get("money_columns", [])
+        )
+        body = (
             f"**Alembic head:** `{db.get('alembic_version') or 'unknown'}`\n\n"
             "### Tables present\n"
             f"{', '.join(db.get('tables', [])) or '_(none)_'}\n\n"
@@ -511,119 +577,52 @@ def write_report(
             "### Money columns\n"
             "| Table | Column | Precision | Scale |\n"
             "|---|---|---|---|\n"
-        )
-        for c in db.get("money_columns", []):
-            parts.append(
-                f"| {c['table']} | {c['column']} | "
-                f"{c['precision']} | {c['scale']} |\n"
-            )
-        parts.append(
+            f"{money_rows}"
             "\nExpected: ALL money columns must show "
             "precision=15, scale=2.\n"
         )
-    parts.append("\n---\n")
+    return f"\n## 6. Database introspection (auto-collected)\n\n{body}\n---\n"
 
-    # ----- Section 7 -----
-    parts.append(
-        "\n## 7. Manual verification (HUMAN FILLS IN)\n\n"
-        "Walk through each scenario; record observations in the Notes "
-        "block. The script does not assert; the human decides "
-        "pass/fail/partial.\n\n"
-        "### 7.1 Money handling (per MONEY.md)\n"
-        "- [ ] POST /vouchers/ with `total_amount: 1500.99` (float in "
-        "JSON) → expected 422\n"
-        "- [ ] POST /vouchers/ with `\"total_amount\": \"1500.99\"` "
-        "(string) → expected 201, response has string\n"
-        "- [ ] POST /vouchers/ with `\"total_amount\": \"1500.999\"` "
-        "(3 dp) → expected 422\n"
-        "- [ ] DB inspect: `SELECT total_amount FROM vouchers LIMIT 1` "
-        "shows exact value, no float artifact\n\n"
-        "Notes:\n\n"
-        "### 7.2 Tenant isolation (per TENANCY.md)\n"
-        "- [ ] User A in company A only; GET /vouchers/{id} for a "
-        "voucher in company B → expected 404\n"
-        "- [ ] User A; POST /vouchers/ with X-Company-ID = B → "
-        "expected 404\n"
-        "- [ ] User A; POST with body `company_id: \"<B>\"` and "
-        "X-Company-ID = A → expected 201 with company_id=A OR 422\n"
-        "- [ ] User A; GET /vouchers/ without X-Company-ID → expected "
-        "422\n"
-        "- [ ] User A; GET /vouchers/?company_id=<B> → query param "
-        "ignored, only A's data returned\n\n"
-        "Notes:\n\n"
-        "### 7.3 Audit log (per AUDIT.md)\n"
-        "- [ ] Create voucher; query audit_logs → exactly 1 row, "
-        "action='voucher.created', new_value contains total_amount "
-        "as string\n"
-        "- [ ] Update narration; query audit_logs → 2nd row, changes "
-        "contains only narration\n"
-        "- [ ] Cancel voucher; 3rd row with action='voucher.cancelled'\n"
-        "- [ ] As app user, run `UPDATE audit_logs SET action='x' "
-        "WHERE id=...` → expected: trigger raises exception\n"
-        "- [ ] As viewer-role user, GET /audit-logs/ → expected 403\n"
-        "- [ ] No audit log row contains literal password/token/"
-        "api_key value\n\n"
-        "Notes:\n\n"
-        "### 7.4 Idempotency (per IDEMPOTENCY.md)\n"
-        "- [ ] POST /vouchers/ with Idempotency-Key K1 → 201\n"
-        "- [ ] POST same body, same K1 → 201, same voucher.id, "
-        "Idempotent-Replay: true header\n"
-        "- [ ] POST different body, same K1 → 409 idempotency_replay\n"
-        "- [ ] POST without Idempotency-Key header → 400 "
-        "idempotency_key_required\n"
-        "- [ ] POST K2 to /vouchers/, then K2 to /ingestions/ → 409 "
-        "idempotency_key_misuse\n"
-        "- [ ] DB inspect: only 1 voucher created across all retries\n\n"
-        "Notes:\n\n"
-        "### 7.5 Tally Connector (per CONNECTOR_PROTOCOL.md)\n"
-        "- [ ] Install connector on Windows VM with Tally running → "
-        "registers within 5 seconds\n"
-        "- [ ] GET /connector/status → connected: true, "
-        "tally_running: true\n"
-        "- [ ] Stop Tally → next heartbeat shows tally_running: false\n"
-        "- [ ] POST voucher while Tally stopped → voucher in DB, "
-        "audit log shows tally_post_failed, retry queued\n"
-        "- [ ] Start Tally → next retry succeeds, tally_posted_at "
-        "populated\n"
-        "- [ ] Disconnect network on connector PC for 2 min → "
-        "backend marks connected: false after 90s, reconnects "
-        "automatically\n"
-        "- [ ] Same Idempotency-Key replayed → only 1 Tally voucher "
-        "created (verify in TallyPrime)\n"
-        "- [ ] sync_masters → all Tally ledgers appear in `ledgers` "
-        "table\n"
-        "- [ ] sync_masters again → no duplicate ledgers (idempotent)\n"
-        "- [ ] Backend issues command with wrong company_id → "
-        "connector rejects, logs locally\n\n"
-        "Notes:\n\n"
-        "### 7.6 End-to-end (the Phase 0 deliverable)\n"
-        "- [ ] Mobile app: register new user\n"
-        "- [ ] Mobile app: log in\n"
-        "- [ ] Mobile app: create company \"Acme Test\"\n"
-        "- [ ] Install connector on Windows; enroll with code from app\n"
-        "- [ ] Mobile app shows connector \"Connected\"\n"
-        "- [ ] Trigger sync_masters from mobile app → ledgers populate\n"
-        "- [ ] Mobile app: create a manual Receipt voucher (Bank Dr "
-        "1000, Some Party Cr 1000)\n"
-        "- [ ] Voucher appears in TallyPrime within 5 seconds\n"
-        "- [ ] Mobile app shows voucher with `tally_posted_at` "
-        "timestamp\n"
-        "- [ ] Mobile app: view audit log → all actions present\n\n"
-        "Notes:\n\n"
-        "---\n"
+
+def write_report(
+    out_path: Path,
+    phase: int,
+    base_url: str,
+    env: dict[str, Any],
+    static: dict[str, Any],
+    tests: dict[str, Any],
+    migrations: dict[str, Any],
+    smokes: dict[str, Any],
+    db: dict[str, Any],
+) -> None:
+    parts: list[str] = [
+        _section_header(phase, env),
+        _section_1_environment(base_url, env),
+        _section_2_static(static),
+        _section_3_tests(tests),
+        _section_4_migrations(migrations),
+        _section_5_smokes(smokes),
+        _section_6_db(db),
+    ]
+
+    parts.append(_SECTION_7_MANUAL)
+    parts.append(_section_8_findings())
+    parts.append(_SECTION_9_DECISION)
+    out_path.write_text("".join(parts), encoding="utf-8")
+    print(f"Report written to {out_path}")
+
+
+def _section_8_findings() -> str:
+    task_rows = "".join(
+        f"| {task_id} {label} | | |\n" for task_id, label in PHASE_0_TASKS
     )
-
-    # ----- Section 8 -----
-    parts.append(
+    return (
         "\n## 8. Findings (HUMAN FILLS IN)\n\n"
         "### Pass / fail / partial per acceptance criterion\n"
         "Map each criterion in PHASE_0_TASKS.md to one of: pass, "
         "fail, partial, not-tested.\n\n"
         "| Task | Status | Note |\n|---|---|---|\n"
-    )
-    for task_id, label in PHASE_0_TASKS:
-        parts.append(f"| {task_id} {label} | | |\n")
-    parts.append(
+        f"{task_rows}"
         "\n### Blockers\n"
         "Items that prevent moving to Phase 1. Include reproduction "
         "steps, expected vs actual, logs.\n\n"
@@ -642,19 +641,106 @@ def write_report(
         "---\n"
     )
 
-    # ----- Section 9 -----
-    parts.append(
-        "\n## 9. Decision (HUMAN FILLS IN)\n\n"
-        "- [ ] PASS — proceed to Phase 1\n"
-        "- [ ] CONDITIONAL PASS — fix listed non-blockers in parallel "
-        "with Phase 1\n"
-        "- [ ] FAIL — Coder Claude returns to fix blockers; "
-        "re-validate\n\n"
-        "Signed: _________________  Date: _________\n"
-    )
 
-    out_path.write_text("".join(parts), encoding="utf-8")
-    print(f"Report written to {out_path}")
+_SECTION_7_MANUAL = (
+    "\n## 7. Manual verification (HUMAN FILLS IN)\n\n"
+    "Walk through each scenario; record observations in the Notes "
+    "block. The script does not assert; the human decides "
+    "pass/fail/partial.\n\n"
+    "### 7.1 Money handling (per MONEY.md)\n"
+    "- [ ] POST /vouchers/ with `total_amount: 1500.99` (float in "
+    "JSON) → expected 422\n"
+    "- [ ] POST /vouchers/ with `\"total_amount\": \"1500.99\"` "
+    "(string) → expected 201, response has string\n"
+    "- [ ] POST /vouchers/ with `\"total_amount\": \"1500.999\"` "
+    "(3 dp) → expected 422\n"
+    "- [ ] DB inspect: `SELECT total_amount FROM vouchers LIMIT 1` "
+    "shows exact value, no float artifact\n\n"
+    "Notes:\n\n"
+    "### 7.2 Tenant isolation (per TENANCY.md)\n"
+    "- [ ] User A in company A only; GET /vouchers/{id} for a "
+    "voucher in company B → expected 404\n"
+    "- [ ] User A; POST /vouchers/ with X-Company-ID = B → "
+    "expected 404\n"
+    "- [ ] User A; POST with body `company_id: \"<B>\"` and "
+    "X-Company-ID = A → expected 201 with company_id=A OR 422\n"
+    "- [ ] User A; GET /vouchers/ without X-Company-ID → expected "
+    "422\n"
+    "- [ ] User A; GET /vouchers/?company_id=<B> → query param "
+    "ignored, only A's data returned\n\n"
+    "Notes:\n\n"
+    "### 7.3 Audit log (per AUDIT.md)\n"
+    "- [ ] Create voucher; query audit_logs → exactly 1 row, "
+    "action='voucher.created', new_value contains total_amount "
+    "as string\n"
+    "- [ ] Update narration; query audit_logs → 2nd row, changes "
+    "contains only narration\n"
+    "- [ ] Cancel voucher; 3rd row with action='voucher.cancelled'\n"
+    "- [ ] As app user, run `UPDATE audit_logs SET action='x' "
+    "WHERE id=...` → expected: trigger raises exception\n"
+    "- [ ] As viewer-role user, GET /audit-logs/ → expected 403\n"
+    "- [ ] No audit log row contains literal password/token/"
+    "api_key value\n\n"
+    "Notes:\n\n"
+    "### 7.4 Idempotency (per IDEMPOTENCY.md)\n"
+    "- [ ] POST /vouchers/ with Idempotency-Key K1 → 201\n"
+    "- [ ] POST same body, same K1 → 201, same voucher.id, "
+    "Idempotent-Replay: true header\n"
+    "- [ ] POST different body, same K1 → 409 idempotency_replay\n"
+    "- [ ] POST without Idempotency-Key header → 400 "
+    "idempotency_key_required\n"
+    "- [ ] POST K2 to /vouchers/, then K2 to /ingestions/ → 409 "
+    "idempotency_key_misuse\n"
+    "- [ ] DB inspect: only 1 voucher created across all retries\n\n"
+    "Notes:\n\n"
+    "### 7.5 Tally Connector (per CONNECTOR_PROTOCOL.md)\n"
+    "- [ ] Install connector on Windows VM with Tally running → "
+    "registers within 5 seconds\n"
+    "- [ ] GET /connector/status → connected: true, "
+    "tally_running: true\n"
+    "- [ ] Stop Tally → next heartbeat shows tally_running: false\n"
+    "- [ ] POST voucher while Tally stopped → voucher in DB, "
+    "audit log shows tally_post_failed, retry queued\n"
+    "- [ ] Start Tally → next retry succeeds, tally_posted_at "
+    "populated\n"
+    "- [ ] Disconnect network on connector PC for 2 min → "
+    "backend marks connected: false after 90s, reconnects "
+    "automatically\n"
+    "- [ ] Same Idempotency-Key replayed → only 1 Tally voucher "
+    "created (verify in TallyPrime)\n"
+    "- [ ] sync_masters → all Tally ledgers appear in `ledgers` "
+    "table\n"
+    "- [ ] sync_masters again → no duplicate ledgers (idempotent)\n"
+    "- [ ] Backend issues command with wrong company_id → "
+    "connector rejects, logs locally\n\n"
+    "Notes:\n\n"
+    "### 7.6 End-to-end (the Phase 0 deliverable)\n"
+    "- [ ] Mobile app: register new user\n"
+    "- [ ] Mobile app: log in\n"
+    "- [ ] Mobile app: create company \"Acme Test\"\n"
+    "- [ ] Install connector on Windows; enroll with code from app\n"
+    "- [ ] Mobile app shows connector \"Connected\"\n"
+    "- [ ] Trigger sync_masters from mobile app → ledgers populate\n"
+    "- [ ] Mobile app: create a manual Receipt voucher (Bank Dr "
+    "1000, Some Party Cr 1000)\n"
+    "- [ ] Voucher appears in TallyPrime within 5 seconds\n"
+    "- [ ] Mobile app shows voucher with `tally_posted_at` "
+    "timestamp\n"
+    "- [ ] Mobile app: view audit log → all actions present\n\n"
+    "Notes:\n\n"
+    "---\n"
+)
+
+
+_SECTION_9_DECISION = (
+    "\n## 9. Decision (HUMAN FILLS IN)\n\n"
+    "- [ ] PASS — proceed to Phase 1\n"
+    "- [ ] CONDITIONAL PASS — fix listed non-blockers in parallel "
+    "with Phase 1\n"
+    "- [ ] FAIL — Coder Claude returns to fix blockers; "
+    "re-validate\n\n"
+    "Signed: _________________  Date: _________\n"
+)
 
 
 # ---------------------------------------------------------------------

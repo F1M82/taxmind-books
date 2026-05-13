@@ -470,9 +470,32 @@ if __name__ == "__main__":
 2. From the repo root: `python tools/validation_report/collect_report.py --phase 0 --out validation/`
 3. Open `validation/phase_0_<timestamp>.md`.
 4. Sections 1–6 are filled by the script.
-5. Sections 7, 8, 9 require human work. Walk through Section 7 step by step. Fill in pass/fail in Section 8. Make the decision in Section 9.
+5. Sections 7, 8, 9 require human work. Section 7.1–7.4 is automated (see below); 7.5 onward stays manual.
 6. Commit the filled report to the `validation/` directory in the repo (it is a permanent artifact; later phases benefit from being able to look back).
 7. Send the report to Architect Claude — paste in chat, or share the file.
+
+### Filling Sections 7.1–7.4 automatically
+
+Sections 7.1 (Money), 7.2 (Tenancy), 7.3 (Audit), and 7.4 (Idempotency) are API-only checks — they don't need a phone, a connector, or a running Tally. The suite at `tests/validation/test_phase0_section7_*.py` automates them: one pytest test per acceptance criterion in this document, with a session-end checklist that paste-fits the report.
+
+Prerequisites:
+
+- A live backend at `http://localhost:8000` (override with `VALIDATION_BASE_URL`).
+- Optional: direct Postgres access for the trigger-bypass check (7.3 #4) and the no-duplicate count (7.4 #6). Override with `VALIDATION_DATABASE_URL`; defaults to `postgresql://taxmind:taxmind@localhost:5432/taxmind_books_test`.
+
+Run:
+
+```
+# in one shell:
+cd backend && uvicorn app.main:app --port 8000
+
+# in another:
+pytest tests/validation/ -v
+```
+
+The final block of the pytest output is a markdown checklist with `[x]` / `[ ] FAIL —` / `[ ] SKIP —` per criterion, mirroring Sections 7.1–7.4 of the report. Copy it into the filled report verbatim.
+
+Sections 7.5 (Tally Connector) and 7.6 (End-to-end) stay manual — they require real Tally on a Windows VM, a paired connector PC, and the mobile app on a device or simulator. Automation can't substitute for those without rebuilding the stack in test mode, which defeats the purpose of validation.
 
 ### Architect Claude's response
 

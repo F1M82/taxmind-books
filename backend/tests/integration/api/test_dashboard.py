@@ -216,7 +216,10 @@ def test_dashboard_cash_in_out_aggregates_bank_movement(
     client: TestClient, db_session: Session, fake_registry: _FakeRegistry
 ) -> None:
     user, company, bank, cust, supp, sales, purchase = _seed(db_session)
-    today = date.today()
+    # Must match the dashboard service's UTC "today" — using local
+    # `date.today()` makes the test flaky across the IST/UTC midnight
+    # boundary (~18:30 UTC), which is what bit the 2026-05-12 run.
+    today = datetime.now(UTC).date()
     # Today's receipt: +800 cash in
     _voucher(
         db_session,
@@ -258,7 +261,7 @@ def test_dashboard_today_voucher_counts(
     client: TestClient, db_session: Session, fake_registry: _FakeRegistry
 ) -> None:
     user, company, bank, cust, supp, sales, purchase = _seed(db_session)
-    today = date.today()
+    today = datetime.now(UTC).date()
     # 1 normal sale today
     _voucher(
         db_session,
@@ -301,7 +304,7 @@ def test_dashboard_outstanding_totals(
     client: TestClient, db_session: Session, fake_registry: _FakeRegistry
 ) -> None:
     user, company, bank, cust, supp, sales, purchase = _seed(db_session)
-    today = date.today()
+    today = datetime.now(UTC).date()
     _voucher(
         db_session,
         company.id,
@@ -332,7 +335,7 @@ def test_dashboard_gst_liability_mtd_is_output_minus_input(
     client: TestClient, db_session: Session, fake_registry: _FakeRegistry
 ) -> None:
     user, company, bank, cust, supp, sales, purchase = _seed(db_session)
-    today = date.today()
+    today = datetime.now(UTC).date()
     # Output GST 180 (sale)
     _voucher(
         db_session,
@@ -370,7 +373,7 @@ def test_dashboard_gst_liability_floors_at_zero_when_input_exceeds_output(
     client: TestClient, db_session: Session, fake_registry: _FakeRegistry
 ) -> None:
     user, company, bank, cust, supp, sales, purchase = _seed(db_session)
-    today = date.today()
+    today = datetime.now(UTC).date()
     # Input only — no sales side this month
     _voucher(
         db_session,

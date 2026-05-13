@@ -7,6 +7,7 @@ import logging
 from uuid import UUID
 
 from app.core.database import SessionLocal
+
 # Late lookup for the dispatcher: a test that mocks
 # voucher_dispatcher.dispatch_voucher_to_tally expects the worker to
 # pick up the patch. Exception classes are class identity — direct

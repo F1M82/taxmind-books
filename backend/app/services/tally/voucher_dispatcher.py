@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import AuditContext, AuditEmitter
 from app.models.voucher import LedgerEntry, Voucher
+
 # Module import for late `get_registry` lookup; the exception classes
 # and the ConnectorRegistry type annotation are imported directly
 # because tests rely on class identity (for `except`) and types

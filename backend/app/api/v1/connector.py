@@ -36,6 +36,7 @@ from app.services.connector_service import (
     _CodeExpired,
     _CodeNotFound,
 )
+
 # Module import (not `from ... import get_registry`) keeps the lookup
 # late so tests that monkeypatch connector_registry.get_registry see
 # the patch. Convention applies to every patchable callable —

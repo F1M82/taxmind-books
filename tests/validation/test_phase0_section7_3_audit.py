@@ -20,7 +20,6 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-
 from conftest import (
     Scenario,
     add_member,

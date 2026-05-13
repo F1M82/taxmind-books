@@ -67,7 +67,7 @@ def pytest_collection_modifyitems(
         r = httpx.get(f"{url}/health", timeout=2.0)
         if r.status_code >= 500:
             raise RuntimeError(f"backend /health returned {r.status_code}")
-    except Exception as exc:  # noqa: BLE001 — any failure means "down"
+    except Exception as exc:
         skip_marker = pytest.mark.skip(
             reason=(
                 f"backend not reachable at {url} ({exc!s}); start it "
@@ -196,7 +196,7 @@ def db_conn():  # type: ignore[no-untyped-def]
         pytest.skip(f"psycopg not installed: {exc}")
     try:
         conn = psycopg.connect(_db_dsn())
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         pytest.skip(f"Postgres not reachable at {_db_dsn()}: {exc}")
     try:
         yield conn

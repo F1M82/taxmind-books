@@ -20,7 +20,6 @@ from uuid import uuid4
 
 import httpx
 import pytest
-
 from conftest import (
     Scenario,
     auth_headers,

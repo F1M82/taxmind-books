@@ -90,7 +90,13 @@ def list_audit_logs(
             old_value=row.AuditLog.old_value,
             new_value=row.AuditLog.new_value,
             changes=row.AuditLog.changes,
-            ip_address=row.AuditLog.ip_address,
+            # psycopg's INET adapter returns IPv4Address/IPv6Address objects;
+            # pydantic won't coerce them to `str`, so stringify on the way out.
+            ip_address=(
+                str(row.AuditLog.ip_address)
+                if row.AuditLog.ip_address is not None
+                else None
+            ),
             request_id=row.AuditLog.request_id,
             source=row.AuditLog.source,
             created_at=row.AuditLog.created_at,

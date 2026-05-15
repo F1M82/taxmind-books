@@ -1,9 +1,11 @@
-"""Connector endpoints (P0.23 enroll/code; P0.25 status; P0.27 sync)."""
+"""Connector endpoints (P0.23 enroll/code; P0.25 status; P0.27 sync;
+P0.46b sync_masters → ledger ingest)."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Request, Response, status
@@ -17,7 +19,8 @@ from app.api.deps import (
     require_role,
 )
 from app.api.v1.auth import _system_audit_emitter, _user_audit_emitter
-from app.core.database import get_db
+from app.core.audit import AuditContext, AuditEmitter
+from app.core.database import SessionLocal, get_db
 from app.core.exceptions import ConnectorOffline as ConnectorOfflineHTTP
 from app.core.idempotency import IdempotencyHandler
 from app.core.security import CONNECTOR_TOKEN_DEFAULT_EXPIRE_DAYS
@@ -36,6 +39,7 @@ from app.services.connector_service import (
     _CodeExpired,
     _CodeNotFound,
 )
+from app.services.ledger_service import LedgerService
 
 # Module import (not `from ... import get_registry`) keeps the lookup
 # late so tests that monkeypatch connector_registry.get_registry see
@@ -143,9 +147,10 @@ async def trigger_sync(
     """Fire a `sync_masters` command at the active company's connector.
 
     Per API.md: requires auth, X-Company-ID, and Idempotency-Key.
-    Returns 202 immediately; the actual ledger/group ingestion is
-    handled by P0.26's connector command flow (the result fan-out
-    lands in P1+).
+    Returns 202 immediately; the connector reply is persisted in a
+    background task (P0.46b) — successful payloads upsert into the
+    `ledgers` table under `company.id` and emit per-row audit events;
+    persistence failures emit `ledger.sync_failed` and surface in logs.
     """
     # The path `company_id` is a UX redundancy with X-Company-ID;
     # both must match (also a tenant-isolation safeguard).
@@ -162,30 +167,68 @@ async def trigger_sync(
     if not registry.is_online(company.id):
         raise ConnectorOfflineHTTP("Connector is not connected.")
 
-    # Spawn the actual sync_masters dispatch on a background task.
-    # The reply is logged but not propagated back to this HTTP
-    # response (202 means "accepted, not done"); future endpoints
-    # surface ingestion state via the audit log + status snapshot.
+    # Capture the actor + tenant ids *before* spawning the background
+    # task. The request, company, and user objects are scoped to this
+    # function; the bare ids carry through the task safely.
     task_id = uuid4()
+    actor_company_id = company.id
+    actor_user_id = user.id
 
     async def _drive() -> None:
         try:
             result = await registry.send_command(
-                company_id=company.id,
+                company_id=actor_company_id,
                 command="sync_masters",
                 args={},
                 timeout_seconds=120,  # full pull can be slow
                 idempotency_key=str(task_id),
             )
+            status_str = result.get("status")
             logger.info(
                 "sync_masters %s for %s returned status=%s",
                 task_id,
-                company.id,
-                result.get("status"),
+                actor_company_id,
+                status_str,
             )
+            if status_str != "success":
+                return
+            payload = result.get("result") or {}
+            ledgers_in = payload.get("ledgers") or []
+            groups_in = payload.get("groups") or []
+            try:
+                counts = persist_sync_masters_payload(
+                    company_id=actor_company_id,
+                    user_id=actor_user_id,
+                    request_id=task_id,
+                    ledgers=ledgers_in,
+                    groups=groups_in,
+                )
+                logger.info(
+                    "sync_masters %s persisted for %s: "
+                    "created=%d updated=%d skipped=%d",
+                    task_id,
+                    actor_company_id,
+                    counts["created"],
+                    counts["updated"],
+                    counts["skipped"],
+                )
+            except Exception as exc:
+                logger.exception(
+                    "sync_masters %s persist failed for %s",
+                    task_id,
+                    actor_company_id,
+                )
+                _emit_sync_failure_audit(
+                    company_id=actor_company_id,
+                    user_id=actor_user_id,
+                    request_id=task_id,
+                    task_id=task_id,
+                    error=exc,
+                )
+                raise
         except Exception:
             logger.exception(
-                "sync_masters %s failed for %s", task_id, company.id
+                "sync_masters %s failed for %s", task_id, actor_company_id
             )
 
     asyncio.create_task(_drive())
@@ -200,3 +243,105 @@ async def trigger_sync(
     )
     db.commit()
     return body
+
+
+# ---------------------------------------------------------------------
+# sync_masters payload persistence (P0.46b)
+# ---------------------------------------------------------------------
+
+
+def persist_sync_masters_payload(
+    *,
+    company_id: UUID,
+    user_id: UUID | None,
+    request_id: UUID,
+    ledgers: list[dict[str, Any]],
+    groups: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Persist a successful `sync_masters` reply for `company_id`.
+
+    Opens its own session (the API request session has already closed
+    by the time the background task fires) and commits atomically.
+    Loads the actor `Company` and `User` so the AuditEmitter writes
+    rows with the correct tenant + actor attribution.
+    """
+    db = SessionLocal()
+    try:
+        company = db.query(Company).filter(Company.id == company_id).first()
+        user = (
+            db.query(User).filter(User.id == user_id).first()
+            if user_id is not None
+            else None
+        )
+        audit = AuditEmitter(
+            db,
+            AuditContext(
+                company=company,
+                user=user,
+                ip_address=None,
+                user_agent="connector-sync/1.0",
+                request_id=request_id,
+                source="connector",
+            ),
+        )
+        service = LedgerService(db, audit, company_id=company_id)
+        counts = service.upsert_from_sync(ledgers=ledgers, groups=groups)
+        db.commit()
+        return counts
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _emit_sync_failure_audit(
+    *,
+    company_id: UUID,
+    user_id: UUID | None,
+    request_id: UUID,
+    task_id: UUID,
+    error: BaseException,
+) -> None:
+    """Write a `ledger.sync_failed` audit row on its own fresh session.
+
+    The persist session is already in a rolled-back state by the time
+    we get here; we need an independent session so the failure record
+    actually commits.
+    """
+    db = SessionLocal()
+    try:
+        company = db.query(Company).filter(Company.id == company_id).first()
+        user = (
+            db.query(User).filter(User.id == user_id).first()
+            if user_id is not None
+            else None
+        )
+        AuditEmitter(
+            db,
+            AuditContext(
+                company=company,
+                user=user,
+                ip_address=None,
+                user_agent="connector-sync/1.0",
+                request_id=request_id,
+                source="connector",
+            ),
+        ).emit(
+            action="ledger.sync_failed",
+            entity_type="connector_sync",
+            entity_id=task_id,
+            old_value=None,
+            new_value={
+                "error": str(error),
+                "error_class": error.__class__.__name__,
+            },
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "failed to record ledger.sync_failed audit for %s", task_id
+        )
+    finally:
+        db.close()

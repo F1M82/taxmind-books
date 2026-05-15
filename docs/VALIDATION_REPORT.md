@@ -333,6 +333,7 @@ def write_report(out_path: Path, phase: int, env: dict, tests: dict, migrations:
         - [ ] Same Idempotency-Key replayed → only 1 Tally voucher created (verify in TallyPrime)
         - [ ] sync_masters → all Tally ledgers appear in `ledgers` table
         - [ ] sync_masters again → no duplicate ledgers (idempotent)
+        - [ ] after sync_masters, verify ledgers exist in DB with correct names, groups, and tenant scoping (P0.46b)
         - [ ] Backend issues command with wrong company_id → connector rejects, logs locally
 
         Notes:

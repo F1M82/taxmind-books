@@ -908,6 +908,42 @@ The following tasks were added in v1.2 per the AMENDMENTS document. They sit alo
 - `tests/integration/api/test_vouchers_optional_flow.py`
 - `connector/tests/integration/test_optional_voucher_xml.py`
 
+#### P0.46b — Ledger ingest from sync_masters connector reply
+
+**Objective:** Persist the ledger + group payload returned by the connector's `sync_masters` command into the `ledgers` table under the correct tenant. Closes a scope hole caught during §7.5 validation: the original P0.21/P0.22/P0.27 work shipped the WebSocket command plumbing and the `sync_masters` handler, but never wrote the returned ledgers anywhere — the backend logged `status=success` and discarded `result["result"]`.
+
+**Files:**
+- `backend/app/services/ledger_service.py` — new `LedgerService.upsert_from_sync(ledgers, groups)`
+- `backend/app/api/v1/connector.py` — wire ingest into `_drive()` after `send_command` returns `status=success`
+- `backend/app/core/audit.py` — add `ledger.sync_failed` to the allowed actions
+- `backend/tests/integration/api/test_connector_sync_ingest.py` — new
+- `docs/AUDIT.md` — add `ledger.sync_failed` to the action vocabulary
+- `docs/VALIDATION_REPORT.md` — extend §7.5 checklist
+- `docs/PHASE_0_CLOSEOUT.md` — record the scope-hole audit note
+
+**Dependencies:** P0.17, P0.27.
+
+**Acceptance:**
+
+1. **New service method.** `LedgerService.upsert_from_sync(ledgers: list[dict], groups: list[dict])`. Idempotent on `(company_id, name_normalized)`. Sets `group_name` (denormalized string per current schema), `gstin`, `opening_balance` (default 0 on create; untouched on update), `is_active=True`. Emits one `ledger.created` or `ledger.updated` audit event per row.
+
+2. **Wire into `connector.py` `_drive()`** after `send_command` returns `status="success"`: open a fresh `SessionLocal` for `company.id`, call the service with `result["result"]["ledgers"]` and `result["result"]["groups"]`, commit. Errors during persist **must not silently succeed** — log, raise, and emit a `ledger.sync_failed` audit row on a separate session.
+
+3. **Groups** fold into `ledgers.group_name` as denormalized strings. Do **not** create a `groups` table — the schema already exposes `group_name` as a string column, and the design reasoning for keeping group identity denormalized in Phase 0 is preserved.
+
+4. **Regression test.** Integration test that invokes the persistence helper with a fake `sync_masters` payload, asserts the ledgers exist in the DB under the right tenant, asserts re-running with the same data is a no-op (idempotency), and asserts ledgers under a different tenant are isolated.
+
+5. **Validation checklist update.** `VALIDATION_REPORT.md` §7.5 gains: *"after sync_masters, verify ledgers exist in DB with correct names, groups, and tenant scoping."*
+
+6. **Closeout doc.** `PHASE_0_CLOSEOUT.md` records: *"Scope hole in P0.21/P0.22 caught during validation. Original tasks shipped WebSocket plumbing but not the ingest persistence path. P0.46b shipped to close the gap. Audit: this should have been caught by integration testing during P0.22; no such test existed at the time."*
+
+7. **Re-run validation.** After implementation, re-run the `sync_masters` validation. Confirm ledgers land in the DB. Human can then proceed with Section 7.5 remaining checks.
+
+**Effort:** ~1 day. **Phase 0 closeout blocks on this.**
+
+**Tests:**
+- `backend/tests/integration/api/test_connector_sync_ingest.py`
+
 ---
 
 ## Sequencing for v1.2 additions
@@ -924,8 +960,9 @@ The added tasks integrate with the original sequence as follows:
 | In parallel from P0.15 | P0.44 (push) | Independent |
 | In parallel from P0.16 | P0.45 (deletion) | Independent |
 | After P0.26, P0.37 | P0.46 (connector Optional) | Needs both |
+| After P0.27 + §7.5 validation | P0.46b (sync_masters ingest) | Scope hole caught during validation; blocks Phase 0 closeout |
 
-Total task count: **35 → 46.**
+Total task count: **35 → 46 → 47** (P0.46b added in v1.3 to close the sync_masters ingest gap).
 
 
 ## Phase 0 done checklist

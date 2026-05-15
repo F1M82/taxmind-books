@@ -44,6 +44,7 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset(
         "voucher.rejected_optional",
         "ledger.created",
         "ledger.updated",
+        "ledger.sync_failed",
         "recon.session_created",
         "recon.session_completed",
         "recon.match_confirmed",

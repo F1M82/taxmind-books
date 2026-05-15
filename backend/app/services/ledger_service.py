@@ -1,7 +1,8 @@
-"""Ledger service: CRUD + fuzzy search (P0.17)."""
+"""Ledger service: CRUD + fuzzy search (P0.17) + sync_masters ingest (P0.46b)."""
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -215,3 +216,95 @@ class LedgerService:
             old_value=old,
             new_value=new,
         )
+
+    # ------------------------------------------------------------------
+    # sync_masters ingest (P0.46b)
+    # ------------------------------------------------------------------
+
+    def upsert_from_sync(
+        self,
+        *,
+        ledgers: list[dict[str, Any]],
+        groups: list[dict[str, Any]],
+    ) -> dict[str, int]:
+        """Idempotent bulk upsert from a connector `sync_masters` reply.
+
+        Match key is `(company_id, name_normalized)`. New rows are inserted
+        with the model's default `opening_balance=0` and `balance_type=Dr`;
+        existing rows have `group_name`, `gstin`, and `is_active=True`
+        rewritten in place. `opening_balance` is left alone on update so
+        a manually-edited balance is not clobbered by a re-sync.
+
+        `groups` is accepted to mirror the connector payload contract but
+        is not persisted — the schema denormalizes group identity into
+        `ledgers.group_name` (see P0.46b in PHASE_0_TASKS.md).
+
+        Returns a `{created, updated, skipped}` count dict.
+        """
+        del groups  # not persisted in Phase 0; see docstring
+
+        created = 0
+        updated = 0
+        skipped = 0
+
+        for raw in ledgers:
+            name = raw.get("name") if isinstance(raw, dict) else None
+            if not isinstance(name, str) or not name.strip():
+                skipped += 1
+                continue
+
+            norm = _normalize(name)
+            group_name = raw.get("group_name") or None
+            gstin = raw.get("gstin") or None
+
+            existing = (
+                self.db.query(Ledger)
+                .filter(
+                    Ledger.company_id == self.company_id,
+                    Ledger.name_normalized == norm,
+                )
+                .first()
+            )
+
+            if existing is None:
+                ledger_row = Ledger(
+                    company_id=self.company_id,
+                    name=name,
+                    name_normalized=norm,
+                    group_name=group_name,
+                    opening_balance=Decimal("0"),
+                    balance_type=BalanceType.Dr,
+                    gstin=gstin,
+                    is_active=True,
+                )
+                self.db.add(ledger_row)
+                self.db.flush()
+                self.audit.emit(
+                    action="ledger.created",
+                    entity_type="ledger",
+                    entity_id=ledger_row.id,
+                    old_value=None,
+                    new_value=_ledger_snapshot(ledger_row),
+                )
+                created += 1
+                continue
+
+            old_snap = _ledger_snapshot(existing)
+            existing.group_name = group_name
+            existing.gstin = gstin
+            existing.is_active = True
+            self.db.flush()
+            new_snap = _ledger_snapshot(existing)
+            if new_snap == old_snap:
+                # Re-sync of identical data — idempotent no-op, no audit row.
+                continue
+            self.audit.emit(
+                action="ledger.updated",
+                entity_type="ledger",
+                entity_id=existing.id,
+                old_value=old_snap,
+                new_value=new_snap,
+            )
+            updated += 1
+
+        return {"created": created, "updated": updated, "skipped": skipped}

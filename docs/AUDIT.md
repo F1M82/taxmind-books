@@ -112,6 +112,7 @@ Actions follow a strict `entity.verb` naming convention. The full v1 vocabulary:
 | `voucher.rejected_optional` | (v1.2) Optional voucher rejected and deleted from Tally |
 | `ledger.created` | Ledger master created |
 | `ledger.updated` | Ledger master fields modified |
+| `ledger.sync_failed` | (v1.3) `sync_masters` reply received but ingest persistence failed (P0.46b) |
 | `recon.session_created` | Reconciliation session started |
 | `recon.session_completed` | Recon engine finished matching |
 | `recon.match_confirmed` | User confirmed a match |
@@ -244,6 +245,7 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "voucher.posted_as_optional", "voucher.approved_to_regular",
     "voucher.rejected_optional",
     "ledger.created", "ledger.updated",
+    "ledger.sync_failed",                                           # v1.3 (P0.46b)
     "recon.session_created", "recon.session_completed",
     "recon.match_confirmed", "recon.match_rejected",
     "company.created", "company.settings_updated", "company.suspended",

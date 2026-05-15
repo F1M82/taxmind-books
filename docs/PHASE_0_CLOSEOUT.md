@@ -1,8 +1,8 @@
 # Phase 0 Closeout
 
-Phase 0 is complete. All 46 numbered tasks from `PHASE_0_TASKS.md` shipped on `main`. This document records the as-built state.
+Phase 0 is complete pending P0.46b (see "Post-validation patches" below). All 46 originally numbered tasks from `PHASE_0_TASKS.md` shipped on `main`; the 47th task was filed during §7.5 validation to close a scope hole and is required before closeout can be declared final. This document records the as-built state.
 
-- Closing date: 2026-05-12
+- Original closing date: 2026-05-12 (provisional; blocked by P0.46b as of 2026-05-15)
 - Branch: `main` @ `fd8f2aa`
 - Commits in Phase 0: 54 (46 numbered + 8 cross-cutting)
 - Code added: 52,031 insertions / 123 deletions across 254 files
@@ -67,6 +67,12 @@ Three deltas to the v1.2 architecture were applied during Phase 0. Each is docum
 - **v1.2 Patch 1 — `audit_logs.company_id` made `NULL`-able** (`af61df2`). System events (`user.created`, `user.password_changed`, `user.deactivated`, device and account-lifecycle events) have no tenant scope, so the `NOT NULL` constraint was lifted and a partial index `(company_id, created_at DESC) WHERE company_id IS NOT NULL` replaced the previous full index. See `AMENDMENTS_v1.2.md` §"Patch 1" and the dependency note in `app/models/audit_log.py`.
 - **v1.2 Patch 2 — Connector enrollment code storage** (folded into P0.23, `682f029`). `CONNECTOR_PROTOCOL.md` specified the enrollment ceremony but didn't model the storage. `connector_enrollment_codes` (SHA-256 hash of the code, 15-minute expiry, per-company scope) was added so the issued connector token is bound to one company. See `AMENDMENTS_v1.2.md` §"Patch 2".
 - **Audit-FK / append-only trigger conflict** (`fd8f2aa`, docs-only). `audit_logs.user_id` is `ON DELETE SET NULL`, but the Layer-2 trigger refuses the resulting UPDATE — so a user with any audit history can never be hard-deleted. `AUDIT.md` now flags this directly. P0.45's deletion flow accommodates it by anonymising the user row rather than DELETE'ing.
+
+## Post-validation patches
+
+Filed after the original 46-task closeout, while Section 7.5 of `VALIDATION_REPORT.md` was being walked through. Until P0.46b ships and re-validation passes, Phase 0 closeout is not final.
+
+- **P0.46b — Ledger ingest from `sync_masters` connector reply.** Scope hole in P0.21/P0.22 caught during validation. Original tasks shipped WebSocket plumbing but not the ingest persistence path: `connector.py` `_drive()` awaited the connector reply and logged `status=success`, but `result["result"]` (the `ledgers` + `groups` payload) was discarded, and `LedgerService` had no bulk-upsert. P0.46b adds `LedgerService.upsert_from_sync` (idempotent on `(company_id, name_normalized)`), wires it into `_drive()` with a `ledger.sync_failed` audit on persistence error (no silent success), folds the groups list into denormalized `ledgers.group_name` (no new table), and adds `tests/integration/api/test_connector_sync_ingest.py` covering persistence, idempotency, and tenant isolation. **Audit:** this should have been caught by integration testing during P0.22; no such test existed at the time — the WS-plumbing tests in P0.22 stopped at envelope round-trip and never asserted DB state. The Phase 1 task list should treat "every connector command has an integration test that asserts DB outcome" as a gating policy, not a per-task ask.
 
 ## Test totals
 

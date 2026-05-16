@@ -127,19 +127,20 @@ async def test_parse_error_raises_tally_parse_error(
 # ---------------- get_all_ledgers ----------------
 
 
-_LEDGERS_XML = """<?xml version="1.0" ?>
-<ENVELOPE>
+# Mirrors the real Tally TDL-Collection response shape: NAME is an XML
+# attribute of <LEDGER>, PARENT is a child element with a TYPE attribute,
+# PARTYGSTIN is the GSTIN field (not REGISTRATIONTYPE, which is the
+# registration-type enum: Regular / Composition / Consumer / Unregistered).
+_LEDGERS_XML = """<ENVELOPE>
   <BODY>
     <DATA>
-      <COLLECTION>
-        <LEDGER>
-          <NAME>Sharma Traders</NAME>
-          <PARENT>Sundry Debtors</PARENT>
-          <REGISTRATIONTYPE>27BBBBB5678B1Z5</REGISTRATIONTYPE>
+      <COLLECTION ISMSTDEPTYPE="Yes" MSTDEPTYPE="8">
+        <LEDGER NAME="Sharma Traders" RESERVEDNAME="">
+          <PARENT TYPE="String">Sundry Debtors</PARENT>
+          <PARTYGSTIN>27BBBBB5678B1Z5</PARTYGSTIN>
         </LEDGER>
-        <LEDGER>
-          <NAME>Bank Account</NAME>
-          <PARENT>Bank Accounts</PARENT>
+        <LEDGER NAME="Bank Account" RESERVEDNAME="">
+          <PARENT TYPE="String">Bank Accounts</PARENT>
         </LEDGER>
       </COLLECTION>
     </DATA>
@@ -169,19 +170,18 @@ async def test_get_all_ledgers_parses(
 # ---------------- get_all_groups ----------------
 
 
-_GROUPS_XML = """<?xml version="1.0" ?>
-<ENVELOPE>
+_GROUPS_XML = """<ENVELOPE>
   <BODY>
-    <COLLECTION>
-      <GROUP>
-        <NAME>Sundry Debtors</NAME>
-        <PARENT>Current Assets</PARENT>
-      </GROUP>
-      <GROUP>
-        <NAME>Bank Accounts</NAME>
-        <PARENT>Current Assets</PARENT>
-      </GROUP>
-    </COLLECTION>
+    <DATA>
+      <COLLECTION ISMSTDEPTYPE="Yes" MSTDEPTYPE="4">
+        <GROUP NAME="Sundry Debtors" RESERVEDNAME="">
+          <PARENT TYPE="String">Current Assets</PARENT>
+        </GROUP>
+        <GROUP NAME="Bank Accounts" RESERVEDNAME="Bank Accounts">
+          <PARENT TYPE="String">Current Assets</PARENT>
+        </GROUP>
+      </COLLECTION>
+    </DATA>
   </BODY>
 </ENVELOPE>
 """

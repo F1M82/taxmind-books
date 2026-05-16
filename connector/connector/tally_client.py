@@ -17,6 +17,7 @@ Per CONNECTOR_PROTOCOL.md command catalog, this client exposes:
 
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -151,6 +152,33 @@ def _get_text(element: ET.Element, tag: str, default: str = "") -> str:
     return child.text if child is not None and child.text else default
 
 
+def _strip_tally_ctrl(text: str) -> str:
+    # Tally prefixes reserved master names with an ASCII control char
+    # (commonly \x04, the EOT marker) to distinguish system-defined groups
+    # like "Primary" from user-created ones. We strip leading control chars
+    # for storage; embedded ones are left alone (none are expected in
+    # well-formed names).
+    return text.lstrip("".join(chr(c) for c in range(0x20))).strip()
+
+
+# `&#N;` numeric character references where N is an XML-1.0-forbidden
+# control codepoint. Tally emits `&#4;` (EOT) inline to mark reserved
+# masters; expat rejects it. We drop those refs at the response boundary
+# so downstream parsing is well-formed. Permitted control chars 0x09
+# (tab), 0x0A (LF), 0x0D (CR) and everything ≥ 0x20 are left intact.
+_BAD_XML_REF_RE = re.compile(r"&#(?:(\d+)|[xX]([0-9a-fA-F]+));")
+
+
+def _sanitize_tally_xml(body: str) -> str:
+    def _replace(m: re.Match[str]) -> str:
+        n = int(m.group(1)) if m.group(1) else int(m.group(2), 16)
+        if n in (0x09, 0x0A, 0x0D) or n >= 0x20:
+            return m.group(0)
+        return ""
+
+    return _BAD_XML_REF_RE.sub(_replace, body)
+
+
 def _parse_tally_date(tally_date: str) -> date:
     """Tally's YYYYMMDD → Python date. Falls back to today on bad input."""
     if tally_date and len(tally_date) == 8:
@@ -225,7 +253,7 @@ class TallyClient:
             raise TallyUnreachable(str(exc)) from exc
         if response.status_code != 200:
             raise TallyResponseError(response.status_code, response.text)
-        return response.text
+        return _sanitize_tally_xml(response.text)
 
     # ------------------------------------------------------------------
     # get_ledger (party transactions)
@@ -266,17 +294,33 @@ class TallyClient:
     # ------------------------------------------------------------------
 
     async def get_all_ledgers(self) -> list[LedgerMaster]:
+        # Tally rejects the bare `<TYPE>Data</TYPE><ID>Ledger</ID>` form
+        # ("Unknown Request, cannot be processed") because that idiom
+        # exports a SINGLE ledger and needs an SVLEDGERNAME variable.
+        # For "list all ledgers" the canonical idiom is a TDL Collection
+        # request with an in-line collection definition.
         xml = (
             "<ENVELOPE>"
             "<HEADER>"
-            "<TALLYREQUEST>Export Data</TALLYREQUEST>"
-            "<TYPE>Data</TYPE>"
-            "<ID>Ledger</ID>"
+              "<VERSION>1</VERSION>"
+              "<TALLYREQUEST>Export</TALLYREQUEST>"
+              "<TYPE>Collection</TYPE>"
+              "<ID>TaxMindLedgers</ID>"
             "</HEADER>"
             "<BODY><DESC>"
-            "<STATICVARIABLES>"
-            "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
-            "</STATICVARIABLES>"
+              "<STATICVARIABLES>"
+                "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
+              "</STATICVARIABLES>"
+              "<TDL>"
+                "<TDLMESSAGE>"
+                  '<COLLECTION NAME="TaxMindLedgers" ISMODIFY="No">'
+                    "<TYPE>Ledger</TYPE>"
+                    "<NATIVEMETHOD>Name</NATIVEMETHOD>"
+                    "<NATIVEMETHOD>Parent</NATIVEMETHOD>"
+                    "<NATIVEMETHOD>PartyGSTIN</NATIVEMETHOD>"
+                  "</COLLECTION>"
+                "</TDLMESSAGE>"
+              "</TDL>"
             "</DESC></BODY></ENVELOPE>"
         )
         body = await self._post_xml(xml)
@@ -287,17 +331,29 @@ class TallyClient:
     # ------------------------------------------------------------------
 
     async def get_all_groups(self) -> list[GroupMaster]:
+        # See get_all_ledgers — same idiom (TDL Collection) for the same
+        # reason. The bare Data/Group form is rejected by TallyPrime.
         xml = (
             "<ENVELOPE>"
             "<HEADER>"
-            "<TALLYREQUEST>Export Data</TALLYREQUEST>"
-            "<TYPE>Data</TYPE>"
-            "<ID>Group</ID>"
+              "<VERSION>1</VERSION>"
+              "<TALLYREQUEST>Export</TALLYREQUEST>"
+              "<TYPE>Collection</TYPE>"
+              "<ID>TaxMindGroups</ID>"
             "</HEADER>"
             "<BODY><DESC>"
-            "<STATICVARIABLES>"
-            "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
-            "</STATICVARIABLES>"
+              "<STATICVARIABLES>"
+                "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
+              "</STATICVARIABLES>"
+              "<TDL>"
+                "<TDLMESSAGE>"
+                  '<COLLECTION NAME="TaxMindGroups" ISMODIFY="No">'
+                    "<TYPE>Group</TYPE>"
+                    "<NATIVEMETHOD>Name</NATIVEMETHOD>"
+                    "<NATIVEMETHOD>Parent</NATIVEMETHOD>"
+                  "</COLLECTION>"
+                "</TDLMESSAGE>"
+              "</TDL>"
             "</DESC></BODY></ENVELOPE>"
         )
         body = await self._post_xml(xml)
@@ -477,14 +533,23 @@ class TallyClient:
 
         out: list[LedgerMaster] = []
         for ledger in root.findall(".//LEDGER"):
-            name = _get_text(ledger, "NAME")
+            # In real Tally TDL-Collection responses, `<LEDGER>` carries
+            # NAME as an XML attribute; the inner `<NAME>` lives two levels
+            # deep under `<LANGUAGENAME.LIST>` and `ET.find("NAME")` won't
+            # reach it. PARTYGSTIN is the actual GSTIN field — the old
+            # parser read REGISTRATIONTYPE which is the registration-type
+            # enum (Regular / Composition / Consumer / Unregistered), not
+            # the GSTIN.
+            name = _strip_tally_ctrl(ledger.get("NAME", ""))
             if not name:
                 continue
+            parent = _strip_tally_ctrl(_get_text(ledger, "PARENT"))
+            gstin = _get_text(ledger, "PARTYGSTIN", "").strip() or None
             out.append(
                 LedgerMaster(
                     name=name,
-                    parent_group=_get_text(ledger, "PARENT"),
-                    gstin=_get_text(ledger, "REGISTRATIONTYPE", "") or None,
+                    parent_group=parent,
+                    gstin=gstin,
                 )
             )
         return out
@@ -497,12 +562,11 @@ class TallyClient:
 
         out: list[GroupMaster] = []
         for group in root.findall(".//GROUP"):
-            name = _get_text(group, "NAME")
+            name = _strip_tally_ctrl(group.get("NAME", ""))
             if not name:
                 continue
-            out.append(
-                GroupMaster(name=name, parent=_get_text(group, "PARENT"))
-            )
+            parent = _strip_tally_ctrl(_get_text(group, "PARENT"))
+            out.append(GroupMaster(name=name, parent=parent))
         return out
 
     def _parse_trial_balance(

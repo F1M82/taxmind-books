@@ -1,11 +1,12 @@
 # Phase 0 Closeout
 
-Phase 0 is complete pending P0.46b (see "Post-validation patches" below). All 46 originally numbered tasks from `PHASE_0_TASKS.md` shipped on `main`; the 47th task was filed during §7.5 validation to close a scope hole and is required before closeout can be declared final. This document records the as-built state.
+Phase 0 is complete. All 46 originally numbered tasks from `PHASE_0_TASKS.md` shipped on `main`; two post-validation patches (P0.46b and P0.46c) were filed during §7.5 walk-through to close a scope hole and ship the end-to-end fix. This document records the as-built state.
 
-- Original closing date: 2026-05-12 (provisional; blocked by P0.46b as of 2026-05-15)
-- Branch: `main` @ `fd8f2aa`
-- Commits in Phase 0: 54 (46 numbered + 8 cross-cutting)
-- Code added: 52,031 insertions / 123 deletions across 254 files
+- Original closing date: 2026-05-12 (provisional; blocked by P0.46b as of 2026-05-15, then by P0.46c as of 2026-05-16)
+- Final closeout: 2026-05-16 after §7.5 sync_masters validated end-to-end
+- Branch: `main` @ `f0c5fc0`
+- Commits in Phase 0: 56 (46 numbered + 10 cross-cutting)
+- Code added: 52,031 insertions / 123 deletions across 254 files (pre-P0.46b/c; current ahead-of-origin tip is `f0c5fc0`)
 
 ## Task ledger
 
@@ -70,19 +71,21 @@ Three deltas to the v1.2 architecture were applied during Phase 0. Each is docum
 
 ## Post-validation patches
 
-Filed after the original 46-task closeout, while Section 7.5 of `VALIDATION_REPORT.md` was being walked through. Until P0.46b ships and re-validation passes, Phase 0 closeout is not final.
+Filed after the original 46-task closeout, while Section 7.5 of `VALIDATION_REPORT.md` was being walked through. Both ship on `main`; with P0.46c re-validation passing on 2026-05-16, Phase 0 closeout is final.
 
 - **P0.46b — Ledger ingest from `sync_masters` connector reply.** Scope hole in P0.21/P0.22 caught during validation. Original tasks shipped WebSocket plumbing but not the ingest persistence path: `connector.py` `_drive()` awaited the connector reply and logged `status=success`, but `result["result"]` (the `ledgers` + `groups` payload) was discarded, and `LedgerService` had no bulk-upsert. P0.46b adds `LedgerService.upsert_from_sync` (idempotent on `(company_id, name_normalized)`), wires it into `_drive()` with a `ledger.sync_failed` audit on persistence error (no silent success), folds the groups list into denormalized `ledgers.group_name` (no new table), and adds `tests/integration/api/test_connector_sync_ingest.py` covering persistence, idempotency, and tenant isolation. **Audit:** this should have been caught by integration testing during P0.22; no such test existed at the time — the WS-plumbing tests in P0.22 stopped at envelope round-trip and never asserted DB state. The Phase 1 task list should treat "every connector command has an integration test that asserts DB outcome" as a gating policy, not a per-task ask.
+
+- **P0.46c — TDL Collection idiom for `sync_masters` Tally XML.** P0.46b's integration tests all passed but live `sync_masters` still produced 0 ledgers in DB. Diagnosis via existing audit logs (`created=0 updated=0 skipped=0` — mathematically requires `len(ledgers)==0`) localised the bug entirely upstream of P0.46b: the connector's Tally XML. Three connector-side bugs stacked, two latent because the rejected envelope never let the parser run on real data. (1) Envelope: `<TYPE>Data</TYPE><ID>Ledger</ID>` (and `<ID>Group</ID>`) is TallyPrime's idiom for "export ONE by name", not "list all" — returned `<RESPONSE>Unknown Request, cannot be processed</RESPONSE>` (59 bytes). Rewritten to `<TYPE>Collection</TYPE>` with an in-line TDL collection definition (NATIVEMETHOD Name / Parent / PartyGSTIN). (2) Parser XPath: `<NAME>` is an XML attribute of `<LEDGER>` in real Tally responses; the only `<NAME>` child is two levels deep under `<LANGUAGENAME.LIST>` and `ET.find("NAME")` doesn't traverse descendants. Switched to `ledger.get("NAME")`. (3) GSTIN field: `<REGISTRATIONTYPE>` is the registration-type enum (Regular / Composition / Consumer / Unregistered), not the GSTIN string. Switched to `<PARTYGSTIN>`. Bonus: Tally inlines `&#4;` (EOT) as a reserved-master marker on system-defined groups like "Primary"; XML 1.0 forbids that codepoint in text and `ET.fromstring` raised `ParseError` against real responses. Added `_sanitize_tally_xml` at the `_post_xml` boundary (every parser benefits) plus `_strip_tally_ctrl` for any leading control chars that survive entity decoding. Tests added: `connector/tests/integration/test_tally_xml_idioms.py` with two golden fixtures captured live from TallyPrime (`connector/tests/fixtures/tally_responses/ledgers_collection.xml` + `groups_collection.xml`). Synthetic XML still in `tests/unit/test_tally_client.py` was updated to match real Tally shape — the old synthetic fixture encoded the same bug as the parser, which is why P0.46b's tests passed against it. **Audit:** the test class P0.46b shipped without was *parser-against-real-Tally-XML*. Synthetic fixtures alone can't catch parser/XML-shape disagreements when the fixture itself encodes the bug. Phase 1 gating policy: every Tally command needs a golden response captured live, plus a parser test that loads it.
 
 ## Test totals
 
 | Tier | Tests | Suite command |
 |---|---|---|
 | Backend (`backend/tests`) | 519 passed | `pytest tests/integration/ tests/unit/` |
-| Connector (`connector/tests`) | 47 passed | `pytest` |
+| Connector (`connector/tests`) | 51 passed | `pytest` |
 | Mobile (`mobile`) | 35 passed (10 suites) | `npm test` |
 
-Totals are full-suite green at `fd8f2aa`. Tenant-isolation tests (`backend/tests/tenant_isolation/`) are part of the backend total but live in their own marker.
+Totals are full-suite green at `f0c5fc0`. Tenant-isolation tests (`backend/tests/tenant_isolation/`) are part of the backend total but live in their own marker. The connector total rose from 47 to 51 with P0.46c's golden-fixture suite.
 
 ## Code volume
 

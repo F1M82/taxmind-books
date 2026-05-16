@@ -331,12 +331,27 @@ def write_report(out_path: Path, phase: int, env: dict, tests: dict, migrations:
         - [ ] Start Tally → next retry succeeds, tally_posted_at populated
         - [ ] Disconnect network on connector PC for 2 min → backend marks connected: false after 90s, reconnects automatically
         - [ ] Same Idempotency-Key replayed → only 1 Tally voucher created (verify in TallyPrime)
-        - [ ] sync_masters → all Tally ledgers appear in `ledgers` table
+        - [x] sync_masters → all Tally ledgers appear in `ledgers` table
         - [ ] sync_masters again → no duplicate ledgers (idempotent)
-        - [ ] after sync_masters, verify ledgers exist in DB with correct names, groups, and tenant scoping (P0.46b)
+        - [x] after sync_masters, verify ledgers exist in DB with correct names, groups, and tenant scoping (P0.46b)
         - [ ] Backend issues command with wrong company_id → connector rejects, logs locally
 
         Notes:
+        - 2026-05-16: Phase 0 live validation. sync_masters end-to-end
+          confirmed against live TallyPrime. 5 ledgers persisted with
+          correct group_name (ABC LTD → Sundry Creditors, Cash →
+          Cash-in-Hand, HDFC BANK → Bank Accounts, Profit & Loss A/c
+          → Primary, Xyz Ltd → Sundry Debtors). 5 `ledger.created`
+          audit rows emitted (one per ledger). Required P0.46c
+          (commit f0c5fc0): the original Tally XML envelope
+          (`<TYPE>Data</TYPE><ID>Ledger</ID>`) was being rejected by
+          TallyPrime ("Unknown Request, cannot be processed"), and
+          two latent parser bugs (NAME read as child element instead
+          of XML attribute; GSTIN read from REGISTRATIONTYPE which is
+          the enum field, not the GSTIN string) would have masked the
+          envelope fix. See P0.46c entry in PHASE_0_CLOSEOUT.md.
+        - Idempotency re-run (`sync_masters again`) not yet validated;
+          remains open under §7.5.
 
         ### 7.6 End-to-end (the Phase 0 deliverable)
         - [ ] Mobile app: register new user

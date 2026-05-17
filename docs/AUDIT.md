@@ -106,10 +106,11 @@ Actions follow a strict `entity.verb` naming convention. The full v1 vocabulary:
 | `voucher.updated` | Voucher fields modified |
 | `voucher.cancelled` | Voucher status changed to CANCELLED |
 | `voucher.posted_to_tally` | Voucher successfully posted to Tally |
-| `voucher.tally_post_failed` | Tally rejected the voucher |
+| `voucher.tally_post_failed` | Non-retryable Tally rejection (validation error, missing ledger). The voucher remains in `pending_tally_post` for human inspection. (Description refined in P0.46d.) |
 | `voucher.posted_as_optional` | (v1.2) AI-extracted voucher posted to Tally as Optional |
 | `voucher.approved_to_regular` | (v1.2) Optional voucher promoted to Regular by admin |
 | `voucher.rejected_optional` | (v1.2) Optional voucher rejected and deleted from Tally |
+| `voucher.tally_post_queued` | (P0.46d, v1.2 down-scope of v1.3) Retryable dispatch failure — connector offline, command timeout, or wrong Tally company open. Voucher stays in `pending_tally_post`; Celery backoff or heartbeat-driven drain re-fires. |
 | `ledger.created` | Ledger master created |
 | `ledger.updated` | Ledger master fields modified |
 | `ledger.sync_failed` | (v1.3) `sync_masters` reply received but ingest persistence failed (P0.46b) |

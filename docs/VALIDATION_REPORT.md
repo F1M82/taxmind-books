@@ -324,11 +324,18 @@ def write_report(out_path: Path, phase: int, env: dict, tests: dict, migrations:
         Notes:
 
         ### 7.5 Tally Connector (per CONNECTOR_PROTOCOL.md)
+
+        #### 7.5a — In the books immediately (P0.46d lifecycle split)
+        - [ ] POST voucher while Tally stopped → 201 with `status="pending_tally_post"`, `tally_post_queued_at` populated, `tally_posted_at` null; `voucher.created` audit row written
+        - [ ] Trial balance / P&L include the queued voucher (book-truthful)
+        - [ ] Mobile voucher list shows "Queued for Tally" badge
+
+        #### 7.5b — Syncs to Tally when reachable
         - [ ] Install connector on Windows VM with Tally running → registers within 5 seconds
         - [ ] GET /connector/status → connected: true, tally_running: true
         - [ ] Stop Tally → next heartbeat shows tally_running: false
-        - [ ] POST voucher while Tally stopped → voucher in DB, audit log shows tally_post_failed, retry queued
-        - [ ] Start Tally → next retry succeeds, tally_posted_at populated
+        - [ ] POST voucher while Tally stopped → audit log shows `voucher.tally_post_queued` (retryable), retry queued; status stays `pending_tally_post`
+        - [ ] Start Tally → next retry succeeds, status transitions to `posted`, `tally_posted_at` populated, audit log shows `voucher.posted_to_tally`
         - [ ] Disconnect network on connector PC for 2 min → backend marks connected: false after 90s, reconnects automatically
         - [ ] Same Idempotency-Key replayed → only 1 Tally voucher created (verify in TallyPrime)
         - [x] sync_masters → all Tally ledgers appear in `ledgers` table
@@ -350,6 +357,14 @@ def write_report(out_path: Path, phase: int, env: dict, tests: dict, migrations:
           of XML attribute; GSTIN read from REGISTRATIONTYPE which is
           the enum field, not the GSTIN string) would have masked the
           envelope fix. See P0.46c entry in PHASE_0_CLOSEOUT.md.
+        - 2026-05-17: §7.5 split into 7.5a (in books immediately) and
+          7.5b (syncs to Tally when reachable) per the P0.46d lifecycle
+          fix. Status `posted` now means "Tally accepted"; the new
+          `pending_tally_post` status means "in books, waiting for
+          Tally". Reports include both. The 7.5b "POST voucher while
+          Tally stopped" check now expects `voucher.tally_post_queued`
+          rather than `voucher.tally_post_failed`; the latter is
+          reserved for non-retryable Tally rejections.
         - Idempotency re-run (`sync_masters again`) not yet validated;
           remains open under §7.5.
 

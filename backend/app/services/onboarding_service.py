@@ -120,7 +120,12 @@ def build_checklist(  # audit-exempt: read-only aggregation
     first_voucher = db.scalar(
         select(func.min(Voucher.created_at)).where(
             Voucher.company_id == company.id,
-            Voucher.status == VoucherStatus.posted,
+            # P0.46d: "first voucher posted" is a user-action milestone;
+            # the user has done their part the moment the row exists,
+            # regardless of whether Tally has mirrored it.
+            Voucher.status.in_(
+                [VoucherStatus.posted, VoucherStatus.pending_tally_post]
+            ),
         )
     )
     items.append(

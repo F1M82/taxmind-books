@@ -24,7 +24,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.audit import AuditContext, AuditEmitter
-from app.models.voucher import LedgerEntry, Voucher
+from app.models.voucher import LedgerEntry, Voucher, VoucherStatus
 
 # Module import for late `get_registry` lookup; the exception classes
 # and the ConnectorRegistry type annotation are imported directly
@@ -184,8 +184,13 @@ async def dispatch_voucher_to_tally(
             voucher.tally_post_attempts or 0
         ) + 1
         voucher.tally_last_error = str(exc)
+        # P0.46d: retryable failures keep the voucher in
+        # `pending_tally_post` and emit `voucher.tally_post_queued`
+        # (the queue-on-mismatch signal from v1.3 AUDIT.md). Non-
+        # retryable connector errors stay on `voucher.tally_post_failed`
+        # below — they're the ones a human has to inspect.
         audit.emit(
-            action="voucher.tally_post_failed",
+            action="voucher.tally_post_queued",
             entity_type="voucher",
             entity_id=voucher.id,
             old_value=None,
@@ -223,6 +228,11 @@ async def dispatch_voucher_to_tally(
         result.get("result", {}).get("tally_voucher_guid")
     )
     voucher.tally_last_error = None
+    # P0.46d: dispatcher is the only place that flips status to
+    # `posted`. Idempotent — vouchers seeded directly as `posted`
+    # (Optional flow re-approval, tests, backfills) stay that way.
+    if voucher.status == VoucherStatus.pending_tally_post:
+        voucher.status = VoucherStatus.posted
     posted_as_optional = bool(voucher.is_optional_in_tally)
     audit.emit(
         action=(

@@ -42,13 +42,14 @@ def _voucher_two_lines(  # type: ignore[no-untyped-def]
     cr_ledger,
     amount: Decimal,
     is_optional: bool = False,
+    status_: VoucherStatus = VoucherStatus.posted,
 ):
     v = Voucher(
         company_id=company_id,
         voucher_type=voucher_type,
         date=on_date,
         total_amount=amount,
-        status=VoucherStatus.posted,
+        status=status_,
         source="manual",
         is_auto_posted=False,
         gst_applicable=False,
@@ -175,6 +176,45 @@ def test_profit_loss_net_is_income_minus_expense(
     assert Decimal(body["expense"]["total"]) == Decimal("2800.00")
     assert body["net"]["type"] == "profit"
     assert Decimal(body["net"]["value"]) == Decimal("2200.00")
+
+
+def test_profit_loss_includes_pending_tally_post_vouchers(
+    client: TestClient, db_session: Session
+) -> None:
+    """P0.46d: a queued (pending_tally_post) voucher is live in the
+    books for P&L purposes; otherwise an offline-Tally entry vanishes
+    from the P&L until Tally finally acknowledges it (up to 30 days
+    under v1.3's expiry rule)."""
+    user, company = _seed(db_session)
+    # Extra sale entered while Tally is offline.
+    sales = (
+        db_session.query(Ledger)
+        .filter(Ledger.company_id == company.id, Ledger.name == "Sales")
+        .one()
+    )
+    cust = (
+        db_session.query(Ledger)
+        .filter(Ledger.company_id == company.id, Ledger.name == "Acme")
+        .one()
+    )
+    _voucher_two_lines(
+        db_session,
+        company.id,
+        voucher_type=VoucherType.Sales,
+        on_date=date(2026, 4, 25),
+        dr_ledger=cust,
+        cr_ledger=sales,
+        amount=Decimal("1500.00"),
+        status_=VoucherStatus.pending_tally_post,
+    )
+    r = client.get(
+        "/api/v1/reports/profit-loss?from_date=2026-04-01&to_date=2026-04-30",
+        headers=_h(user, company),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # Income was 5000 from _seed; the queued voucher adds 1500.
+    assert Decimal(body["income"]["total"]) == Decimal("6500.00")
 
 
 def test_profit_loss_loss_when_expense_exceeds_income(

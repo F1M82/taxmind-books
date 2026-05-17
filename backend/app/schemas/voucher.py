@@ -110,6 +110,8 @@ class VoucherListItem(TaxMindBooksBase):
     is_optional_in_tally: bool = False
     approved_to_regular_at: datetime | None = None
     tally_posted_at: datetime | None = None
+    tally_post_queued_at: datetime | None = None
+    tally_last_error: str | None = None
     created_at: datetime
 
 
@@ -156,6 +158,9 @@ class VoucherOut(TaxMindBooksBase):
     tds_amount: Money
     tds_section: str | None = None
     tally_posted_at: datetime | None = None
+    tally_post_queued_at: datetime | None = None
+    tally_post_attempts: int = 0
+    tally_last_error: str | None = None
     is_optional_in_tally: bool = False
     approved_to_regular_at: datetime | None = None
     approved_to_regular_by: UUID | None = None

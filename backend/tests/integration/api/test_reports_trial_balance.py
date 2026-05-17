@@ -224,6 +224,51 @@ def test_trial_balance_respects_date_cutoff(
     assert Decimal(by_name["Acme"]["closing_balance"]) == Decimal("1000.00")
 
 
+def test_trial_balance_includes_pending_tally_post_vouchers(
+    client: TestClient, db_session: Session
+) -> None:
+    """P0.46d: a voucher queued for Tally is still live in the books.
+    Trial balance must include it; otherwise the user's report goes
+    blank when Tally is offline."""
+    user = make_user(db_session)
+    company = make_company(db_session)
+    make_membership(db_session, user, company, role=CompanyRole.viewer)
+    bank = Ledger(
+        company_id=company.id,
+        name="Bank",
+        name_normalized="bank",
+        group_name="Bank Accounts",
+        balance_type=BalanceType.Dr,
+    )
+    cust = Ledger(
+        company_id=company.id,
+        name="QueuedAcme",
+        name_normalized="queuedacme",
+        group_name="Sundry Debtors",
+        balance_type=BalanceType.Dr,
+    )
+    db_session.add_all([bank, cust])
+    db_session.commit()
+    _post_voucher(
+        db_session,
+        company.id,
+        voucher_type=VoucherType.Receipt,
+        on_date=date(2026, 5, 8),
+        dr_ledger=bank,
+        cr_ledger=cust,
+        amount=Decimal("750.00"),
+        status_=VoucherStatus.pending_tally_post,
+    )
+    r = client.get(
+        "/api/v1/reports/trial-balance?as_of_date=2026-05-31",
+        headers=_h(user, company),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    by_name = {lg["ledger_name"]: lg for lg in body["ledgers"]}
+    assert Decimal(by_name["Bank"]["closing_balance"]) == Decimal("750.00")
+
+
 def test_trial_balance_tenant_isolated(
     client: TestClient, db_session: Session
 ) -> None:

@@ -55,6 +55,16 @@ _PENDING_APPROVALS_ALERT_THRESHOLD = 10
 # Group names that count as "cash" for the dashboard cash-flow tile.
 _CASH_GROUPS = frozenset({"bank accounts", "cash-in-hand", "bank od a/c"})
 
+# Voucher statuses that are "live in the books" for reporting purposes.
+# `pending_tally_post` rows have not been mirrored to Tally yet but are
+# real entries the user made; reports show them so the dashboard moves
+# the moment a voucher is entered, not when Tally finally accepts it.
+# (P0.46d) See trial_balance / profit_loss for the matching filter.
+_BOOKS_LIVE_STATUSES = (
+    VoucherStatus.posted,
+    VoucherStatus.pending_tally_post,
+)
+
 # Voucher types whose vouchers.cgst+sgst+igst+cess contribute to output
 # GST liability. Same set used by the future GST analytic per REPORTS.md.
 _OUTPUT_GST_TYPES = frozenset({VoucherType.Sales, VoucherType.DebitNote})
@@ -309,7 +319,10 @@ def _metrics_for_range(  # audit-exempt: read-only aggregation
             Ledger.company_id == company_id,
             Voucher.date >= from_date,
             Voucher.date <= to_date,
-            Voucher.status == VoucherStatus.posted,
+            # P0.46d: vouchers in `pending_tally_post` are live in the
+            # books even though Tally hasn't mirrored them yet — the
+            # cash movement they represent is real for dashboard purposes.
+            Voucher.status.in_(_BOOKS_LIVE_STATUSES),
             Voucher.is_optional_in_tally.is_(False),
             func.lower(func.trim(Ledger.group_name)).in_(_CASH_GROUPS),
         )
@@ -393,7 +406,7 @@ def _gst_liability_mtd(  # audit-exempt: read-only aggregation
             Voucher.company_id == company_id,
             Voucher.date >= from_date,
             Voucher.date <= to_date,
-            Voucher.status == VoucherStatus.posted,
+            Voucher.status.in_(_BOOKS_LIVE_STATUSES),
             Voucher.is_optional_in_tally.is_(False),
             Voucher.gst_applicable.is_(True),
             or_(

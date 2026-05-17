@@ -95,7 +95,13 @@ def _period_movement_subquery(
             LedgerEntry.company_id == company_id,
             Voucher.company_id == company_id,
             Voucher.date <= as_of_date,
-            Voucher.status == VoucherStatus.posted,
+            # P0.46d: include vouchers queued for Tally; status is
+            # "live in the books" and tally_posted_at is the orthogonal
+            # "mirrored to Tally" signal. Reports must reflect what the
+            # user has entered, not just what Tally has acknowledged.
+            Voucher.status.in_(
+                [VoucherStatus.posted, VoucherStatus.pending_tally_post]
+            ),
             Voucher.is_optional_in_tally.is_(False),
         )
         .group_by(LedgerEntry.ledger_id)

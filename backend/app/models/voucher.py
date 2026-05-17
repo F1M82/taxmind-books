@@ -70,6 +70,12 @@ class VoucherStatus(str, PyEnum):
     draft = "draft"
     pending_approval = "pending_approval"
     optional = "optional"
+    # `pending_tally_post` is the initial state for a voucher that
+    # exists in the books but is still waiting for Tally to confirm.
+    # The dispatcher transitions it to `posted` once Tally accepts.
+    # Reports treat `pending_tally_post` as a live entry; only the
+    # `tally_posted_at` timestamp signals "mirrored to Tally". (P0.46d)
+    pending_tally_post = "pending_tally_post"
     posted = "posted"
     cancelled = "cancelled"
     rejected_optional = "rejected_optional"
@@ -159,6 +165,9 @@ class Voucher(Base, TenantScopedMixin):
         Integer, nullable=False, server_default=text("0")
     )
     tally_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tally_post_queued_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # v1.2: Optional voucher flow
     is_optional_in_tally: Mapped[bool] = mapped_column(
@@ -268,7 +277,7 @@ class Voucher(Base, TenantScopedMixin):
         Index(
             "idx_vouchers_unposted_to_tally",
             "company_id",
-            postgresql_where="status = 'posted' AND tally_posted_at IS NULL",
+            postgresql_where="status = 'pending_tally_post'",
         ),
         Index(
             "idx_vouchers_optional_pending",

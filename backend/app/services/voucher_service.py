@@ -126,7 +126,12 @@ class VoucherService:
             narration=data.narration,
             reference=data.reference,
             total_amount=data.total_amount,
-            status=VoucherStatus.posted,
+            # P0.46d: vouchers are queued for Tally, not "posted", at
+            # creation. The dispatcher transitions to `posted` only on
+            # Tally success. Reports include both states (status is
+            # "live in the books"; tally_posted_at is "mirrored to Tally").
+            status=VoucherStatus.pending_tally_post,
+            tally_post_queued_at=datetime.now(UTC),
             source="manual",
             is_auto_posted=False,
             gst_applicable=data.gst_applicable,

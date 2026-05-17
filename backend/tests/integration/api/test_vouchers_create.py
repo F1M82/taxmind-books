@@ -90,7 +90,11 @@ def test_create_voucher_201(client: TestClient, db_session: Session) -> None:
     body = r.json()
     UUID(body["id"])
     assert body["voucher_type"] == "Receipt"
-    assert body["status"] == "posted"
+    # P0.46d: create lands the voucher in `pending_tally_post`; the
+    # dispatcher transitions it to `posted` only after Tally confirms.
+    assert body["status"] == "pending_tally_post"
+    assert body["tally_post_queued_at"] is not None
+    assert body["tally_posted_at"] is None
     assert body["source"] == "manual"
     assert Decimal(body["total_amount"]) == Decimal("50000.00")
     assert len(body["entries"]) == 2
@@ -101,7 +105,8 @@ def test_create_voucher_201(client: TestClient, db_session: Session) -> None:
     voucher = (
         db_session.query(Voucher).filter(Voucher.id == UUID(body["id"])).one()
     )
-    assert voucher.status == VoucherStatus.posted
+    assert voucher.status == VoucherStatus.pending_tally_post
+    assert voucher.tally_post_queued_at is not None
     assert voucher.created_by == user.id
     entries = db_session.query(LedgerEntry).filter(
         LedgerEntry.voucher_id == voucher.id
@@ -131,7 +136,7 @@ def test_create_voucher_writes_audit(
     )
     assert audit.user_id == user.id
     assert audit.company_id == company.id
-    assert audit.new_value["status"] == "posted"
+    assert audit.new_value["status"] == "pending_tally_post"
     assert len(audit.new_value["entries"]) == 2
 
 

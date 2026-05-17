@@ -63,6 +63,9 @@ def _to_out(v) -> VoucherOut:  # type: ignore[no-untyped-def]
         tds_amount=v.tds_amount,
         tds_section=v.tds_section,
         tally_posted_at=v.tally_posted_at,
+        tally_post_queued_at=v.tally_post_queued_at,
+        tally_post_attempts=v.tally_post_attempts,
+        tally_last_error=v.tally_last_error,
         is_optional_in_tally=v.is_optional_in_tally,
         approved_to_regular_at=v.approved_to_regular_at,
         approved_to_regular_by=v.approved_to_regular_by,
@@ -190,6 +193,8 @@ def list_vouchers(
                 is_optional_in_tally=v.is_optional_in_tally,
                 approved_to_regular_at=v.approved_to_regular_at,
                 tally_posted_at=v.tally_posted_at,
+                tally_post_queued_at=v.tally_post_queued_at,
+                tally_last_error=v.tally_last_error,
                 created_at=v.created_at,
             )
             for v in rows

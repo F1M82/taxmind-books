@@ -91,7 +91,12 @@ def _movements_for_groups(  # audit-exempt: read-only SELECT aggregation
             Voucher.company_id == company_id,
             Voucher.date >= from_date,
             Voucher.date <= to_date,
-            Voucher.status == VoucherStatus.posted,
+            # P0.46d: include vouchers queued for Tally (in books but
+            # not yet mirrored). `tally_posted_at` is the orthogonal
+            # "mirrored to Tally" signal; reports stay book-truthful.
+            Voucher.status.in_(
+                [VoucherStatus.posted, VoucherStatus.pending_tally_post]
+            ),
             Voucher.is_optional_in_tally.is_(False),
             func.lower(func.trim(Ledger.group_name)).in_(groups),
         )

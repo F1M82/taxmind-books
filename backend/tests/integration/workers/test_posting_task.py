@@ -70,6 +70,7 @@ def _seed_voucher(
     bank,
     party,
     voucher_type: VoucherType = VoucherType.Receipt,
+    status_: VoucherStatus = VoucherStatus.posted,
 ):  # type: ignore[no-untyped-def]
     v = Voucher(
         company_id=company.id,
@@ -78,7 +79,7 @@ def _seed_voucher(
         date=date(2026, 5, 8),
         narration="Payment received",
         total_amount=Decimal("1000.00"),
-        status=VoucherStatus.posted,
+        status=status_,
         source="manual",
         is_auto_posted=False,
         gst_applicable=False,
@@ -231,13 +232,16 @@ async def test_dispatch_connector_offline_increments_attempts_and_re_raises(
     assert v.tally_post_attempts == 1
     assert v.tally_last_error is not None
     assert v.tally_posted_at is None
-    # Audit failure row written.
+    # P0.46d: retryable failures emit `voucher.tally_post_queued`
+    # (renamed from voucher.tally_post_failed). Non-retryable connector
+    # errors still emit voucher.tally_post_failed — see the error-status
+    # test below.
     audit = (
         db_session.query(AuditLog)
         .filter(
             AuditLog.entity_type == "voucher",
             AuditLog.entity_id == v.id,
-            AuditLog.action == "voucher.tally_post_failed",
+            AuditLog.action == "voucher.tally_post_queued",
         )
         .one()
     )
@@ -333,3 +337,83 @@ async def test_dispatch_raises_when_voucher_in_other_company(
             request_id=uuid4(),
             registry=reg,
         )
+
+
+# ---------------- P0.46d: pending_tally_post lifecycle ----------------
+
+
+@pytest.mark.asyncio
+async def test_dispatch_success_transitions_pending_to_posted(
+    db_session: Session,
+) -> None:
+    """Voucher created via the API lands in pending_tally_post;
+    the dispatcher is the only thing that flips it to posted, and
+    only on Tally success."""
+    user, company, bank, party = _setup(db_session)
+    v = _seed_voucher(
+        db_session,
+        company=company,
+        bank=bank,
+        party=party,
+        status_=VoucherStatus.pending_tally_post,
+    )
+    reg = _FakeRegistry(
+        reply={
+            "command": "post_voucher",
+            "status": "success",
+            "result": {"tally_voucher_guid": "g-pending"},
+            "duration_ms": 80,
+        }
+    )
+    await dispatch_voucher_to_tally(
+        db=db_session,
+        voucher_id=v.id,
+        company_id=company.id,
+        user_id=user.id,
+        request_id=uuid4(),
+        registry=reg,
+    )
+    db_session.commit()
+    db_session.refresh(v)
+    assert v.status == VoucherStatus.posted
+    assert v.tally_posted_at is not None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_offline_keeps_pending_and_emits_queued_audit(
+    db_session: Session,
+) -> None:
+    """ConnectorOffline must not advance the voucher out of
+    pending_tally_post — the queue is the whole point of the state."""
+    user, company, bank, party = _setup(db_session)
+    v = _seed_voucher(
+        db_session,
+        company=company,
+        bank=bank,
+        party=party,
+        status_=VoucherStatus.pending_tally_post,
+    )
+    reg = _FakeRegistry(reply=ConnectorOffline("no connector"))
+    with pytest.raises(ConnectorOffline):
+        await dispatch_voucher_to_tally(
+            db=db_session,
+            voucher_id=v.id,
+            company_id=company.id,
+            user_id=user.id,
+            request_id=uuid4(),
+            registry=reg,
+        )
+    db_session.commit()
+    db_session.refresh(v)
+    assert v.status == VoucherStatus.pending_tally_post
+    assert v.tally_posted_at is None
+    audit = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.entity_type == "voucher",
+            AuditLog.entity_id == v.id,
+            AuditLog.action == "voucher.tally_post_queued",
+        )
+        .one()
+    )
+    assert audit.new_value["error_class"] == "ConnectorOffline"

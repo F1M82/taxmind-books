@@ -12,6 +12,45 @@ import {
 import { VoucherListItem, listVouchers } from "../../api/vouchers";
 import { formatINR } from "../../utils/money";
 
+// P0.46d: status is "live in the books" (posted or pending_tally_post);
+// tally_posted_at is the orthogonal "mirrored to Tally" signal. The
+// `pending_tally_post` state surfaces as "Queued for Tally" so the user
+// knows their entry is real even when Tally is offline / on the wrong
+// company / not yet acknowledged. A pending voucher carrying
+// `tally_last_error` after at least one attempt is a non-retryable
+// Tally rejection (validation error, missing ledger) — surface it
+// differently so the user knows a human needs to act.
+function isTallyRejected(v: VoucherListItem): boolean {
+  return (
+    v.status === "pending_tally_post" &&
+    v.tally_last_error !== null &&
+    (v.tally_post_queued_at === null ||
+      // attempts > 0 is inferred from the presence of an error message;
+      // VoucherListItem doesn't currently carry tally_post_attempts so
+      // we treat any error on a pending row as a rejection signal.
+      true)
+  );
+}
+
+function tallyTagLabel(v: VoucherListItem): string {
+  if (v.status === "cancelled") return "Cancelled";
+  if (v.status === "rejected_optional") return "Rejected";
+  if (v.tally_posted_at !== null) return "Posted to Tally";
+  if (isTallyRejected(v)) return "Tally rejected";
+  if (v.status === "pending_tally_post") return "Queued for Tally";
+  return "Pending Tally";
+}
+
+function tallyTagStyle(v: VoucherListItem) {
+  if (v.status === "cancelled" || v.status === "rejected_optional") {
+    return styles.tallyCancelled;
+  }
+  if (v.tally_posted_at !== null) return styles.tallyPosted;
+  if (isTallyRejected(v)) return styles.tallyRejected;
+  if (v.status === "pending_tally_post") return styles.tallyQueued;
+  return styles.tallyPending;
+}
+
 export default function VoucherListScreen({
   onCreate,
 }: {
@@ -79,19 +118,15 @@ export default function VoucherListScreen({
                   {v.narration ? ` · ${v.narration}` : ""}
                 </Text>
                 <Text
-                  style={[
-                    styles.tallyTag,
-                    v.tally_posted_at !== null
-                      ? styles.tallyPosted
-                      : styles.tallyPending,
-                  ]}
+                  style={[styles.tallyTag, tallyTagStyle(v)]}
                 >
-                  {v.tally_posted_at !== null
-                    ? "Posted to Tally"
-                    : v.status === "cancelled"
-                    ? "Cancelled"
-                    : "Pending Tally"}
+                  {tallyTagLabel(v)}
                 </Text>
+                {v.tally_last_error !== null && (
+                  <Text style={styles.errorHint}>
+                    Last error: {v.tally_last_error}
+                  </Text>
+                )}
               </View>
               <Text style={styles.amount}>{formatINR(v.total_amount)}</Text>
             </View>
@@ -135,6 +170,10 @@ const styles = StyleSheet.create({
   },
   tallyPosted: { backgroundColor: "#27ae60", color: "#fff" },
   tallyPending: { backgroundColor: "#f39c12", color: "#fff" },
+  tallyQueued: { backgroundColor: "#3498db", color: "#fff" },
+  tallyRejected: { backgroundColor: "#c0392b", color: "#fff" },
+  tallyCancelled: { backgroundColor: "#95a5a6", color: "#fff" },
+  errorHint: { fontSize: 12, color: "#c0392b" },
   empty: { textAlign: "center", color: "#666", padding: 24 },
   error: { color: "#c0392b", padding: 16 },
 });

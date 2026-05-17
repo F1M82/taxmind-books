@@ -40,6 +40,8 @@ export interface VoucherListItem {
   source: string;
   gst_applicable: boolean;
   tally_posted_at: string | null;
+  tally_post_queued_at: string | null;
+  tally_last_error: string | null;
   created_at: string;
 }
 

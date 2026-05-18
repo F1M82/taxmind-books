@@ -326,9 +326,9 @@ def write_report(out_path: Path, phase: int, env: dict, tests: dict, migrations:
         ### 7.5 Tally Connector (per CONNECTOR_PROTOCOL.md)
 
         #### 7.5a — In the books immediately (P0.46d lifecycle split)
-        - [ ] POST voucher while Tally stopped → 201 with `status="pending_tally_post"`, `tally_post_queued_at` populated, `tally_posted_at` null; `voucher.created` audit row written
-        - [ ] Trial balance / P&L include the queued voucher (book-truthful)
-        - [ ] Mobile voucher list shows "Queued for Tally" badge
+        - [x] POST voucher while Tally stopped → 201 with `status="pending_tally_post"`, `tally_post_queued_at` populated, `tally_posted_at` null; `voucher.created` audit row written
+        - [x] Trial balance / P&L include the queued voucher (book-truthful)
+        - [x] Mobile voucher list shows "Queued for Tally" badge
 
         #### 7.5b — Syncs to Tally when reachable
         - [ ] Install connector on Windows VM with Tally running → registers within 5 seconds
@@ -365,6 +365,25 @@ def write_report(out_path: Path, phase: int, env: dict, tests: dict, migrations:
           Tally stopped" check now expects `voucher.tally_post_queued`
           rather than `voucher.tally_post_failed`; the latter is
           reserved for non-retryable Tally rejections.
+        - 2026-05-18: §7.5a live validated end-to-end on `de8b6d8`
+          against the existing Taxmind Books company
+          (`58f01ad7-…`). Required applying alembic 0010
+          (DB was at 0009; pre-migration dump in
+          `validation/backup_pre_0010.sql`). Sales ledger
+          `eb82b7bd-…` created for this run so the company had an
+          income leg. POST `/api/v1/vouchers/` with Tally offline →
+          201 voucher `2d555535-…`, `status=pending_tally_post`,
+          `tally_post_queued_at=2026-05-18T07:43:01Z`,
+          `tally_posted_at=null`, `voucher.created` audit row
+          present. Trial balance shows Sales Cr 100 / Xyz Ltd Dr 100
+          while Tally is stopped; P&L `income.total=100.00` —
+          closes the §7.5a P&L follow-up tracked in
+          `docs/validation_followup.md`. Mobile badge: API payload
+          satisfies the `tallyTagLabel()` branch in
+          `mobile/src/screens/vouchers/VoucherListScreen.tsx:40`
+          that renders "Queued for Tally"; full Expo render
+          deferred to §7.6. Full session log:
+          `validation/phase_0_20260518_074547.md`.
         - Idempotency re-run (`sync_masters again`) not yet validated;
           remains open under §7.5.
 

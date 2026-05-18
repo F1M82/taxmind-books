@@ -3,34 +3,27 @@
 Items deferred from live validation. Each entry: what's deferred, why
 it's safe to defer, and when to address it.
 
-## P0.46d §7.5a — P&L path end-to-end (not yet exercised)
+## P0.46d §7.5a — P&L path end-to-end (CLOSED 2026-05-18)
 
-**What's deferred.** Live §7.5a re-validation (2026-05-17) proves
+**Status:** resolved. Sales-voucher P&L inclusion exercised live this
+session; see `validation/phase_0_20260518_074547.md` §3.2 and the
+2026-05-18 entry under §7.5 Notes in `VALIDATION_REPORT.md`.
+
+**What was deferred.** Live §7.5a re-validation (2026-05-17) proved
 that a voucher entered while Tally is offline lands in
 `pending_tally_post` and is included in **trial balance**. The
 **profit-and-loss** inclusion path uses the same SQL filter
 (`Voucher.status.in_([posted, pending_tally_post])` — see
 `backend/app/services/reporting/profit_loss.py`) and has a unit-level
 regression test (`test_profit_loss_includes_pending_tally_post_vouchers`),
-but it has not been exercised end-to-end against live TallyPrime data.
+but it had not been exercised end-to-end against live TallyPrime data.
 
-**Why it's safe to defer.** The live test company has no income or
-expense ledger — only HDFC BANK, Cash, Profit & Loss A/c, ABC LTD,
-Xyz Ltd. A Receipt voucher (the §7.5a script's choice) only moves
-balance-sheet ledgers, so it can't drive P&L. The filter is shared
-with trial balance and tested at the unit level, so the risk of the
-P&L path being silently broken is low.
-
-**When to address.**
-
-1. Create a Sales ledger via `POST /api/v1/ledgers/` (group:
-   `Sales Accounts`) so the test company has an income leg.
-2. Re-run §7.5a with a Sales voucher (Xyz Ltd Dr 100, Sales Cr 100)
-   instead of the Receipt voucher.
-3. Assert `GET /api/v1/reports/profit-loss?from_date=...&to_date=...`
-   includes the 100 in `income.total` even while Tally is stopped.
-4. Tick the §7.5a P&L checkbox in `VALIDATION_REPORT.md`.
-
-**Owner / timing.** Not blocking Phase 0 closeout. Do during Phase
-0.5 setup, or before the first customer onboards — whichever comes
-first. Single-session task; ~30 minutes.
+**How it was closed (2026-05-18).** Sales ledger `eb82b7bd-…` (group
+`Sales Accounts`) created via `POST /api/v1/ledgers/` against the test
+company. POST `/api/v1/vouchers/` with Tally stopped → voucher
+`2d555535-…` (Sales, Xyz Ltd Dr 100 / Sales Cr 100, status
+`pending_tally_post`). `GET /api/v1/reports/profit-loss?
+from_date=2026-04-01&to_date=2026-05-18` returned
+`income.ledgers=[{Sales: 100.00}]`, `income.total=100.00`,
+`net.value=100.00 profit` while `tally_posted_at` remained null on the
+voucher. Closes this entry.

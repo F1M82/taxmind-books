@@ -648,16 +648,18 @@ Authentication: connector token via `Authorization: Bearer <connector-token>` on
 
 ### Health
 
-#### `GET /api/v1/health`
+#### `GET /health`
 
-Liveness probe. Does not require auth.
+Liveness probe. Unprefixed (not under `/api/v1`). Does not require auth.
 
 **Response 200:**
 ```json
-{ "status": "healthy", "version": "0.1.0" }
+{ "status": "ok", "env": "development" }
 ```
 
-#### `GET /api/v1/health/ready`
+> Implemented in `backend/app/main.py` (Phase 0). `env` reflects `APP_ENV`.
+
+#### `GET /api/v1/health/ready` *(planned — not in Phase 0)*
 
 Readiness probe — checks DB and Redis. Does not require auth.
 

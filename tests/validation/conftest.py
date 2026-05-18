@@ -217,7 +217,12 @@ def _unique_email(prefix: str = "v7user") -> str:
 
 
 def register_and_login(
-    http: httpx.Client, *, password: str = "Hunter2-Validation!"
+    http: httpx.Client,
+    *,
+    # Local-dev test fixture only — synthesized per-test users; not a
+    # real credential. Same literal is referenced by `_SECRET_RE` in
+    # test_phase0_section7_3_audit.py to verify the audit redactor.
+    password: str = "Hunter2-Validation!",
 ) -> UserHandle:
     """Create a fresh user and return its access token."""
     email = _unique_email()

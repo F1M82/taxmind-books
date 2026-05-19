@@ -9,8 +9,6 @@ on `.delay(...)` — no real broker required.
 
 from __future__ import annotations
 
-import os
-
 from celery import Celery
 
 from app.config import get_settings
@@ -39,7 +37,7 @@ def _build_app() -> Celery:
     )
     # Tests opt into eager mode via env so .delay() runs the task
     # inline on the calling thread.
-    if os.environ.get("CELERY_TASK_ALWAYS_EAGER") == "1":
+    if cfg.CELERY_TASK_ALWAYS_EAGER:
         app.conf.task_always_eager = True
         app.conf.task_eager_propagates = True
     return app

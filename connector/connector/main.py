@@ -23,11 +23,9 @@ async def _async_main() -> None:
         )
 
     # The token JWT carries `company_id`; for now the runtime callers
-    # also pass it explicitly via env (or future packaged in the
-    # token store). Phase-0 keeps the flow simple.
-    import os
-
-    company_id = os.environ.get("CONNECTOR_COMPANY_ID")
+    # also pass it explicitly via ConnectorSettings (env or `.env`
+    # next to the .exe). Phase-0 keeps the flow simple.
+    company_id = cfg.CONNECTOR_COMPANY_ID
     if not company_id:
         raise SystemExit(
             "CONNECTOR_COMPANY_ID missing — set after enrollment."

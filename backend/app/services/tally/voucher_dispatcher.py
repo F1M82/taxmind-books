@@ -23,6 +23,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.core.audit import AuditContext, AuditEmitter
 from app.models.voucher import LedgerEntry, Voucher, VoucherStatus
 
@@ -70,12 +71,12 @@ def enqueue_voucher_post(
     `TAXMIND_SKIP_TALLY_DISPATCH=1` short-circuits both modes so the test
     suite can run without a live Redis broker or async context.
     """
-    import os
+    settings = get_settings()
 
-    if os.environ.get("TAXMIND_SKIP_TALLY_DISPATCH") == "1":
+    if settings.TAXMIND_SKIP_TALLY_DISPATCH:
         return
 
-    if os.environ.get("CELERY_TASK_ALWAYS_EAGER") == "1":
+    if settings.CELERY_TASK_ALWAYS_EAGER:
         _enqueue_in_process(
             voucher_id=voucher_id,
             company_id=company_id,

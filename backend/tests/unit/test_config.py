@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from app.config import Settings
 from pydantic import ValidationError
@@ -45,3 +47,35 @@ def test_optional_secrets_default_to_none() -> None:
     assert s.ANTHROPIC_API_KEY is None
     assert s.OPENAI_API_KEY is None
     assert s.S3_BUCKET is None
+
+
+@pytest.mark.parametrize(
+    ("field_name", "env_value", "expected"),
+    [
+        ("CELERY_TASK_ALWAYS_EAGER", "1", True),
+        ("CELERY_TASK_ALWAYS_EAGER", "0", False),
+        ("TAXMIND_SKIP_TALLY_DISPATCH", "1", True),
+    ],
+)
+def test_settings_loads_operational_flag_from_env_file(
+    field_name: str,
+    env_value: str,
+    expected: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression guard for the P0.58 hotfix audit.
+
+    Operational flags must reach the code via Settings, not raw
+    os.environ.get(). pydantic-settings reads `.env` into the model
+    but does not propagate to os.environ — so any os.environ.get()
+    on an operational flag silently misses .env-declared values.
+    Adding a future operational flag = one new parametrize entry.
+    """
+    monkeypatch.delenv(field_name, raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text(f"{field_name}={env_value}\n", encoding="utf-8")
+
+    settings = Settings(_env_file=str(env_path))  # type: ignore[call-arg]
+
+    assert getattr(settings, field_name) is expected

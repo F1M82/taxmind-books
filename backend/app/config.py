@@ -65,6 +65,13 @@ class Settings(BaseSettings):
     APP_ENV: str = Field(default="development")
     LOG_LEVEL: str = Field(default="INFO")
 
+    # ---------------- Operational toggles ----------------
+    # Both default False. Routed through Settings (not os.environ.get) so
+    # values declared in `.env` are honoured — pydantic-settings reads the
+    # file but does not propagate it back into os.environ.
+    CELERY_TASK_ALWAYS_EAGER: bool = Field(default=False)
+    TAXMIND_SKIP_TALLY_DISPATCH: bool = Field(default=False)
+
     @property
     def cors_origins(self) -> list[str]:
         """Origins allowed by CORS, derived from WEB_URL and MOBILE_URL."""

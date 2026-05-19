@@ -38,6 +38,14 @@ class ConnectorSettings(BaseSettings):
             "Optional here so the package imports for tests."
         ),
     )
+    CONNECTOR_COMPANY_ID: str | None = Field(
+        default=None,
+        description=(
+            "Company UUID the connector dials in for. Routed through "
+            "ConnectorSettings (not raw os.environ) so values declared "
+            "in `.env` next to the .exe are honoured."
+        ),
+    )
 
     # ---------------- Reconnect / heartbeat ----------------
     HEARTBEAT_SECONDS: int = Field(default=30, ge=1)

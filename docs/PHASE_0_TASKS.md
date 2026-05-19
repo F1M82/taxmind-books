@@ -993,3 +993,81 @@ Explicitly NOT in Phase 0:
 - Web admin console (Phase 5)
 - Razorpay billing (Phase 5)
 - Multi-company UX polish, advanced reports, analytics
+
+---
+
+## Operational architecture closeout (post-v1.2)
+
+Tasks surfaced during Phase 0 closeout validation that don't fit the v1.2 task ledger but must land before Phase 0 ships to production. Each follows the closeout-patch convention used for P0.46b / P0.46c / P0.46d.
+
+#### P0.58 — Resolve worker/API process split for connector dispatch
+
+**Objective:** Make the documented voucher-dispatch path actually post vouchers to TallyPrime in deploys that run the API and the Celery worker as separate processes. As of §7.5b validation (2026-05-19), the path is architecturally unreachable outside the test harness — see **BUG-Books-003** in `memory/bug_books_003_worker_registry_process_local.md`.
+
+> **Scope note.** This task addresses an operational-architecture gap surfaced during Phase 0 closeout validation. It is **not** part of original v1.3 multi-Tally-company scope; if the v1.3 batch (Phase 0.5 P0.49–P0.57) ships first, P0.58 still needs to land before any production rollout. **If Phase 0 ships to production before this lands, it's promoted to closeout patch P0.46e and is a hard ship blocker:** the symptom in a uvicorn-only Railway deploy (no worker process) is silent — vouchers enqueue to Redis, no worker pops them, `tally_post_attempts` stays at 0, no audit `voucher.tally_post_queued` rows are ever written, and the CA's books and Tally drift apart with no error surface.
+
+**Failure-mode evidence (§7.5b natural-drain attempt, 2026-05-19).**
+- Fresh voucher `ea10f084-7c9f-45c5-8c76-3e82d9079780` POSTed at 2026-05-19 05:27:02 UTC with connector + Tally offline. Landed `status=pending_tally_post`, one `post_voucher_to_tally` task in Redis.
+- Connector + Tally brought online; `/api/v1/connector/status` confirmed `connected=true, tally_running=true` from the API process.
+- Worker started 2026-05-19 06:06:53 UTC. Within 26 seconds the worker drained six attempts (1 initial + 5 autoretries), each raising `ConnectorOffline` and emitting `voucher.tally_post_queued` (source=worker). Voucher reached `tally_post_attempts=6`, status unchanged at `pending_tally_post`, `tally_voucher_guid=NULL`. Full log: `validation/celery_7_5b_natural_drain_20260519_113653.log`.
+- Direct inspection of the worker process's registry confirmed it is a separate Python `dict` from the API process's: `id(get_registry())` differs, `status_for(<connector>'s company_id)` returns `None` from the worker, `True/connected` from the API. The connector's `fastapi.WebSocket` is held in the API uvicorn's event loop and is invisible to the worker.
+
+**Why this wasn't caught earlier.**
+- §7.5 sync_masters (2026-05-16, PASS) runs inside the API process via `asyncio.create_task(_drive())` (`app/api/v1/connector.py:234`). Same process as the registry. Worked.
+- §7.5a (2026-05-18, PASS) was deliberately Tally-offline — no actual dispatch ever fired against a connector.
+- The backend test suite runs Celery with `CELERY_TASK_ALWAYS_EAGER=1` (`app/workers/celery_app.py:42-44`), so `.delay()` invocations run inline in the test process and share its registry. Tests pass.
+- §7.5b is the first time the worker-process dispatch path has been exercised live.
+
+**Root cause.** `backend/app/services/tally/connector_registry.py:12` is explicit:
+> "Phase 0 keeps this process-local. In Phase 1+ when the backend scales horizontally, this becomes a Redis pub/sub fan-out keyed by company_id. The contract here is designed so swapping the backing store doesn't change call sites."
+
+The intent is documented; the cross-process bridge has not been built.
+
+**Tasks defined via `.delay()` today.** Only one call site exists in the codebase: `voucher_dispatcher.py:71` → `post_voucher_to_tally.delay(...)`, invoked from `vouchers.py:130` on voucher creation. The other task (`process_due_account_deletions` in `lifecycle_tasks.py:28`) is defined for Celery beat scheduling and has no in-code `.delay()` caller; it does not touch the registry, so it is unaffected.
+
+**Approach options (pick one, document rationale in the commit).**
+
+1. **Force `CELERY_TASK_ALWAYS_EAGER=1` for Phase 0 (and document as deliberate single-process design).** One-line change in deploy env. `.delay()` runs inline in the API process where the registry lives; the worker process becomes a no-op for Phase 0. Drawback: synchronous Tally I/O inside the API request thread; voucher-creation latency includes `registry.send_command` round-trip (`timeout_seconds=30`). Mitigation: branch on eager mode in `enqueue_voucher_post` and route through `asyncio.create_task` (the same `_drive()` pattern `sync_masters` uses at `connector.py:234`), so 201 returns immediately while the dispatch runs in the API's event loop.
+2. **Redis pub/sub fan-out (the docstring's stated Phase 1+ path).** Worker publishes a command envelope on `connector_cmd:{company_id}`. The API uvicorn that owns the WS subscribes to that channel, performs the send, and publishes the result on `connector_result:{request_id}`. Worker awaits via Redis. Right long-term fix; sizable implementation (~1–2 weeks for design + impl + tests). Pairs with Phase 1 horizontal-scale plans.
+3. **Hybrid: worker enqueues, internal HTTP endpoint in API does the actual send.** Worker calls `POST /api/v1/internal/voucher-dispatch/<voucher_id>` (auth via service-account JWT). Avoids inventing pub/sub now while preserving the worker for orchestration. Adds an internal HTTP hop.
+
+**Recommended sequencing.** Pick **option 1** for Phase 0 closeout (one-line, unblocks §7.5b within the day). Pick **option 2** as part of Phase 0.5 hardening so multi-instance deploys work cleanly when v1.3 multi-Tally-company support lands.
+
+**Durability tradeoff (option 1).** In-process `asyncio.create_task` loses the queue-durability that the Celery-on-Redis path provides: a mid-post API restart drops the in-flight dispatch attempt for that voucher (the voucher row stays at `pending_tally_post`, awaiting the eventual re-enqueue path tracked by BUG-Books-002). Acceptable for Phase 0 because every dispatch is idempotent at Tally via the existing `Idempotency-Key` plumbing — a re-dispatch of the same voucher after restart cannot double-post. Phase 0.5 option 2 (Redis pub/sub) restores durability by moving the queue back to Redis with a worker-process that can reach the connector.
+
+**Files (option 1, recommended for immediate adoption):**
+- `backend/app/workers/celery_app.py` — leave `task_always_eager` configurable; switch deploy `.env` to set `CELERY_TASK_ALWAYS_EAGER=1`.
+- `backend/app/services/tally/voucher_dispatcher.py:enqueue_voucher_post` — when eager mode is set, route through `asyncio.create_task` like sync_masters does so 201 isn't blocked on Tally I/O.
+- `backend/Dockerfile` and any Railway/deploy template — explicit comment that the worker process is intentionally not started in Phase 0; bringing it up will silently strand vouchers until option 2 lands.
+- `.env.example` — document `CELERY_TASK_ALWAYS_EAGER=1` with a comment pointing here.
+- `docs/ARCHITECTURE.md` — amend the "Post" step in §"Data flow at a glance" to say "Phase 0: dispatch runs inline in the API process; Celery worker is wired but inert."
+- `docs/PHASE_0_CLOSEOUT.md` — record P0.58 (or P0.46e if promoted) as the resolution.
+
+**Files (option 2, Phase 0.5):**
+- `backend/app/services/tally/connector_registry.py` — swap dict-backed store for Redis pub/sub fan-out keyed by company_id; preserve the existing `send_command` / `is_online` / `status_for` API.
+- `backend/app/api/v1/connector_ws.py` — on WS handshake, subscribe to `connector_cmd:{company_id}`; on disconnect, unsubscribe.
+- New: `backend/app/services/tally/connector_pubsub.py` — Redis pub/sub primitives.
+- `backend/tests/integration/test_connector_pubsub.py` — cross-process integration test (spawn two Python processes, register a connector in one, send a command from the other).
+
+**Dependencies:**
+- Option 1: none (deployable today).
+- Option 2: Redis is already part of the stack. No external blockers.
+- Both options block: BUG-Books-002 resolution (any re-enqueue strategy needs the dispatcher to reach the connector), Phase 0.5 P0.53 (queue-on-mismatch dispatcher), Phase 0.5 P0.54 (30-day expiry beat).
+
+**Acceptance.**
+- A fresh voucher POSTed against a live connector reaches Tally end-to-end. The backend voucher row transitions to `status=posted`, `tally_posted_at` populated, `tally_voucher_guid` populated. Audit chain: `voucher.created` → `voucher.posted_to_tally` (no `voucher.tally_post_queued` rows in the happy path).
+- A voucher POSTed during a connector outage drains to `status=posted` after the connector comes back online, **without** manual intervention. Total drain latency (from connector-up to voucher posted) bounded by the chosen mechanism's polling/event cadence; must be < 30 seconds in the canonical case.
+- Cross-process integration test in CI: process A holds the WS, process B sends a `post_voucher` command, the connector mock confirms, process B's voucher row is updated. Run this test on every PR that touches the registry, the dispatcher, or the celery_app config.
+- Production deploy template (Railway / Docker Compose / future) explicitly documents whether eager mode or pub/sub is in effect, and the operator-visible failure mode if mis-configured.
+- **Deploy hardening prerequisite for any Railway rollout.** Before any Railway deploy, confirm `backend/Dockerfile` and Railway config explicitly assert the single-process model OR provision a worker service. As of 2026-05-19 the Dockerfile runs `uvicorn` only; option 1 makes that correct but **requires explicit documentation that this is intentional** — otherwise the next operator who adds a `worker:` service to fix the "missing worker" symptom will silently re-introduce BUG-Books-003. The Dockerfile / Railway config update itself is deploy work, not in scope for the P0.58 dispatch fix; tracked as a deploy task that must land before first production deploy.
+
+**Tests:**
+- Existing backend integration tests under `tests/integration/workers/test_posting_task.py` must keep passing under both eager and worker modes. Add a marker that runs each test once per mode (mode matrix on `CELERY_TASK_ALWAYS_EAGER ∈ {0, 1}`).
+- New: `backend/tests/integration/test_dispatch_cross_process.py` — spawn worker + API in two processes, exercise the dispatch end-to-end. Skip-condition: only runs in the docker-compose CI job, not in fast unit runs.
+- Manual: re-run §7.5b checkboxes 1–10 against the resolved architecture before declaring §7.5b PASS. Reuse the §7.5b setup (broker purge, fresh voucher, connector + Tally up).
+
+**Related:**
+- BUG-Books-002 (`memory/bug_books_002_stranded_voucher_no_reenqueue.md`) — stranded-voucher re-enqueue. Resolution depends on this task; any sweep/event re-enqueue path must run in a context that reaches the connector.
+- BUG-Books-003 (`memory/bug_books_003_worker_registry_process_local.md`) — full root-cause analysis and reproducer.
+- `validation/celery_7_5b_natural_drain_20260519_113653.log` — captured reproducer log.
+- Stranded reproducer vouchers (preserve until resolution): `2d555535-7b3f-471f-a7aa-34a13ea42060`, `ea10f084-7c9f-45c5-8c76-3e82d9079780`.

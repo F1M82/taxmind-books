@@ -53,17 +53,35 @@ def enqueue_voucher_post(
     user_id: UUID | None,
     request_id: UUID,
 ) -> None:
-    """Fire-and-forget Celery dispatch from the API request path.
+    """Fire-and-forget dispatch from the API request path.
 
-    Honors `TAXMIND_SKIP_TALLY_DISPATCH=1` so the test suite can run
-    without a live Redis broker.
+    Two modes:
 
-    Deferred import so a test-time monkey-patch on
-    `app.workers.posting_tasks.post_voucher_to_tally` flows through.
+    - **Eager / single-process** (`CELERY_TASK_ALWAYS_EAGER=1`): schedule
+      the dispatch as an `asyncio.create_task` on the current event
+      loop, mirroring the `sync_masters` `_drive()` pattern in
+      `app/api/v1/connector.py`. This is the Phase 0 deploy model — the
+      connector_registry is process-local, so the dispatcher must run
+      in the API uvicorn that owns the WebSocket. See P0.58 / BUG-Books-003.
+    - **Worker / multi-process** (eager flag unset): hand off to Celery
+      via `post_voucher_to_tally.delay(...)`. Reserved for Phase 0.5+
+      once `connector_registry` becomes Redis-pub/sub-backed.
+
+    `TAXMIND_SKIP_TALLY_DISPATCH=1` short-circuits both modes so the test
+    suite can run without a live Redis broker or async context.
     """
     import os
 
     if os.environ.get("TAXMIND_SKIP_TALLY_DISPATCH") == "1":
+        return
+
+    if os.environ.get("CELERY_TASK_ALWAYS_EAGER") == "1":
+        _enqueue_in_process(
+            voucher_id=voucher_id,
+            company_id=company_id,
+            user_id=user_id,
+            request_id=request_id,
+        )
         return
 
     from app.workers.posting_tasks import post_voucher_to_tally
@@ -74,6 +92,65 @@ def enqueue_voucher_post(
         user_id=str(user_id) if user_id else None,
         request_id=str(request_id),
     )
+
+
+def _enqueue_in_process(
+    *,
+    voucher_id: UUID,
+    company_id: UUID,
+    user_id: UUID | None,
+    request_id: UUID,
+) -> None:
+    """Schedule the dispatch on the current asyncio event loop.
+
+    Returns immediately. The dispatch coroutine opens its own
+    `SessionLocal` (the request session is closed by FastAPI on
+    response return) and commits independently. On `ConnectorOffline`
+    or `CommandTimeout` the dispatch audit row is committed but no
+    retry is scheduled — Phase 0 trades retry durability for
+    process-locality (P0.58 option 1). The eventual re-enqueue path
+    is BUG-Books-002 / Phase 0.5 work.
+
+    Raises `RuntimeError` if called outside a running event loop. The
+    only legitimate caller (`enqueue_voucher_post` from
+    `vouchers.create_voucher`) is always in an async FastAPI handler;
+    a sync caller is a programmer error.
+    """
+    import asyncio
+
+    from app.core.database import SessionLocal
+
+    async def _drive() -> None:
+        db = SessionLocal()
+        try:
+            await dispatch_voucher_to_tally(
+                db=db,
+                voucher_id=voucher_id,
+                company_id=company_id,
+                user_id=user_id,
+                request_id=request_id,
+            )
+            db.commit()
+        except (ConnectorOffline, CommandTimeout):
+            # Audit row was emitted by dispatch_voucher_to_tally;
+            # commit it so the failure is visible. No Celery retry
+            # in eager mode — see docstring.
+            db.commit()
+            logger.warning(
+                "in-process dispatch deferred for voucher %s: connector "
+                "unavailable or timed out (no autoretry in eager mode)",
+                voucher_id,
+            )
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "in-process dispatch failed for voucher %s", voucher_id
+            )
+        finally:
+            db.close()
+
+    loop = asyncio.get_running_loop()
+    loop.create_task(_drive())
 
 
 # ---------------------------------------------------------------------

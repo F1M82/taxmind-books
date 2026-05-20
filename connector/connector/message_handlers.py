@@ -212,6 +212,7 @@ async def dispatch_command(
             "retryable": exc.__class__.__name__ in {
                 "TallyUnreachable",
                 "TallyResponseError",
+                "TallyAmbiguousResponse",
             },
         }
 

@@ -37,6 +37,8 @@ from app.services.tally.connector_registry import (
     CommandTimeout,
     ConnectorOffline,
     ConnectorRegistry,
+    TallyRejectedEnvelope,
+    TallyRetryableEnvelope,
 )
 
 logger = logging.getLogger("app.services.tally.voucher_dispatcher")
@@ -132,16 +134,33 @@ def _enqueue_in_process(
                 request_id=request_id,
             )
             db.commit()
-        except (ConnectorOffline, CommandTimeout):
-            # Audit row was emitted by dispatch_voucher_to_tally;
-            # commit it so the failure is visible. No Celery retry
-            # in eager mode — see docstring.
+        except (
+            ConnectorOffline,
+            CommandTimeout,
+            TallyRetryableEnvelope,
+            TallyRejectedEnvelope,
+        ) as exc:
+            # Audit row was emitted by dispatch_voucher_to_tally; commit
+            # it so the failure is visible. No Celery retry in eager
+            # mode. ConnectorOffline / CommandTimeout / TallyRetryableEnvelope
+            # are retryable and the audit row reflects voucher.tally_post_queued
+            # (Phase 0.5 re-enqueue infrastructure reads it). TallyRejectedEnvelope
+            # is operator-action and reflects voucher.tally_post_failed.
             db.commit()
-            logger.warning(
-                "in-process dispatch deferred for voucher %s: connector "
-                "unavailable or timed out (no autoretry in eager mode)",
-                voucher_id,
-            )
+            if isinstance(exc, TallyRejectedEnvelope):
+                logger.error(
+                    "in-process dispatch failed for voucher %s: %s "
+                    "(Tally rejected — operator action required)",
+                    voucher_id,
+                    exc,
+                )
+            else:
+                logger.warning(
+                    "in-process dispatch deferred for voucher %s: %s "
+                    "(no autoretry in eager mode)",
+                    voucher_id,
+                    exc,
+                )
         except Exception:
             db.rollback()
             logger.exception(
@@ -283,23 +302,57 @@ async def dispatch_voucher_to_tally(
         raise
 
     if result.get("status") != "success":
+        # BUG-Books-004 Layer A/B fix: the connector now distinguishes
+        # retryable (transport / ambiguous response) from non-retryable
+        # (Tally rejected for operator-fixable reason) via the envelope's
+        # `retryable` field. The dispatcher reads that field and routes
+        # to the correct audit action + raises the matching exception so
+        # _drive (eager mode) or the Celery worker (future) handles each
+        # appropriately.
+        error_dict = result.get("error") or {}
+        error_code = (
+            error_dict.get("code", "unknown_error")
+            if isinstance(error_dict, dict)
+            else "unknown_error"
+        )
+        error_message = (
+            error_dict.get("message", "unknown error")
+            if isinstance(error_dict, dict)
+            else str(error_dict) or "unknown error"
+        )
         voucher.tally_post_attempts = (
             voucher.tally_post_attempts or 0
         ) + 1
-        voucher.tally_last_error = str(result.get("error", "unknown error"))
+        voucher.tally_last_error = error_message
+        if result.get("retryable") is True:
+            audit.emit(
+                action="voucher.tally_post_queued",
+                entity_type="voucher",
+                entity_id=voucher.id,
+                old_value=None,
+                new_value={
+                    "error": error_dict,
+                    "error_class": error_code,
+                    "retry_attempt": voucher.tally_post_attempts,
+                },
+                actor_user_id=user_id,
+                company_id_override=company_id,
+            )
+            raise TallyRetryableEnvelope(error_code, error_message)
         audit.emit(
             action="voucher.tally_post_failed",
             entity_type="voucher",
             entity_id=voucher.id,
             old_value=None,
             new_value={
-                "error": result.get("error"),
+                "error": error_dict,
+                "error_class": error_code,
                 "retry_attempt": voucher.tally_post_attempts,
             },
             actor_user_id=user_id,
             company_id_override=company_id,
         )
-        return result
+        raise TallyRejectedEnvelope(error_code, error_message)
 
     voucher.tally_posted_at = datetime.now(UTC)
     voucher.tally_voucher_guid = (

@@ -28,6 +28,8 @@ from app.services.tally.connector_registry import (
     CommandTimeout,
     ConnectorOffline,
     ConnectorRegistry,
+    TallyRejectedEnvelope,
+    TallyRetryableEnvelope,
 )
 from app.services.tally.voucher_dispatcher import dispatch_voucher_to_tally
 from sqlalchemy.orm import Session
@@ -273,9 +275,15 @@ async def test_dispatch_command_timeout_re_raises(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_error_status_audits_failure(
+async def test_dispatch_envelope_retryable_false_raises_rejected_envelope(
     db_session: Session,
 ) -> None:
+    """BUG-Books-004 Layer A/B: a non-retryable error envelope (Tally
+    rejected for operator-fixable reason — e.g. ledger missing) now
+    raises TallyRejectedEnvelope instead of returning the result dict.
+    The voucher.tally_post_failed audit row is emitted before the raise
+    so _drive / the worker can commit it before the exception unwinds.
+    """
     user, company, bank, party = _setup(db_session)
     v = _seed_voucher(db_session, company=company, bank=bank, party=party)
     reg = _FakeRegistry(
@@ -283,27 +291,28 @@ async def test_dispatch_error_status_audits_failure(
             "command": "post_voucher",
             "status": "error",
             "error": {
-                "code": "tally_validation_failed",
-                "message": "Ledger not found in Tally",
+                "code": "TallyImportRejected",
+                "message": "Ledger 'Sales' does not exist!",
             },
             "retryable": False,
         }
     )
-    result = await dispatch_voucher_to_tally(
-        db=db_session,
-        voucher_id=v.id,
-        company_id=company.id,
-        user_id=user.id,
-        request_id=uuid4(),
-        registry=reg,
-    )
+    with pytest.raises(TallyRejectedEnvelope) as exc_info:
+        await dispatch_voucher_to_tally(
+            db=db_session,
+            voucher_id=v.id,
+            company_id=company.id,
+            user_id=user.id,
+            request_id=uuid4(),
+            registry=reg,
+        )
     db_session.commit()
     db_session.refresh(v)
 
-    assert result["status"] == "error"
+    assert exc_info.value.error_code == "TallyImportRejected"
     assert v.tally_post_attempts == 1
     assert v.tally_posted_at is None
-    assert v.tally_last_error is not None
+    assert v.tally_last_error == "Ledger 'Sales' does not exist!"
     audit = (
         db_session.query(AuditLog)
         .filter(
@@ -313,7 +322,59 @@ async def test_dispatch_error_status_audits_failure(
         )
         .one()
     )
-    assert audit.new_value["error"]["code"] == "tally_validation_failed"
+    assert audit.new_value["error"]["code"] == "TallyImportRejected"
+    assert audit.new_value["error_class"] == "TallyImportRejected"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_envelope_retryable_true_raises_retryable_envelope(
+    db_session: Session,
+) -> None:
+    """BUG-Books-004 Layer B: a retryable error envelope (Tally
+    transport blip, ambiguous response) now emits
+    voucher.tally_post_queued (same action as ConnectorOffline /
+    CommandTimeout — symmetric) and raises TallyRetryableEnvelope
+    instead of returning.
+    """
+    user, company, bank, party = _setup(db_session)
+    v = _seed_voucher(db_session, company=company, bank=bank, party=party)
+    reg = _FakeRegistry(
+        reply={
+            "command": "post_voucher",
+            "status": "error",
+            "error": {
+                "code": "TallyUnreachable",
+                "message": "All connection attempts failed",
+            },
+            "retryable": True,
+        }
+    )
+    with pytest.raises(TallyRetryableEnvelope) as exc_info:
+        await dispatch_voucher_to_tally(
+            db=db_session,
+            voucher_id=v.id,
+            company_id=company.id,
+            user_id=user.id,
+            request_id=uuid4(),
+            registry=reg,
+        )
+    db_session.commit()
+    db_session.refresh(v)
+
+    assert exc_info.value.error_code == "TallyUnreachable"
+    assert v.tally_post_attempts == 1
+    assert v.tally_posted_at is None
+    assert v.tally_last_error == "All connection attempts failed"
+    audit = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.entity_type == "voucher",
+            AuditLog.entity_id == v.id,
+            AuditLog.action == "voucher.tally_post_queued",
+        )
+        .one()
+    )
+    assert audit.new_value["error_class"] == "TallyUnreachable"
 
 
 # ---------------- voucher not found in company ----------------

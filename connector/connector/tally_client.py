@@ -22,7 +22,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -53,6 +53,61 @@ class TallyResponseError(TallyError):
 
 class TallyParseError(TallyError):
     """Tally responded with malformed XML."""
+
+
+class TallyImportRejected(TallyError):
+    """Tally rejected an ImportData request structurally.
+
+    Raised by `_post_and_validate_import` when the response envelope
+    indicates the expected counter (CREATED / ALTERED / DELETED) is 0
+    and <EXCEPTIONS> >= 1. Carries the <LINEERROR> text + the exception
+    count + the raw body for diagnostics. Connector-side; the connector's
+    `dispatch_command` catches via the existing TallyError branch and
+    wraps as {status:"error", retryable: False} (operator action required).
+    """
+
+    def __init__(
+        self,
+        line_error: str | None,
+        exceptions: int,
+        raw_body: str,
+    ) -> None:
+        super().__init__(
+            line_error
+            or f"Tally rejected import ({exceptions} exception(s))"
+        )
+        self.line_error = line_error
+        self.exceptions = exceptions
+        self.raw_body = raw_body
+
+
+class TallyAmbiguousResponse(TallyError):
+    """Tally returned a response that matches neither strict success
+    nor strict rejection.
+
+    Strict success: expected counter >= 1 AND EXCEPTIONS == 0 AND no
+    LINEERROR. Strict rejection: expected counter == 0 AND
+    EXCEPTIONS >= 1. Anything else (partial success, missing CREATED,
+    zero-everything, etc.) raises this.
+
+    Treated as retryable on the wire — the shape may be a transient
+    TallyPrime version drift. Surface for investigation rather than
+    silently bucketing as success or failure.
+    """
+
+    def __init__(
+        self,
+        parsed: "ImportResponse",
+        raw_body: str,
+    ) -> None:
+        super().__init__(
+            f"Tally returned ambiguous response: created={parsed.created}, "
+            f"altered={parsed.altered}, deleted={parsed.deleted}, "
+            f"exceptions={parsed.exceptions}, "
+            f"line_error={parsed.line_error!r}"
+        )
+        self.parsed = parsed
+        self.raw_body = raw_body
 
 
 # ---------------------------------------------------------------------
@@ -129,6 +184,25 @@ class LedgerVoucherRow:
     narration: str
 
 
+@dataclass(frozen=True)
+class ImportResponse:
+    """Parsed counts from a TallyPrime ImportData response envelope.
+
+    Tally returns the same envelope shape for ImportData operations:
+    <CREATED>, <ALTERED>, <DELETED>, <EXCEPTIONS>, <LASTVCHID>, and
+    optionally <LINEERROR>. The expected non-zero counter depends on
+    the operation (Create -> CREATED, Alter -> ALTERED, Delete -> DELETED).
+    """
+
+    created: int
+    altered: int
+    deleted: int
+    exceptions: int
+    last_vch_id: str | None
+    line_error: str | None
+    raw_body: str
+
+
 # ---------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------
@@ -198,6 +272,45 @@ def _decimal(text: str | None) -> Decimal:
         return Decimal("0.00")
 
 
+def _parse_import_response(body: str) -> ImportResponse:
+    """Parse a TallyPrime ImportData response envelope.
+
+    Tolerant to missing optional elements (no <LINEERROR> on success;
+    no <LASTVCHID> on some Alter/Delete responses). Counters that fail
+    to parse as int default to 0 — the strict-shape predicate in
+    `_post_and_validate_import` then routes a 0-counter through the
+    rejection or ambiguous branches.
+
+    Raises:
+        TallyParseError: on malformed XML.
+    """
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError as exc:
+        raise TallyParseError(str(exc)) from exc
+
+    def _int(tag: str) -> int:
+        text = _get_text(root, tag, "0")
+        try:
+            return int(text)
+        except ValueError:
+            return 0
+
+    def _str_or_none(tag: str) -> str | None:
+        text = _get_text(root, tag, "")
+        return text or None
+
+    return ImportResponse(
+        created=_int("CREATED"),
+        altered=_int("ALTERED"),
+        deleted=_int("DELETED"),
+        exceptions=_int("EXCEPTIONS"),
+        last_vch_id=_str_or_none("LASTVCHID"),
+        line_error=_str_or_none("LINEERROR"),
+        raw_body=body,
+    )
+
+
 # ---------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------
@@ -254,6 +367,49 @@ class TallyClient:
         if response.status_code != 200:
             raise TallyResponseError(response.status_code, response.text)
         return _sanitize_tally_xml(response.text)
+
+    async def _post_and_validate_import(
+        self,
+        xml_request: str,
+        *,
+        expect: Literal["created", "altered", "deleted"],
+    ) -> ImportResponse:
+        """Post an ImportData envelope and validate the response shape.
+
+        Wraps `_post_xml` and adds the import-only parse-and-raise that
+        `_post_xml` itself can't do: export-data callers (`get_ledger`,
+        `get_all_ledgers`, `get_all_groups`, `get_trial_balance`,
+        `get_outstanding`) share `_post_xml` and their response envelopes
+        have no <CREATED> element. Single choke point for `post_voucher`,
+        `approve_optional_voucher`, `reject_optional_voucher` — future
+        ImportData methods should call this instead of raw `_post_xml`.
+
+        Strict success: expected counter >= 1 AND <EXCEPTIONS> == 0
+        AND no <LINEERROR>. Strict rejection: expected counter == 0
+        AND <EXCEPTIONS> >= 1. Anything else (partial success, missing
+        CREATED element, etc.) raises TallyAmbiguousResponse.
+
+        Raises:
+            TallyImportRejected: strict-rejection envelope.
+            TallyAmbiguousResponse: response matches neither strict
+                success nor strict rejection.
+            TallyParseError: malformed XML (via `_parse_import_response`).
+            TallyUnreachable / TallyResponseError: from `_post_xml`.
+        """
+        body = await self._post_xml(xml_request)
+        parsed = _parse_import_response(body)
+        expected_counter = getattr(parsed, expect)
+        if (
+            expected_counter >= 1
+            and parsed.exceptions == 0
+            and not parsed.line_error
+        ):
+            return parsed
+        if expected_counter == 0 and parsed.exceptions >= 1:
+            raise TallyImportRejected(
+                parsed.line_error, parsed.exceptions, body
+            )
+        raise TallyAmbiguousResponse(parsed, body)
 
     # ------------------------------------------------------------------
     # get_ledger (party transactions)
@@ -367,17 +523,27 @@ class TallyClient:
         """Send a voucher to Tally for creation.
 
         Builds an ImportData envelope with the N-line ledger entries
-        the caller passed. Returns `{status, voucher_number}` on
-        success; raises `TallyResponseError` / `TallyUnreachable` on
-        failure.
+        the caller passed. Validates the response envelope's <CREATED>
+        counter >= 1 (strict success).
+
+        `tally_voucher_guid` is returned as `None` — Layer C (durable
+        Tally GUID via REMOTEID or <LASTVCHID>) is deferred per
+        bug_books_004 'Layer A fix design'.
+
+        Raises:
+            TallyImportRejected: Tally rejected the create.
+            TallyAmbiguousResponse: response envelope shape unknown.
+            TallyUnreachable / TallyResponseError: transport failures.
         """
-        xml = self._build_voucher_xml(voucher)
-        body = await self._post_xml(xml)
+        parsed = await self._post_and_validate_import(
+            self._build_voucher_xml(voucher), expect="created"
+        )
         return {
             "status": "success",
             "voucher_number": voucher.voucher_number,
             "as_optional": voucher.as_optional,
-            "raw": body,
+            "tally_voucher_guid": None,
+            "raw": parsed.raw_body,
         }
 
     # ------------------------------------------------------------------
@@ -390,15 +556,25 @@ class TallyClient:
         """Promote an Optional voucher to Regular in Tally.
 
         Issues an ACTION="Alter" against the voucher's REMOTEID that
-        flips `<ISOPTIONAL>` from Yes to No. Idempotent: re-running
-        against an already-Regular voucher is a no-op in Tally.
+        flips `<ISOPTIONAL>` from Yes to No. Validates the response
+        envelope's <ALTERED> counter >= 1 (strict success). Idempotent
+        for the Tally side: re-running against an already-Regular
+        voucher returns ALTERED=1 again in TallyPrime's normal flow.
+
+        Raises:
+            TallyImportRejected: Tally refused the alter (e.g. unknown
+                REMOTEID).
+            TallyAmbiguousResponse: response envelope shape unknown.
+            TallyUnreachable / TallyResponseError: transport failures.
         """
-        xml = self._build_alter_isoptional_xml(voucher_guid, optional=False)
-        body = await self._post_xml(xml)
+        parsed = await self._post_and_validate_import(
+            self._build_alter_isoptional_xml(voucher_guid, optional=False),
+            expect="altered",
+        )
         return {
             "status": "success",
             "tally_voucher_guid": voucher_guid,
-            "raw": body,
+            "raw": parsed.raw_body,
         }
 
     # ------------------------------------------------------------------
@@ -410,16 +586,24 @@ class TallyClient:
     ) -> dict[str, Any]:
         """Delete an Optional voucher from Tally entirely.
 
-        Issues an ACTION="Delete" against the voucher's REMOTEID. The
-        caller is responsible for not invoking this on already-Regular
-        vouchers (the backend gates that).
+        Issues an ACTION="Delete" against the voucher's REMOTEID.
+        Validates the response envelope's <DELETED> counter >= 1
+        (strict success). The caller is responsible for not invoking
+        this on already-Regular vouchers (the backend gates that).
+
+        Raises:
+            TallyImportRejected: Tally refused the delete (e.g. unknown
+                REMOTEID).
+            TallyAmbiguousResponse: response envelope shape unknown.
+            TallyUnreachable / TallyResponseError: transport failures.
         """
-        xml = self._build_delete_voucher_xml(voucher_guid)
-        body = await self._post_xml(xml)
+        parsed = await self._post_and_validate_import(
+            self._build_delete_voucher_xml(voucher_guid), expect="deleted"
+        )
         return {
             "status": "success",
             "tally_voucher_guid": voucher_guid,
-            "raw": body,
+            "raw": parsed.raw_body,
         }
 
     # ------------------------------------------------------------------

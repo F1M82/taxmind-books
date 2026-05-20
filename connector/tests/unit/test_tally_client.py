@@ -10,8 +10,11 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from connector.tally_client import (
+    ImportResponse,
     LedgerEntryInput,
+    TallyAmbiguousResponse,
     TallyClient,
+    TallyImportRejected,
     TallyParseError,
     TallyResponseError,
     TallyUnreachable,
@@ -19,7 +22,110 @@ from connector.tally_client import (
     _decimal,
     _fiscal_year_end,
     _fiscal_year_start,
+    _parse_import_response,
     _parse_tally_date,
+)
+
+
+# ---------------- ImportData response fixtures ----------------
+#
+# Layer A (BUG-Books-004): connector must distinguish success / rejection /
+# ambiguous response shapes for ImportData operations (post_voucher,
+# approve_optional_voucher, reject_optional_voucher).
+#
+# _IMPORT_REJECTION_LEDGER_MISSING is live-captured 2026-05-19 12:39 UTC
+# via direct httpx probe against TallyPrime with no company loaded.
+# Documented in bug_books_004 memory file. Real Tally response, byte-exact.
+#
+# _IMPORT_SUCCESS_CREATE / _ALTER / _DELETE are reasoned from TDL docs
+# (Tally Developer's Reference, ImportData section). Marked as
+# documentation-based-not-empirically-verified — §7.5b validation pass
+# must capture real success envelopes and replace if shapes differ.
+
+_IMPORT_REJECTION_LEDGER_MISSING = (
+    "<RESPONSE>\n"
+    " <LINEERROR>Ledger &apos;Sales&apos; does not exist!</LINEERROR>\n"
+    " <CREATED>0</CREATED>\n"
+    " <ALTERED>0</ALTERED>\n"
+    " <DELETED>0</DELETED>\n"
+    " <LASTVCHID>0</LASTVCHID>\n"
+    " <LASTMID>0</LASTMID>\n"
+    " <COMBINED>0</COMBINED>\n"
+    " <IGNORED>0</IGNORED>\n"
+    " <ERRORS>0</ERRORS>\n"
+    " <CANCELLED>0</CANCELLED>\n"
+    " <EXCEPTIONS>1</EXCEPTIONS>\n"
+    "</RESPONSE>"
+)
+
+# Documentation-based; replace with real capture during §7.5b validation.
+_IMPORT_SUCCESS_CREATE = (
+    "<RESPONSE>\n"
+    " <CREATED>1</CREATED>\n"
+    " <ALTERED>0</ALTERED>\n"
+    " <DELETED>0</DELETED>\n"
+    " <LASTVCHID>42</LASTVCHID>\n"
+    " <LASTMID>0</LASTMID>\n"
+    " <COMBINED>0</COMBINED>\n"
+    " <IGNORED>0</IGNORED>\n"
+    " <ERRORS>0</ERRORS>\n"
+    " <CANCELLED>0</CANCELLED>\n"
+    " <EXCEPTIONS>0</EXCEPTIONS>\n"
+    "</RESPONSE>"
+)
+
+# Documentation-based; replace with real capture during §7.5b validation.
+_IMPORT_SUCCESS_ALTER = (
+    "<RESPONSE>\n"
+    " <CREATED>0</CREATED>\n"
+    " <ALTERED>1</ALTERED>\n"
+    " <DELETED>0</DELETED>\n"
+    " <LASTVCHID>42</LASTVCHID>\n"
+    " <LASTMID>0</LASTMID>\n"
+    " <COMBINED>0</COMBINED>\n"
+    " <IGNORED>0</IGNORED>\n"
+    " <ERRORS>0</ERRORS>\n"
+    " <CANCELLED>0</CANCELLED>\n"
+    " <EXCEPTIONS>0</EXCEPTIONS>\n"
+    "</RESPONSE>"
+)
+
+# Documentation-based; replace with real capture during §7.5b validation.
+_IMPORT_SUCCESS_DELETE = (
+    "<RESPONSE>\n"
+    " <CREATED>0</CREATED>\n"
+    " <ALTERED>0</ALTERED>\n"
+    " <DELETED>1</DELETED>\n"
+    " <LASTVCHID>42</LASTVCHID>\n"
+    " <LASTMID>0</LASTMID>\n"
+    " <COMBINED>0</COMBINED>\n"
+    " <IGNORED>0</IGNORED>\n"
+    " <ERRORS>0</ERRORS>\n"
+    " <CANCELLED>0</CANCELLED>\n"
+    " <EXCEPTIONS>0</EXCEPTIONS>\n"
+    "</RESPONSE>"
+)
+
+# Partial-success ambiguity: created AND exception both > 0.
+_IMPORT_AMBIGUOUS_PARTIAL = (
+    "<RESPONSE>\n"
+    " <CREATED>1</CREATED>\n"
+    " <ALTERED>0</ALTERED>\n"
+    " <DELETED>0</DELETED>\n"
+    " <LASTVCHID>42</LASTVCHID>\n"
+    " <EXCEPTIONS>1</EXCEPTIONS>\n"
+    "</RESPONSE>"
+)
+
+# Zero-everything ambiguity: Tally returned but nothing happened and
+# no error was reported. Should also surface for investigation.
+_IMPORT_AMBIGUOUS_ZERO = (
+    "<RESPONSE>\n"
+    " <CREATED>0</CREATED>\n"
+    " <ALTERED>0</ALTERED>\n"
+    " <DELETED>0</DELETED>\n"
+    " <EXCEPTIONS>0</EXCEPTIONS>\n"
+    "</RESPONSE>"
 )
 
 
@@ -332,7 +438,7 @@ async def test_post_voucher_builds_n_line_envelope(
 
     def _capture(request: httpx.Request) -> httpx.Response:
         captured["body"] = request.content.decode("utf-8")
-        return httpx.Response(200, text="<RESPONSE>OK</RESPONSE>")
+        return httpx.Response(200, text=_IMPORT_SUCCESS_CREATE)
 
     httpx_mock.add_callback(_capture, url="http://localhost:9000")
 
@@ -409,7 +515,7 @@ async def test_post_voucher_as_optional_emits_isoptional_yes(
 
     def _capture(request: httpx.Request) -> httpx.Response:
         captured["body"] = request.content.decode("utf-8")
-        return httpx.Response(200, text="<RESPONSE>OK</RESPONSE>")
+        return httpx.Response(200, text=_IMPORT_SUCCESS_CREATE)
 
     httpx_mock.add_callback(_capture, url="http://localhost:9000")
     result = await client.post_voucher(_minimal_voucher(as_optional=True))
@@ -426,7 +532,7 @@ async def test_post_voucher_regular_omits_isoptional(
 
     def _capture(request: httpx.Request) -> httpx.Response:
         captured["body"] = request.content.decode("utf-8")
-        return httpx.Response(200, text="<RESPONSE>OK</RESPONSE>")
+        return httpx.Response(200, text=_IMPORT_SUCCESS_CREATE)
 
     httpx_mock.add_callback(_capture, url="http://localhost:9000")
     result = await client.post_voucher(_minimal_voucher(as_optional=False))
@@ -442,7 +548,7 @@ async def test_approve_optional_voucher_alters_isoptional_to_no(
 
     def _capture(request: httpx.Request) -> httpx.Response:
         captured["body"] = request.content.decode("utf-8")
-        return httpx.Response(200, text="<RESPONSE>OK</RESPONSE>")
+        return httpx.Response(200, text=_IMPORT_SUCCESS_ALTER)
 
     httpx_mock.add_callback(_capture, url="http://localhost:9000")
     result = await client.approve_optional_voucher("V-GUID-123")
@@ -464,7 +570,7 @@ async def test_reject_optional_voucher_deletes_via_remoteid(
 
     def _capture(request: httpx.Request) -> httpx.Response:
         captured["body"] = request.content.decode("utf-8")
-        return httpx.Response(200, text="<RESPONSE>OK</RESPONSE>")
+        return httpx.Response(200, text=_IMPORT_SUCCESS_DELETE)
 
     httpx_mock.add_callback(_capture, url="http://localhost:9000")
     result = await client.reject_optional_voucher("V-GUID-456")
@@ -476,3 +582,188 @@ async def test_reject_optional_voucher_deletes_via_remoteid(
     assert 'ACTION="Delete"' in body
     # Delete envelope must NOT carry any voucher payload.
     assert "<ALLLEDGERENTRIES.LIST>" not in body
+
+
+# ---------------- _parse_import_response ----------------
+
+
+def test_parse_import_response_rejection_envelope() -> None:
+    parsed = _parse_import_response(_IMPORT_REJECTION_LEDGER_MISSING)
+    assert parsed.created == 0
+    assert parsed.altered == 0
+    assert parsed.deleted == 0
+    assert parsed.exceptions == 1
+    assert parsed.line_error == "Ledger 'Sales' does not exist!"
+    assert parsed.last_vch_id == "0"
+    assert parsed.raw_body == _IMPORT_REJECTION_LEDGER_MISSING
+
+
+def test_parse_import_response_success_create() -> None:
+    parsed = _parse_import_response(_IMPORT_SUCCESS_CREATE)
+    assert parsed.created == 1
+    assert parsed.altered == 0
+    assert parsed.deleted == 0
+    assert parsed.exceptions == 0
+    assert parsed.line_error is None
+    assert parsed.last_vch_id == "42"
+
+
+def test_parse_import_response_success_alter() -> None:
+    parsed = _parse_import_response(_IMPORT_SUCCESS_ALTER)
+    assert parsed.altered == 1
+    assert parsed.created == 0
+    assert parsed.exceptions == 0
+
+
+def test_parse_import_response_success_delete() -> None:
+    parsed = _parse_import_response(_IMPORT_SUCCESS_DELETE)
+    assert parsed.deleted == 1
+    assert parsed.exceptions == 0
+
+
+def test_parse_import_response_missing_counters_default_zero() -> None:
+    # Minimal envelope with no counters: parser defaults all to 0 so the
+    # strict-shape predicate downstream routes through the ambiguous branch.
+    parsed = _parse_import_response("<RESPONSE></RESPONSE>")
+    assert parsed.created == 0
+    assert parsed.altered == 0
+    assert parsed.deleted == 0
+    assert parsed.exceptions == 0
+    assert parsed.line_error is None
+    assert parsed.last_vch_id is None
+
+
+def test_parse_import_response_malformed_xml_raises_parse_error() -> None:
+    with pytest.raises(TallyParseError):
+        _parse_import_response("<not valid")
+
+
+# ---------------- post_voucher: rejection + ambiguous paths ----------------
+
+
+@pytest.mark.asyncio
+async def test_post_voucher_raises_TallyImportRejected_on_strict_rejection(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(
+        url="http://localhost:9000",
+        status_code=200,
+        text=_IMPORT_REJECTION_LEDGER_MISSING,
+    )
+    with pytest.raises(TallyImportRejected) as exc_info:
+        await client.post_voucher(_minimal_voucher())
+    assert exc_info.value.line_error == "Ledger 'Sales' does not exist!"
+    assert exc_info.value.exceptions == 1
+    assert exc_info.value.raw_body == _IMPORT_REJECTION_LEDGER_MISSING
+
+
+@pytest.mark.asyncio
+async def test_post_voucher_raises_TallyAmbiguousResponse_on_partial(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    # CREATED=1 + EXCEPTIONS=1 — neither strict success nor strict
+    # rejection. Surface for investigation rather than bucket silently.
+    httpx_mock.add_response(
+        url="http://localhost:9000",
+        status_code=200,
+        text=_IMPORT_AMBIGUOUS_PARTIAL,
+    )
+    with pytest.raises(TallyAmbiguousResponse) as exc_info:
+        await client.post_voucher(_minimal_voucher())
+    assert exc_info.value.parsed.created == 1
+    assert exc_info.value.parsed.exceptions == 1
+
+
+@pytest.mark.asyncio
+async def test_post_voucher_raises_TallyAmbiguousResponse_on_zero_everything(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    # All counters zero, no exceptions, no line error. Tally said
+    # nothing happened and nothing failed — unknown shape.
+    httpx_mock.add_response(
+        url="http://localhost:9000",
+        status_code=200,
+        text=_IMPORT_AMBIGUOUS_ZERO,
+    )
+    with pytest.raises(TallyAmbiguousResponse):
+        await client.post_voucher(_minimal_voucher())
+
+
+@pytest.mark.asyncio
+async def test_post_voucher_returns_tally_voucher_guid_none(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    # Layer C deferred: tally_voucher_guid is explicitly None on success
+    # until REMOTEID survivability is probed in §7.5b validation.
+    httpx_mock.add_response(
+        url="http://localhost:9000",
+        status_code=200,
+        text=_IMPORT_SUCCESS_CREATE,
+    )
+    result = await client.post_voucher(_minimal_voucher())
+    assert result["status"] == "success"
+    assert result["tally_voucher_guid"] is None
+
+
+# ---------------- approve/reject: rejection + success counters ----------------
+
+
+@pytest.mark.asyncio
+async def test_approve_optional_voucher_raises_on_altered_zero(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    # CREATED=0, ALTERED=0, EXCEPTIONS=1, LINEERROR present →
+    # strict rejection (the expected counter for Alter is ALTERED).
+    httpx_mock.add_response(
+        url="http://localhost:9000",
+        status_code=200,
+        text=_IMPORT_REJECTION_LEDGER_MISSING,
+    )
+    with pytest.raises(TallyImportRejected):
+        await client.approve_optional_voucher("V-GUID-unknown")
+
+
+@pytest.mark.asyncio
+async def test_approve_optional_voucher_raises_ambiguous_on_create_only(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    # Tally returned a "create succeeded" envelope to an Alter request.
+    # ALTERED=0 (the counter the helper checks for op=alter) + zero
+    # exceptions = ambiguous. Cross-op shape mismatch surfaces.
+    httpx_mock.add_response(
+        url="http://localhost:9000",
+        status_code=200,
+        text=_IMPORT_SUCCESS_CREATE,
+    )
+    with pytest.raises(TallyAmbiguousResponse):
+        await client.approve_optional_voucher("V-GUID-123")
+
+
+@pytest.mark.asyncio
+async def test_reject_optional_voucher_raises_on_deleted_zero(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(
+        url="http://localhost:9000",
+        status_code=200,
+        text=_IMPORT_REJECTION_LEDGER_MISSING,
+    )
+    with pytest.raises(TallyImportRejected):
+        await client.reject_optional_voucher("V-GUID-unknown")
+
+
+# ---------------- ImportResponse dataclass sanity ----------------
+
+
+def test_import_response_dataclass_is_frozen() -> None:
+    r = ImportResponse(
+        created=1,
+        altered=0,
+        deleted=0,
+        exceptions=0,
+        last_vch_id="42",
+        line_error=None,
+        raw_body="<RESPONSE/>",
+    )
+    with pytest.raises(Exception):
+        r.created = 2  # type: ignore[misc]

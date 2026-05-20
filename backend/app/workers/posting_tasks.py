@@ -16,16 +16,29 @@ from app.services.tally import voucher_dispatcher as _voucher_dispatcher_mod
 from app.services.tally.connector_registry import (
     CommandTimeout,
     ConnectorOffline,
+    TallyRejectedEnvelope,
+    TallyRetryableEnvelope,
 )
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger("app.workers.posting_tasks")
 
 
+# BUG-Books-004 Layer A/B wiring: TallyRetryableEnvelope joins the
+# autoretry_for tuple alongside ConnectorOffline/CommandTimeout so future
+# worker mode (post Phase 0.5 BUG-003 Redis fan-out) retries Tally-side
+# transient envelopes the same way it retries registry-layer failures.
+# TallyRejectedEnvelope is intentionally excluded — operator action
+# required, autoretry doesn't help.
+#
+# Dormant in Phase 0 because CELERY_TASK_ALWAYS_EAGER=1 routes every
+# voucher through `_enqueue_in_process` in `voucher_dispatcher` rather
+# than the Celery task. This task is reachable only when eager mode is
+# off, which requires BUG-003 resolved first.
 @celery_app.task(
     bind=True,
     name="app.workers.post_voucher_to_tally",
-    autoretry_for=(ConnectorOffline, CommandTimeout),
+    autoretry_for=(ConnectorOffline, CommandTimeout, TallyRetryableEnvelope),
     retry_backoff=True,
     retry_backoff_max=600,
     retry_jitter=True,
@@ -51,8 +64,18 @@ def post_voucher_to_tally(  # type: ignore[no-untyped-def]
             )
         )
         db.commit()
-    except (ConnectorOffline, CommandTimeout):
-        db.commit()  # audit row was emitted; commit and let Celery retry
+    except (
+        ConnectorOffline,
+        CommandTimeout,
+        TallyRetryableEnvelope,
+        TallyRejectedEnvelope,
+    ):
+        # Audit row was emitted; commit it so the failure is visible.
+        # The retryable subset (everything except TallyRejectedEnvelope)
+        # is in autoretry_for above, so Celery will retry. The non-
+        # retryable TallyRejectedEnvelope still commits the audit row
+        # before re-raising; Celery sees it as a non-retried failure.
+        db.commit()
         raise
     except Exception:
         db.rollback()

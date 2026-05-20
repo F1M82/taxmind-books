@@ -38,6 +38,41 @@ class CommandTimeout(Exception):
     """Raised when a connector doesn't reply within `timeout_seconds`."""
 
 
+class TallyRetryableEnvelope(Exception):
+    """Raised by voucher_dispatcher when the connector returned an
+    envelope with status="error" and retryable=True.
+
+    Sibling of ConnectorOffline/CommandTimeout for the future Celery
+    worker mode's `autoretry_for` tuple (Phase 0.5+ once BUG-Books-003
+    is resolved). Phase 0 eager mode catches it in `_drive`'s tuple
+    and commits the audit row before swallowing.
+
+    Carries the envelope's error code and message for the audit row.
+    """
+
+    def __init__(self, error_code: str, message: str) -> None:
+        super().__init__(f"{error_code}: {message}")
+        self.error_code = error_code
+        self.message = message
+
+
+class TallyRejectedEnvelope(Exception):
+    """Raised by voucher_dispatcher when the connector returned an
+    envelope with status="error" and retryable=False.
+
+    Intentionally NOT in Celery's `autoretry_for` — Tally rejected
+    the operation for a reason that needs operator action (wrong
+    company loaded, missing ledger, malformed voucher). Phase 0 eager
+    mode catches it in `_drive`'s tuple, commits the audit row, then
+    swallows; no retry.
+    """
+
+    def __init__(self, error_code: str, message: str) -> None:
+        super().__init__(f"{error_code}: {message}")
+        self.error_code = error_code
+        self.message = message
+
+
 @dataclass
 class ConnectorConnection:
     """One live WebSocket. Owned by the registry."""

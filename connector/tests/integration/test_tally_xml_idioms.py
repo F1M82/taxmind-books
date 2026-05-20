@@ -46,7 +46,7 @@ async def test_get_all_ledgers_against_real_response(
 
     # Captured Tally instance has these five user-visible ledgers; if Tally
     # ever changes shape, len > 0 alone doesn't fail loudly enough.
-    names = {l.name for l in ledgers}
+    names = {ledger.name for ledger in ledgers}
     assert names == {
         "ABC LTD",
         "Cash",
@@ -55,7 +55,7 @@ async def test_get_all_ledgers_against_real_response(
         "Xyz Ltd",
     }
 
-    by_name = {l.name: l for l in ledgers}
+    by_name = {ledger.name: ledger for ledger in ledgers}
     assert by_name["ABC LTD"].parent_group == "Sundry Creditors"
     assert by_name["HDFC BANK"].parent_group == "Bank Accounts"
     # `Profit & Loss A/c` is parented to the system-reserved "Primary"
@@ -66,7 +66,7 @@ async def test_get_all_ledgers_against_real_response(
     # The captured test company has no GST-registered party ledgers, so
     # every gstin is None. The synthetic test below covers the populated
     # case.
-    assert all(l.gstin is None for l in ledgers)
+    assert all(ledger.gstin is None for ledger in ledgers)
 
 
 @pytest.mark.asyncio

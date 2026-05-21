@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from datetime import date
 from decimal import Decimal
 
@@ -25,7 +26,6 @@ from connector.tally_client import (
     _parse_import_response,
     _parse_tally_date,
 )
-
 
 # ---------------- ImportData response fixtures ----------------
 #
@@ -765,5 +765,5 @@ def test_import_response_dataclass_is_frozen() -> None:
         line_error=None,
         raw_body="<RESPONSE/>",
     )
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         r.created = 2  # type: ignore[misc]

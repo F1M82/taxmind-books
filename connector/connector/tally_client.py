@@ -97,7 +97,7 @@ class TallyAmbiguousResponse(TallyError):
 
     def __init__(
         self,
-        parsed: "ImportResponse",
+        parsed: ImportResponse,
         raw_body: str,
     ) -> None:
         super().__init__(

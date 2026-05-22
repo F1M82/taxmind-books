@@ -474,6 +474,7 @@ class TallyClient:
                     "<NATIVEMETHOD>Name</NATIVEMETHOD>"
                     "<NATIVEMETHOD>Parent</NATIVEMETHOD>"
                     "<NATIVEMETHOD>PartyGSTIN</NATIVEMETHOD>"
+                    "<NATIVEMETHOD>GUID</NATIVEMETHOD>"
                   "</COLLECTION>"
                 "</TDLMESSAGE>"
               "</TDL>"

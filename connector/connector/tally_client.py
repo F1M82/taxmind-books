@@ -151,6 +151,7 @@ class LedgerMaster:
     name: str
     parent_group: str
     gstin: str | None = None
+    master_id: str | None = None
 
 
 @dataclass(frozen=True)

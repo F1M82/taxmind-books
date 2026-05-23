@@ -13,6 +13,7 @@ from pytest_httpx import HTTPXMock
 from connector.tally_client import (
     ImportResponse,
     LedgerEntryInput,
+    LedgerMaster,
     TallyAmbiguousResponse,
     TallyClient,
     TallyImportRejected,
@@ -767,3 +768,14 @@ def test_import_response_dataclass_is_frozen() -> None:
     )
     with pytest.raises(FrozenInstanceError):
         r.created = 2  # type: ignore[misc]
+
+
+def test_ledger_master_dataclass_is_frozen() -> None:
+    led = LedgerMaster(
+        name="Test Ledger",
+        parent_group="Test Group",
+        gstin=None,
+        master_id="abc-123",
+    )
+    with pytest.raises(FrozenInstanceError):
+        led.name = "Different Name"  # type: ignore[misc]

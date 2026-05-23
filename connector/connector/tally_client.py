@@ -731,11 +731,13 @@ class TallyClient:
                 continue
             parent = _strip_tally_ctrl(_get_text(ledger, "PARENT"))
             gstin = _get_text(ledger, "PARTYGSTIN", "").strip() or None
+            master_id = _get_text(ledger, "GUID", "").strip() or None
             out.append(
                 LedgerMaster(
                     name=name,
                     parent_group=parent,
                     gstin=gstin,
+                    master_id=master_id,
                 )
             )
         return out

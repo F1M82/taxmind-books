@@ -270,8 +270,57 @@ async def test_get_all_ledgers_parses(
     by_name = {led.name: led for led in ledgers}
     assert by_name["Sharma Traders"].parent_group == "Sundry Debtors"
     assert by_name["Sharma Traders"].gstin == "27BBBBB5678B1Z5"
+    assert by_name["Sharma Traders"].master_id is None
     assert by_name["Bank Account"].parent_group == "Bank Accounts"
     assert by_name["Bank Account"].gstin is None
+    assert by_name["Bank Account"].master_id is None
+
+
+# Mirrors the probe-captured Tally TDL-Collection response with <GUID>
+# populated (modern TallyPrime, GUID requested via NATIVEMETHOD). The
+# GUID is durable across year-end data-folder splits where local ledger
+# names can drift — reconciliation matches by GUID, not by name.
+_LEDGERS_XML_WITH_GUID = """<ENVELOPE>
+  <BODY>
+    <DATA>
+      <COLLECTION ISMSTDEPTYPE="Yes" MSTDEPTYPE="8">
+        <LEDGER NAME="ABC LTD" RESERVEDNAME="">
+          <GUID TYPE="String">ed86199b-f679-4450-9a9e-70673d09c6f8-000000cd</GUID>
+          <PARENT TYPE="String">Sundry Debtors</PARENT>
+          <PARTYGSTIN>27ABCDE1234F1Z5</PARTYGSTIN>
+        </LEDGER>
+        <LEDGER NAME="Cash" RESERVEDNAME="">
+          <GUID TYPE="String">ed86199b-f679-4450-9a9e-70673d09c6f8-0000001f</GUID>
+          <PARENT TYPE="String">Cash-in-Hand</PARENT>
+        </LEDGER>
+      </COLLECTION>
+    </DATA>
+  </BODY>
+</ENVELOPE>
+"""
+
+
+@pytest.mark.asyncio
+async def test_get_all_ledgers_parses_with_guid(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(
+        url="http://localhost:9000",
+        status_code=200,
+        text=_LEDGERS_XML_WITH_GUID,
+    )
+    ledgers = await client.get_all_ledgers()
+    by_name = {led.name: led for led in ledgers}
+    assert by_name["ABC LTD"].master_id == (
+        "ed86199b-f679-4450-9a9e-70673d09c6f8-000000cd"
+    )
+    assert by_name["Cash"].master_id == (
+        "ed86199b-f679-4450-9a9e-70673d09c6f8-0000001f"
+    )
+    # Parent + gstin still parse correctly alongside GUID.
+    assert by_name["ABC LTD"].parent_group == "Sundry Debtors"
+    assert by_name["ABC LTD"].gstin == "27ABCDE1234F1Z5"
+    assert by_name["Cash"].gstin is None
 
 
 # ---------------- get_all_groups ----------------

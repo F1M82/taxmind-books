@@ -9,8 +9,11 @@ asyncio task is hard to await deterministically through TestClient.
 
 from __future__ import annotations
 
+import logging
+import time
 from uuid import uuid4
 
+import pytest
 from app.api.v1.connector import persist_sync_masters_payload
 from app.core.audit import AuditContext, AuditEmitter
 from app.models.audit_log import AuditLog
@@ -46,7 +49,12 @@ def _audit(db: Session, company, user) -> AuditEmitter:  # type: ignore[no-untyp
 
 def _sample_ledgers() -> list[dict[str, object]]:
     return [
-        {"name": "Sharma Traders", "group_name": "Sundry Debtors", "gstin": None},
+        {
+            "name": "Sharma Traders",
+            "group_name": "Sundry Debtors",
+            "gstin": None,
+            "master_id": "tally-sharma-guid",
+        },
         {"name": "HDFC Bank A/c", "group_name": "Bank Accounts", "gstin": None},
         {"name": "Sales", "group_name": "Sales Accounts", "gstin": None},
     ]
@@ -89,6 +97,19 @@ def test_upsert_from_sync_creates_rows_under_correct_tenant(
     )
     assert len(audits) == 3
     assert all(a.source == "connector" for a in audits)
+
+    # BUG-005 step 2e: tally_master_id persists from payload (and None
+    # passes through when absent); tally_synced_at is stamped on every
+    # processed row.
+    by_name = {r.name: r for r in rows}
+    assert by_name["Sharma Traders"].tally_master_id == "tally-sharma-guid"
+    assert by_name["HDFC Bank A/c"].tally_master_id is None
+    assert by_name["Sales"].tally_master_id is None
+    assert all(r.tally_synced_at is not None for r in rows)
+    sharma_audit = next(
+        a for a in audits if a.entity_id == by_name["Sharma Traders"].id
+    )
+    assert sharma_audit.new_value["tally_master_id"] == "tally-sharma-guid"
 
 
 def test_upsert_from_sync_is_idempotent(db_session: Session) -> None:
@@ -200,6 +221,290 @@ def test_upsert_from_sync_skips_invalid_rows(db_session: Session) -> None:
     )
     db_session.commit()
     assert counts == {"created": 1, "updated": 0, "skipped": 4}
+
+
+# ---------------------------------------------------------------------
+# BUG-005 step 2e: tally_master_id reconciliation matrix
+# ---------------------------------------------------------------------
+
+
+def test_upsert_from_sync_reconciles_null_local_when_payload_brings_guid(
+    db_session: Session,
+) -> None:
+    user = make_user(db_session)
+    company = make_company(db_session, name="Acme")
+    make_membership(db_session, user, company, role=CompanyRole.owner)
+
+    service = LedgerService(
+        db_session, _audit(db_session, company, user), company.id
+    )
+    # Seed: an unsynced legacy ledger (no master_id in payload).
+    service.upsert_from_sync(
+        ledgers=[{"name": "Sharma Traders", "group_name": "Sundry Debtors"}],
+        groups=[],
+    )
+    db_session.commit()
+
+    row = (
+        db_session.query(Ledger)
+        .filter(Ledger.company_id == company.id, Ledger.name == "Sharma Traders")
+        .one()
+    )
+    assert row.tally_master_id is None  # precondition
+
+    # Re-sync: payload now carries the GUID — main reconciliation path.
+    counts = service.upsert_from_sync(
+        ledgers=[{
+            "name": "Sharma Traders",
+            "group_name": "Sundry Debtors",
+            "master_id": "tally-sharma-guid",
+        }],
+        groups=[],
+    )
+    db_session.commit()
+
+    assert counts == {"created": 0, "updated": 1, "skipped": 0}
+    db_session.refresh(row)
+    assert row.tally_master_id == "tally-sharma-guid"
+    assert row.tally_synced_at is not None
+
+    # Audit row reflects the NULL→GUID transition.
+    audit = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.company_id == company.id,
+            AuditLog.action == "ledger.updated",
+            AuditLog.entity_id == row.id,
+        )
+        .one()
+    )
+    assert audit.old_value["tally_master_id"] is None
+    assert audit.new_value["tally_master_id"] == "tally-sharma-guid"
+
+
+def test_upsert_from_sync_preserves_local_guid_when_payload_is_null(
+    db_session: Session,
+) -> None:
+    user = make_user(db_session)
+    company = make_company(db_session, name="Acme")
+    make_membership(db_session, user, company, role=CompanyRole.owner)
+
+    service = LedgerService(
+        db_session, _audit(db_session, company, user), company.id
+    )
+    # Seed with a known-good GUID.
+    service.upsert_from_sync(
+        ledgers=[{
+            "name": "Sharma Traders",
+            "group_name": "Sundry Debtors",
+            "master_id": "known-guid",
+        }],
+        groups=[],
+    )
+    db_session.commit()
+
+    row = (
+        db_session.query(Ledger)
+        .filter(Ledger.company_id == company.id, Ledger.name == "Sharma Traders")
+        .one()
+    )
+    assert row.tally_master_id == "known-guid"
+
+    # Re-sync with no master_id in payload — must not clobber.
+    counts = service.upsert_from_sync(
+        ledgers=[{"name": "Sharma Traders", "group_name": "Sundry Debtors"}],
+        groups=[],
+    )
+    db_session.commit()
+
+    assert counts == {"created": 0, "updated": 0, "skipped": 0}
+    db_session.refresh(row)
+    assert row.tally_master_id == "known-guid"  # preserved
+    assert row.tally_synced_at is not None  # stamped even on no-op
+
+    # No ledger.updated audit row — nothing changed semantically.
+    audit_count = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.company_id == company.id,
+            AuditLog.action == "ledger.updated",
+            AuditLog.entity_id == row.id,
+        )
+        .count()
+    )
+    assert audit_count == 0
+
+
+def test_upsert_from_sync_no_op_when_guids_match(db_session: Session) -> None:
+    user = make_user(db_session)
+    company = make_company(db_session, name="Acme")
+    make_membership(db_session, user, company, role=CompanyRole.owner)
+
+    service = LedgerService(
+        db_session, _audit(db_session, company, user), company.id
+    )
+    service.upsert_from_sync(
+        ledgers=[{
+            "name": "Sharma Traders",
+            "group_name": "Sundry Debtors",
+            "master_id": "matching-guid",
+        }],
+        groups=[],
+    )
+    db_session.commit()
+
+    row = (
+        db_session.query(Ledger)
+        .filter(Ledger.company_id == company.id, Ledger.name == "Sharma Traders")
+        .one()
+    )
+    assert row.tally_master_id == "matching-guid"
+
+    # Re-sync with identical GUID — matrix fall-through.
+    counts = service.upsert_from_sync(
+        ledgers=[{
+            "name": "Sharma Traders",
+            "group_name": "Sundry Debtors",
+            "master_id": "matching-guid",
+        }],
+        groups=[],
+    )
+    db_session.commit()
+
+    assert counts == {"created": 0, "updated": 0, "skipped": 0}
+    db_session.refresh(row)
+    assert row.tally_master_id == "matching-guid"
+    assert row.tally_synced_at is not None
+
+    audit_count = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.company_id == company.id,
+            AuditLog.action == "ledger.updated",
+            AuditLog.entity_id == row.id,
+        )
+        .count()
+    )
+    assert audit_count == 0
+
+
+def test_upsert_from_sync_logs_warning_on_guid_mismatch(
+    db_session: Session,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    user = make_user(db_session)
+    company = make_company(db_session, name="Acme")
+    make_membership(db_session, user, company, role=CompanyRole.owner)
+
+    service = LedgerService(
+        db_session, _audit(db_session, company, user), company.id
+    )
+    service.upsert_from_sync(
+        ledgers=[{
+            "name": "Sharma Traders",
+            "group_name": "Sundry Debtors",
+            "master_id": "local-guid-A",
+        }],
+        groups=[],
+    )
+    db_session.commit()
+
+    row = (
+        db_session.query(Ledger)
+        .filter(Ledger.company_id == company.id, Ledger.name == "Sharma Traders")
+        .one()
+    )
+    assert row.tally_master_id == "local-guid-A"
+
+    # Re-sync with a conflicting GUID — anomaly; local value held, WARN logged.
+    with caplog.at_level(logging.WARNING, logger="app.services.ledger_service"):
+        counts = service.upsert_from_sync(
+            ledgers=[{
+                "name": "Sharma Traders",
+                "group_name": "Sundry Debtors",
+                "master_id": "payload-guid-B",
+            }],
+            groups=[],
+        )
+        db_session.commit()
+
+    assert counts == {"created": 0, "updated": 0, "skipped": 0}
+    db_session.refresh(row)
+    assert row.tally_master_id == "local-guid-A"  # PRESERVED, not overwritten
+
+    mismatch_records = [
+        r for r in caplog.records
+        if r.name == "app.services.ledger_service"
+        and r.levelname == "WARNING"
+        and "reconciliation skipped" in r.getMessage()
+    ]
+    assert len(mismatch_records) == 1
+    msg = mismatch_records[0].getMessage()
+    assert "local-guid-A" in msg
+    assert "payload-guid-B" in msg
+    assert "Sharma Traders" in msg
+    assert str(company.id) in msg
+
+    audit_count = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.company_id == company.id,
+            AuditLog.action == "ledger.updated",
+            AuditLog.entity_id == row.id,
+        )
+        .count()
+    )
+    assert audit_count == 0
+
+
+def test_upsert_from_sync_stamps_tally_synced_at_on_every_processed_row(
+    db_session: Session,
+) -> None:
+    user = make_user(db_session)
+    company = make_company(db_session, name="Acme")
+    make_membership(db_session, user, company, role=CompanyRole.owner)
+
+    service = LedgerService(
+        db_session, _audit(db_session, company, user), company.id
+    )
+
+    # Insert path.
+    service.upsert_from_sync(
+        ledgers=[{"name": "Sharma Traders", "group_name": "Sundry Debtors"}],
+        groups=[],
+    )
+    db_session.commit()
+    row = (
+        db_session.query(Ledger)
+        .filter(Ledger.company_id == company.id, Ledger.name == "Sharma Traders")
+        .one()
+    )
+    first_stamp = row.tally_synced_at
+    assert first_stamp is not None
+
+    # Update path with semantic change (group_name moves).
+    time.sleep(0.05)
+    service.upsert_from_sync(
+        ledgers=[{"name": "Sharma Traders", "group_name": "Sundry Creditors"}],
+        groups=[],
+    )
+    db_session.commit()
+    db_session.refresh(row)
+    second_stamp = row.tally_synced_at
+    assert second_stamp is not None
+    assert second_stamp > first_stamp
+
+    # Idempotent no-op (same data re-synced) — stamp still advances.
+    time.sleep(0.05)
+    service.upsert_from_sync(
+        ledgers=[{"name": "Sharma Traders", "group_name": "Sundry Creditors"}],
+        groups=[],
+    )
+    db_session.commit()
+    db_session.refresh(row)
+    third_stamp = row.tally_synced_at
+    assert third_stamp is not None
+    assert third_stamp > second_stamp
 
 
 # ---------------------------------------------------------------------

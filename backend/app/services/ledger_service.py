@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -15,6 +17,8 @@ from app.core.exceptions import LedgerInUse, LedgerNotFound
 from app.models.ledger import BalanceType, Ledger
 from app.models.voucher import LedgerEntry
 from app.schemas.ledger import LedgerCreate, LedgerUpdate
+
+logger = logging.getLogger("app.services.ledger_service")
 
 
 def _normalize(name: str) -> str:
@@ -44,6 +48,7 @@ def _ledger_snapshot(led: Ledger) -> dict[str, Any]:
         "address": led.address,
         "state_code": led.state_code,
         "is_active": led.is_active,
+        "tally_master_id": led.tally_master_id,
     }
 
 
@@ -239,6 +244,16 @@ class LedgerService:
         is not persisted — the schema denormalizes group identity into
         `ledgers.group_name` (see P0.46b in PHASE_0_TASKS.md).
 
+        Tally GUID reconciliation (BUG-005): the payload may include
+        per-ledger `master_id`. On insert, it's written verbatim. On
+        update, the four-case matrix applies — local NULL + payload GUID
+        writes (main reconciliation path), local GUID + payload NULL is
+        ignored, GUID mismatch on same name logs WARN and holds the local
+        value (Tally GUIDs should be stable). `tally_synced_at` is
+        stamped on every successful per-row processing — including
+        idempotent no-ops — and is excluded from the audit snapshot so
+        it never triggers a phantom audit row.
+
         Returns a `{created, updated, skipped}` count dict.
         """
         del groups  # not persisted in Phase 0; see docstring
@@ -256,6 +271,7 @@ class LedgerService:
             norm = _normalize(name)
             group_name = raw.get("group_name") or None
             gstin = raw.get("gstin") or None
+            payload_guid = raw.get("master_id") or None
 
             existing = (
                 self.db.query(Ledger)
@@ -276,6 +292,8 @@ class LedgerService:
                     balance_type=BalanceType.Dr,
                     gstin=gstin,
                     is_active=True,
+                    tally_master_id=payload_guid,
+                    tally_synced_at=datetime.now(UTC),
                 )
                 self.db.add(ledger_row)
                 self.db.flush()
@@ -290,13 +308,44 @@ class LedgerService:
                 continue
 
             old_snap = _ledger_snapshot(existing)
+
+            # Reconcile matrix per BUG-005 decision:
+            #   local NULL + payload GUID → write (main reconciliation path)
+            #   local GUID + payload NULL → ignore (don't clobber known-good)
+            #   local GUID != payload GUID → log WARN, hold local
+            #     (Tally GUIDs should be stable — mismatch is an anomaly
+            #     needing operator investigation, not silent overwrite)
+            #   both NULL, or both equal → no-op (falls through)
+            local_guid = existing.tally_master_id
+            if local_guid is None and payload_guid is not None:
+                existing.tally_master_id = payload_guid
+            elif local_guid is not None and payload_guid is None:
+                pass  # don't clobber known-good local GUID
+            elif (
+                local_guid is not None
+                and payload_guid is not None
+                and local_guid != payload_guid
+            ):
+                logger.warning(
+                    "ledger reconciliation skipped: name=%r company_id=%s "
+                    "local_guid=%s payload_guid=%s (Tally GUIDs should be "
+                    "stable; investigate before manual reconciliation)",
+                    name,
+                    self.company_id,
+                    local_guid,
+                    payload_guid,
+                )
+
             existing.group_name = group_name
             existing.gstin = gstin
             existing.is_active = True
+            existing.tally_synced_at = datetime.now(UTC)
             self.db.flush()
             new_snap = _ledger_snapshot(existing)
             if new_snap == old_snap:
                 # Re-sync of identical data — idempotent no-op, no audit row.
+                # tally_synced_at was stamped above but is excluded from the
+                # snapshot, so it doesn't trigger a phantom audit row.
                 continue
             self.audit.emit(
                 action="ledger.updated",

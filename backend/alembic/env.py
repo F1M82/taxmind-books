@@ -18,7 +18,7 @@ from sqlalchemy import engine_from_config, pool
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Inject DATABASE_URL from Settings so the URL has one source of truth.
 config.set_main_option("sqlalchemy.url", get_settings().DATABASE_URL)

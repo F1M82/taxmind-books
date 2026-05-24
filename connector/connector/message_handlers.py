@@ -60,6 +60,7 @@ async def _handle_sync_masters(
                 "name": led.name,
                 "group_name": led.parent_group,
                 "gstin": led.gstin,
+                "master_id": led.master_id,
             }
             for led in ledgers
         ],

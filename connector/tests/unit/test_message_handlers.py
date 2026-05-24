@@ -98,6 +98,36 @@ async def test_sync_masters_collects_ledgers_and_groups(
     assert result["status"] == "success"
     assert result["result"]["ledgers"][0]["name"] == "L1"
     assert result["result"]["groups"][0]["name"] == "G1"
+    # Fixture's LedgerMaster omits master_id, so the dataclass default
+    # (None) must propagate through the dict comprehension to the wire.
+    assert "master_id" in result["result"]["ledgers"][0]
+    assert result["result"]["ledgers"][0]["master_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_sync_masters_propagates_master_id_when_present(
+    fake_tally: TallyClient,
+) -> None:
+    # Re-mock get_all_ledgers with a non-None master_id to prove the
+    # field's *value* (not just its presence) flows through. Guards
+    # against a future regression that re-introduces a key whitelist.
+    fake_tally.get_all_ledgers = AsyncMock(  # type: ignore[method-assign]
+        return_value=[
+            LedgerMaster(
+                name="Sharma Traders",
+                parent_group="Sundry Debtors",
+                gstin=None,
+                master_id="abc-123-guid",
+            )
+        ]
+    )
+    result = await dispatch_command(
+        tally=fake_tally,
+        payload={"command": "sync_masters", "args": {}, "company_id": "C"},
+        registered_company_id="C",
+    )
+    assert result["status"] == "success"
+    assert result["result"]["ledgers"][0]["master_id"] == "abc-123-guid"
 
 
 # ---------------- post_voucher ----------------

@@ -18,6 +18,7 @@ Two entry points:
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -25,6 +26,8 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core.audit import AuditContext, AuditEmitter
+from app.core.exceptions import LedgerNotSyncedToTally
+from app.models.ledger import Ledger
 from app.models.voucher import LedgerEntry, Voucher, VoucherStatus
 
 # Module import for late `get_registry` lookup; the exception classes
@@ -42,6 +45,63 @@ from app.services.tally.connector_registry import (
 )
 
 logger = logging.getLogger("app.services.tally.voucher_dispatcher")
+
+
+# ---------------------------------------------------------------------
+# Pre-flight guard (BUG-005 step 3)
+# ---------------------------------------------------------------------
+
+
+def check_ledgers_synced(
+    db: Session,
+    *,
+    ledger_ids: Iterable[UUID],
+    company_id: UUID,
+) -> None:
+    """Reject voucher operations that reference ledgers not yet synced to Tally.
+
+    Queries the DB fresh on every call — never caches. sync_masters may
+    run between an API-layer check and a dispatcher-layer check, so a
+    cached result would risk false positives at the boundary.
+
+    Raises:
+        LedgerNotSyncedToTally: if any referenced ledger has
+            `tally_master_id IS NULL`. The exception's details carry
+            `unsynced_ledger_ids`, `unsynced_ledger_names`, and a
+            human-readable `remediation` string so both the API 422
+            response and the dispatcher audit row can surface the same
+            context.
+    """
+    rows = (
+        db.query(Ledger.id, Ledger.name, Ledger.tally_master_id)
+        .filter(
+            Ledger.id.in_(list(ledger_ids)),
+            Ledger.company_id == company_id,
+        )
+        .all()
+    )
+    unsynced = [(r.id, r.name) for r in rows if r.tally_master_id is None]
+    if not unsynced:
+        return
+
+    names = [name for _, name in unsynced]
+    rest = len(names) - 1
+    msg = (
+        f"Ledger {names[0]!r} is not yet synced to Tally"
+        + (f" (and {rest} other ledger(s))" if rest else "")
+        + ". Run sync_masters before posting vouchers that reference it."
+    )
+    raise LedgerNotSyncedToTally(
+        msg,
+        details={
+            "unsynced_ledger_ids": [str(lid) for lid, _ in unsynced],
+            "unsynced_ledger_names": names,
+            "remediation": (
+                "Trigger POST /api/v1/connector/sync/{company_id} to "
+                "pull ledger masters from Tally, then re-post the voucher."
+            ),
+        },
+    )
 
 
 # ---------------------------------------------------------------------
@@ -139,18 +199,27 @@ def _enqueue_in_process(
             CommandTimeout,
             TallyRetryableEnvelope,
             TallyRejectedEnvelope,
+            LedgerNotSyncedToTally,
         ) as exc:
             # Audit row was emitted by dispatch_voucher_to_tally; commit
             # it so the failure is visible. No Celery retry in eager
             # mode. ConnectorOffline / CommandTimeout / TallyRetryableEnvelope
             # are retryable and the audit row reflects voucher.tally_post_queued
             # (Phase 0.5 re-enqueue infrastructure reads it). TallyRejectedEnvelope
-            # is operator-action and reflects voucher.tally_post_failed.
+            # and LedgerNotSyncedToTally are operator-action and reflect
+            # voucher.tally_post_failed / voucher.tally_post_blocked.
             db.commit()
             if isinstance(exc, TallyRejectedEnvelope):
                 logger.error(
                     "in-process dispatch failed for voucher %s: %s "
                     "(Tally rejected — operator action required)",
+                    voucher_id,
+                    exc,
+                )
+            elif isinstance(exc, LedgerNotSyncedToTally):
+                logger.error(
+                    "in-process dispatch blocked for voucher %s: %s "
+                    "(ledger not synced to Tally — run sync_masters)",
                     voucher_id,
                     exc,
                 )
@@ -221,8 +290,6 @@ async def dispatch_voucher_to_tally(
     # Resolve ledger names for the post_voucher args. The connector
     # expects ledger NAMES (Tally is name-keyed), not our UUIDs.
     ledger_ids = [e.ledger_id for e in entries]
-    from app.models.ledger import Ledger
-
     ledger_names: dict[UUID, str] = dict(
         db.query(Ledger.id, Ledger.name)
         .filter(Ledger.id.in_(ledger_ids))
@@ -267,6 +334,35 @@ async def dispatch_voucher_to_tally(
             source="worker",
         ),
     )
+
+    # BUG-005 step 3: defense-in-depth guard. Catches any voucher that
+    # reached the dispatcher with unsynced ledgers — either bypassing
+    # the API-layer guard (non-API call path) or whose ledgers became
+    # unsynced between API check and dispatch. Pre-flight reject: does
+    # NOT increment tally_post_attempts (this is not a Tally attempt);
+    # status stays at pending_tally_post so the eventual re-dispatch
+    # (after sync_masters runs) needs no state transition.
+    if not get_settings().TAXMIND_SKIP_TALLY_DISPATCH:
+        try:
+            check_ledgers_synced(
+                db, ledger_ids=ledger_ids, company_id=company_id
+            )
+        except LedgerNotSyncedToTally as exc:
+            voucher.tally_last_error = exc.message
+            audit.emit(
+                action="voucher.tally_post_blocked",
+                entity_type="voucher",
+                entity_id=voucher.id,
+                old_value=None,
+                new_value={
+                    "code": exc.code,
+                    "message": exc.message,
+                    **(exc.details or {}),
+                },
+                actor_user_id=user_id,
+                company_id_override=company_id,
+            )
+            raise
 
     try:
         result = await registry.send_command(

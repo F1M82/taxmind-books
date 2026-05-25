@@ -58,12 +58,18 @@ def _setup(db_session: Session):  # type: ignore[no-untyped-def]
         name="HDFC Bank",
         name_normalized="hdfc bank",
         group_name="Bank Accounts",
+        # BUG-005 step 3: this test calls monkeypatch.delenv on
+        # TAXMIND_SKIP_TALLY_DISPATCH below to exercise the eager
+        # dispatch path. That also activates check_ledgers_synced in
+        # VoucherService.create, so the ledgers need synthetic GUIDs.
+        tally_master_id="test-guid-hdfc",
     )
     party = Ledger(
         company_id=company.id,
         name="Xyz Ltd",
         name_normalized="xyz ltd",
         group_name="Sundry Debtors",
+        tally_master_id="test-guid-xyz",
     )
     db_session.add_all([bank, party])
     db_session.commit()

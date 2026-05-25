@@ -10,6 +10,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.core.audit import AuditEmitter
 from app.core.exceptions import (
     ConnectorOffline as ConnectorOfflineDomain,
@@ -35,6 +36,7 @@ from app.models.voucher import (
     VoucherType,
 )
 from app.schemas.voucher import VoucherCreate, VoucherUpdate
+from app.services.tally.voucher_dispatcher import check_ledgers_synced
 from app.services.voucher_groups import (
     is_bank_or_cash,
     is_sundry_creditors,
@@ -117,6 +119,18 @@ class VoucherService:
         self._validate_gst(data)
         ledger_groups = self._validate_ledger_ownership(data)
         self._validate_type_rules(data, ledger_groups)
+
+        # BUG-005 step 3: refuse to create a voucher referencing ledgers
+        # that haven't been synced to Tally yet — the dispatcher would
+        # otherwise fail with a Tally rejection. Skipped in test sessions
+        # via TAXMIND_SKIP_TALLY_DISPATCH (same conditional applies at
+        # the dispatcher layer; see voucher_dispatcher.py).
+        if not get_settings().TAXMIND_SKIP_TALLY_DISPATCH:
+            check_ledgers_synced(
+                self.db,
+                ledger_ids=[e.ledger_id for e in data.entries],
+                company_id=self.company_id,
+            )
 
         voucher = Voucher(
             company_id=self.company_id,

@@ -38,8 +38,8 @@ Reference (full DDL is in SCHEMA.sql):
 ```sql
 CREATE TABLE audit_logs (
     id            UUID PRIMARY KEY,
-    company_id    UUID REFERENCES companies(id),      -- nullable: system events (see below)
-    user_id       UUID REFERENCES users(id),          -- nullable: system events
+    company_id    UUID NOT NULL REFERENCES companies(id),
+    user_id       UUID REFERENCES users(id),         -- nullable: system events
     action        VARCHAR(40) NOT NULL,               -- e.g. "voucher.created"
     entity_type   VARCHAR(40) NOT NULL,               -- e.g. "voucher"
     entity_id     UUID NOT NULL,
@@ -53,48 +53,12 @@ CREATE TABLE audit_logs (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_audit_logs_company_created ON audit_logs (company_id, created_at DESC)
-    WHERE company_id IS NOT NULL;
+CREATE INDEX idx_audit_logs_company_created ON audit_logs (company_id, created_at DESC);
 CREATE INDEX idx_audit_logs_entity ON audit_logs (entity_type, entity_id);
-CREATE INDEX idx_audit_logs_user ON audit_logs (user_id, created_at DESC)
-    WHERE user_id IS NOT NULL;
+CREATE INDEX idx_audit_logs_user ON audit_logs (user_id, created_at DESC);
 ```
 
 The `audit_logs` table has additional database-level protections (see *Append-only enforcement* below).
-
-### Tenant-scoped vs system events
-
-Most audit rows are **tenant-scoped** — they belong to a specific company,
-and `company_id` is the active company at the moment of the action.
-
-A small set of events have **no tenant scope** at the time they occur:
-
-| Action | Why no company |
-|---|---|
-| `user.created` | The new user is not a member of any company until they create or are added to one. |
-| `user.password_changed` | Password is on the global `users` row, not tied to a company. |
-| `user.deactivated` | Same — user lifecycle, not company state. |
-| `device.registered` / `device.unregistered` | Push notification tokens are bound to a user, not a company. |
-| `account.deletion_requested` / `cancelled` / `completed` | The deletion request is at the user level. |
-| `data_export.requested` / `completed` | Cross-company by design. |
-
-For these events, audit rows are written with `company_id = NULL`. The
-column was made nullable in v1.2 Patch 1 (see `AMENDMENTS_v1.2.md`).
-`AuditEmitter.emit_system_event()` (or passing `company=None` on the
-`AuditContext`) is the canonical path.
-
-**Read-API behavior.** The tenant-scoped audit-log API
-(`GET /api/v1/audit-logs/`) filters explicitly by the active company,
-so system rows never leak into a tenant's view. They are reached only
-via admin/superuser paths, which are out of scope until Phase 5.
-
-**Auto-scoping note.** `AuditLog` does NOT inherit
-`TenantScopedMixin`. The auto-injected `WHERE company_id = X` from
-`get_scoped_session` would silently exclude system rows from any
-tenant's audit query — which is the desired behavior — but more
-importantly the mixin enforces NOT NULL at the column level. The
-read API applies the company filter explicitly in service code, where
-it is visible to reviewers and to the tenant-isolation tests.
 
 ## Action vocabulary
 
@@ -106,11 +70,13 @@ Actions follow a strict `entity.verb` naming convention. The full v1 vocabulary:
 | `voucher.updated` | Voucher fields modified |
 | `voucher.cancelled` | Voucher status changed to CANCELLED |
 | `voucher.posted_to_tally` | Voucher successfully posted to Tally |
-| `voucher.tally_post_failed` | Non-retryable Tally rejection (validation error, missing ledger). The voucher remains in `pending_tally_post` for human inspection. (Description refined in P0.46d.) |
+| `voucher.tally_post_failed` | Non-retryable Tally rejection (validation error, missing ledger). The voucher remains in `pending_tally_post` for human inspection. |
 | `voucher.posted_as_optional` | (v1.2) AI-extracted voucher posted to Tally as Optional |
 | `voucher.approved_to_regular` | (v1.2) Optional voucher promoted to Regular by admin |
 | `voucher.rejected_optional` | (v1.2) Optional voucher rejected and deleted from Tally |
-| `voucher.tally_post_queued` | (P0.46d, v1.2 down-scope of v1.3) Retryable dispatch failure — connector offline, command timeout, or wrong Tally company open. Voucher stays in `pending_tally_post`; Celery backoff or heartbeat-driven drain re-fires. |
+| `voucher.tally_post_queued` | (v1.3, P0.46d in v1.2 down-scope) Retryable dispatch failure — connector offline, command timeout, or wrong Tally company open. Voucher stays in `pending_tally_post`; Celery backoff or heartbeat-driven drain re-fires. |
+| `voucher.tally_post_blocked` | (BUG-005 step 3) Pre-flight rejection — voucher references one or more ledgers with `tally_master_id IS NULL`. Voucher stays in `pending_tally_post`; `tally_post_attempts` is NOT incremented (this is not a Tally attempt). `new_value` carries `code`, `message`, `unsynced_ledger_ids`, `unsynced_ledger_names`, and `remediation`. Resolves when `sync_masters` populates the missing GUIDs and re-dispatch fires. |
+| `voucher.tally_post_expired` | (v1.3) Queued voucher expired after 30 days without right company opening |
 | `ledger.created` | Ledger master created |
 | `ledger.updated` | Ledger master fields modified |
 | `ledger.sync_failed` | (v1.3) `sync_masters` reply received but ingest persistence failed (P0.46b) |
@@ -136,6 +102,11 @@ Actions follow a strict `entity.verb` naming convention. The full v1 vocabulary:
 | `data_export.completed` | (v1.2) Export bundle ready; download link sent |
 | `device.registered` | (v1.2) Push notification token registered |
 | `device.unregistered` | (v1.2) Push notification token deregistered |
+| `company.tally_mapping_configured` | (v1.3) Backend company mapped to a Tally company for first time |
+| `company.tally_mapping_changed` | (v1.3) Mapping updated (folder path, identifier, or display name) |
+| `company.tally_mapping_cleared` | (v1.3) Mapping removed (admin action) |
+| `ledger.confirmed_in_tally` | (v1.3) Mobile-created ledger confirmed present on next Tally sync |
+| `connector.tally_companies_discovered` | (v1.3) Connector reported the Tally company list to the backend |
 
 New actions added in later phases extend this list. Coder Claude does not invent new action names; they are added to this document first.
 
@@ -245,11 +216,16 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "voucher.posted_to_tally", "voucher.tally_post_failed",
     "voucher.posted_as_optional", "voucher.approved_to_regular",
     "voucher.rejected_optional",
+    "voucher.tally_post_queued", "voucher.tally_post_expired",      # v1.3
     "ledger.created", "ledger.updated",
     "ledger.sync_failed",                                           # v1.3 (P0.46b)
+    "ledger.confirmed_in_tally",                                    # v1.3
     "recon.session_created", "recon.session_completed",
     "recon.match_confirmed", "recon.match_rejected",
     "company.created", "company.settings_updated", "company.suspended",
+    "company.tally_mapping_configured",                             # v1.3
+    "company.tally_mapping_changed",                                # v1.3
+    "company.tally_mapping_cleared",                                # v1.3
     "user.created", "user.password_changed", "user.deactivated",
     "user_company.role_assigned", "user_company.role_changed",
     "user_company.removed",
@@ -258,6 +234,7 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "account.deletion_completed",
     "data_export.requested", "data_export.completed",
     "device.registered", "device.unregistered",
+    "connector.tally_companies_discovered",                         # v1.3
 })
 
 
@@ -479,14 +456,6 @@ CREATE TRIGGER audit_logs_no_delete BEFORE DELETE ON audit_logs
 
 The ORM model `AuditLog` is read-only via class-level configuration (no setters generated). The `AuditEmitter` is the only path that constructs `AuditLog` instances. CI lints for any code outside `core/audit.py` constructing `AuditLog`.
 
-### Interaction with `audit_logs.user_id ON DELETE SET NULL`
-
-The FK from `audit_logs.user_id` to `users.id` is `ON DELETE SET NULL` in the migration (0004). That cascade fires an UPDATE on every referencing audit row, which the Layer-2 trigger refuses. **Net effect: a user with any audit history cannot be hard-deleted.** Anything attempting `DELETE FROM users WHERE id = ...` will roll back with `audit_logs is append-only`.
-
-This is intentional — audit immutability wins over the foreign key. DPDP-style erasure (P0.45) anonymises the user row instead of deleting it: PII fields are wiped (`email`, `full_name`, `phone`, `firm_name`, `ca_membership_no`, `hashed_password`), `is_active` flips to false, and the row stays so audit/voucher references remain joinable. See `account_lifecycle_service.process_due_deletion` for the implementation.
-
-If a future requirement genuinely needs hard-delete, the only safe options are (a) tightening the trigger to allow the specific `user_id → NULL` cascade via `pg_trigger_depth()`, or (b) toggling `session_replication_role = 'replica'` for the deletion transaction. Both deserve their own AUDIT.md amendment first.
-
 ## Mandatory-emit enforcement
 
 A service method that mutates a financially significant entity must call `audit.emit`. This is enforced by:
@@ -598,3 +567,49 @@ Validation report includes these manual checks:
 7. Verify no audit log row contains a password, token, or API key in its JSON values.
 
 If any check fails, the audit subsystem has a defect. The phase does not pass.
+
+## Foreign key behavior under deletion (v1.3)
+
+The `audit_logs.user_id` column declares `ON DELETE SET NULL`. This is **effectively inoperable** while the append-only trigger is in force: any attempt to UPDATE the column (which is what `SET NULL` does at the SQL level) raises the append-only trigger and the deletion fails.
+
+Practical implication: a user with audit rows referencing them **cannot be hard-deleted** by ordinary SQL. The audit log preserves history; that is the intended product behavior.
+
+The account-deletion flow (P0.45) therefore does NOT execute `DELETE FROM users WHERE id = ?`. Instead it performs PII scrubbing in-place:
+
+```sql
+UPDATE users
+SET email = 'deleted-' || id || '@deleted.local',
+    full_name = 'Deleted User',
+    phone = NULL,
+    is_active = false
+WHERE id = ?;
+```
+
+The user row remains; the user's identifying information is gone. Audit log rows referencing this user still resolve (they have a non-null `user_id`) but the user details API returns the scrubbed values.
+
+A regression test asserts `DELETE FROM users WHERE id = <user-with-audit-rows>` raises the trigger exception — this cements the contract so future contributors don't try to "fix" the ON DELETE SET NULL behavior.
+
+## Per-row connector attribution (v1.3)
+
+For audit events caused by a specific Tally Connector instance, the `metadata` JSONB column records `posted_by_connector_id`:
+
+```json
+{
+  "metadata": {
+    "posted_by_connector_id": "uuid-of-connector-instance",
+    "tally_voucher_guid": "...",
+    "connector_version": "0.1.0"
+  }
+}
+```
+
+This is captured automatically by the voucher dispatcher when a connector reports success. It applies to:
+- `voucher.posted_to_tally`
+- `voucher.posted_as_optional`
+- `voucher.approved_to_regular` (which connector flipped the Optional flag)
+- `voucher.rejected_optional` (which connector deleted)
+- `voucher.tally_post_failed` (which connector failed)
+
+It does NOT apply to `voucher.created`, `voucher.updated`, `voucher.cancelled` — those are user actions through the API, not connector operations.
+
+The mobile voucher-detail screen uses this metadata to show "Posted via [connector display name] at [time]." When two connectors are enrolled for the same backend company, this is how the user knows which one did each post.

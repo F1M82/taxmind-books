@@ -40,6 +40,7 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset(
         "voucher.posted_to_tally",
         "voucher.tally_post_failed",
         "voucher.tally_post_queued",
+        "voucher.tally_post_blocked",
         "voucher.posted_as_optional",
         "voucher.approved_to_regular",
         "voucher.rejected_optional",

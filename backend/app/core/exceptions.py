@@ -181,6 +181,10 @@ class VoucherTypeRuleViolation(ValidationFailed):
     code = "voucher_type_rule_violation"
 
 
+class LedgerNotSyncedToTally(ValidationFailed):
+    code = "ledger_not_synced_to_tally"
+
+
 class VoucherNotOptional(Conflict):
     code = "voucher_not_optional"
 

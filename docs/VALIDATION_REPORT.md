@@ -386,6 +386,23 @@ def write_report(out_path: Path, phase: int, env: dict, tests: dict, migrations:
           `validation/phase_0_20260518_074547.md`.
         - Idempotency re-run (`sync_masters again`) not yet validated;
           remains open under §7.5.
+        - 2026-05-26: §7.5b happy-path live validation RECLASSIFIED as
+          **deferred operational verification, not a release blocker.**
+          BUG-Books-005 — the unsynced-ledger guard that gates the
+          §7.5b happy-path POST — shipped 2026-05-25 (`ec68199`, CI
+          green, backend 565/565) with full automated coverage. Three
+          sessions (2026-05-24/25/26) reached environment setup but not
+          the validation moment, due to unstable local integration
+          orchestration (Docker cold-start, Tally ODBC re-enable,
+          connector rebuild/relaunch + stale `.exe`, 30-minute token
+          churn, backend process instability). **Live Tally validation
+          is NOT a Phase 0 gate.** The first real-user encounter becomes
+          the practical validation point; risk is bounded by the post
+          guard's fail-safe 422 + operator remediation. BUG-004 Layer C
+          (`tally_voucher_guid` / REMOTEID capture) is likewise deferred
+          to the first real-user successful POST. The unchecked §7.5b
+          boxes above remain live-environment checks, not coding work.
+          See PHASE_0_CLOSEOUT.md §"Known issues" BUG-Books-005.
 
         ### 7.6 End-to-end (the Phase 0 deliverable)
         - [ ] Mobile app: register new user

@@ -146,6 +146,109 @@ function Get-ContainerHealth {
 }
 
 # --------------------------------------------------------------------------
+# Connector build staleness (Phase 0.5: .exe versioning)
+# --------------------------------------------------------------------------
+function Invoke-Git {
+    # Like Invoke-Docker: local 'Continue' + 2>&1 capture so native git
+    # stderr never becomes a terminating error under the 'Stop' preference.
+    param([string[]]$GitArgs)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & git -C $RepoRoot @GitArgs 2>&1
+        return [pscustomobject]@{ Code = $LASTEXITCODE; Out = $out }
+    } finally { $ErrorActionPreference = $prev }
+}
+
+function Get-HeadSha {
+    $r = Invoke-Git @('rev-parse', '--short=7', 'HEAD')
+    if ($r.Code -ne 0) { return '' }
+    return ([string]($r.Out | Select-Object -First 1)).Trim()
+}
+
+function Test-CommitExists {
+    param([string]$Sha)
+    # True only if the recorded build sha is a commit object present in this
+    # repo. A rebased-away / other-clone / gc'd sha is NOT reachable.
+    return ((Invoke-Git @('rev-parse', '--verify', '--quiet', "$Sha^{commit}")).Code -eq 0)
+}
+
+function Get-ConnectorDiffExit {
+    param([string]$Sha)
+    # 0 = connector/connector identical between the build sha and HEAD;
+    # 1 = it changed since (so the binary is stale). Other = git error.
+    return (Invoke-Git @('diff', '--quiet', $Sha, 'HEAD', '--', 'connector/connector')).Code
+}
+
+function Resolve-BuildState {
+    # Pure classifier (no IO) so it is unit-testable. Returns one of
+    # 'current' | 'stale' | 'dirty' | 'unknown'.
+    #   unknown: no sidecar, unreadable/'unknown' sha, OR sha not reachable
+    #            from HEAD (rebased away / built on another clone) -- never
+    #            false-positive to 'current' when the diff can't resolve.
+    #   dirty:   built from uncommitted connector/connector changes.
+    #   stale:   connector/connector changed since the build sha.
+    #   current: sha == HEAD, or reachable with no connector/connector diff.
+    param(
+        [bool]$SidecarPresent,
+        [string]$SidecarSha,
+        [bool]$SidecarDirty,
+        [string]$HeadSha,
+        [bool]$ShaReachable,
+        $DiffExit = $null
+    )
+    if (-not $SidecarPresent) { return 'unknown' }
+    if (-not $SidecarSha -or $SidecarSha -eq 'unknown') { return 'unknown' }
+    if ($SidecarDirty) { return 'dirty' }
+    if ($HeadSha -and ($SidecarSha -eq $HeadSha)) { return 'current' }
+    if (-not $ShaReachable) { return 'unknown' }
+    if ($null -eq $DiffExit) { return 'unknown' }
+    if ([int]$DiffExit -eq 0) { return 'current' }
+    return 'stale'
+}
+
+function Get-ConnectorBuildState {
+    # IO wrapper around Resolve-BuildState. Reads the sidecar + queries git.
+    $sidecar = Join-Path $RepoRoot 'connector\dist\BUILD_INFO.json'
+    $head = Get-HeadSha
+    if (-not (Test-Path $sidecar)) {
+        return [pscustomobject]@{ State = 'unknown'; Sha = ''; HeadSha = $head; BuiltAt = '' }
+    }
+    $sha = ''
+    $dirty = $false
+    $builtAt = ''
+    try {
+        $j = Get-Content -Path $sidecar -Raw | ConvertFrom-Json
+        $sha = [string]$j.sha
+        $dirty = [bool]$j.dirty
+        $builtAt = [string]$j.built_at
+    } catch {
+        return [pscustomobject]@{ State = 'unknown'; Sha = ''; HeadSha = $head; BuiltAt = '' }
+    }
+    $reachable = $false
+    $diffExit = $null
+    if ($sha -and $sha -ne 'unknown') {
+        $reachable = Test-CommitExists $sha
+        if ($reachable -and (-not $dirty) -and ($sha -ne $head)) {
+            $diffExit = Get-ConnectorDiffExit $sha
+        }
+    }
+    $state = Resolve-BuildState -SidecarPresent $true -SidecarSha $sha -SidecarDirty $dirty -HeadSha $head -ShaReachable $reachable -DiffExit $diffExit
+    return [pscustomobject]@{ State = $state; Sha = $sha; HeadSha = $head; BuiltAt = $builtAt }
+}
+
+function Report-BuildState {
+    param($Bs)
+    $rebuild = 'Rebuild: connector\.venv\Scripts\python.exe installer\build_exe.py'
+    switch ($Bs.State) {
+        'current' { OkLine "connector build matches working tree (sha $($Bs.Sha))" }
+        'stale'   { WarnLine "connector .exe built from $($Bs.Sha) but connector/connector changed since (HEAD $($Bs.HeadSha)) -- STALE. $rebuild" }
+        'dirty'   { WarnLine "connector .exe built from a DIRTY tree (sha $($Bs.Sha); uncommitted connector/connector changes, non-reproducible). Commit, then $rebuild" }
+        default   { WarnLine "connector build provenance UNKNOWN (missing/unreadable dist\BUILD_INFO.json, or build sha not reachable from HEAD). $rebuild" }
+    }
+}
+
+# --------------------------------------------------------------------------
 # UP
 # --------------------------------------------------------------------------
 function Invoke-Up {
@@ -270,6 +373,7 @@ function Invoke-Up {
 
     # [8/9] Launch connector (minimized) - leave-and-report if already running
     StepLine 8 $total 'Connector launched (minimized)'
+    Report-BuildState (Get-ConnectorBuildState)
     $existingConn = Get-ConnectorProcs
     if ($existingConn.Count -gt 0) {
         $pids = ($existingConn | ForEach-Object { $_.Id }) -join ', '
@@ -400,6 +504,7 @@ function Invoke-Status {
         WarnLine 'connector: not running'
         $allUp = $false
     }
+    Report-BuildState (Get-ConnectorBuildState)
 
     $cfg = Read-DotEnv $ConnectorEnv
     $tallyHost = 'localhost'
@@ -417,14 +522,18 @@ function Invoke-Status {
 # --------------------------------------------------------------------------
 # Dispatch
 # --------------------------------------------------------------------------
-try {
-    switch ($Action) {
-        'up'     { Invoke-Up }
-        'down'   { Invoke-Down }
-        'status' { Invoke-Status }
+# Guard: only dispatch when executed directly, not when dot-sourced (the
+# classifier test dot-sources this file to exercise Resolve-BuildState).
+if ($MyInvocation.InvocationName -ne '.') {
+    try {
+        switch ($Action) {
+            'up'     { Invoke-Up }
+            'down'   { Invoke-Down }
+            'status' { Invoke-Status }
+        }
+    } catch {
+        Write-Host ''
+        Write-Host ('FAILED: ' + $_.Exception.Message) -ForegroundColor Red
+        exit 1
     }
-} catch {
-    Write-Host ''
-    Write-Host ('FAILED: ' + $_.Exception.Message) -ForegroundColor Red
-    exit 1
 }

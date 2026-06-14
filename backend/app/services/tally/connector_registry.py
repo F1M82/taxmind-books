@@ -90,6 +90,8 @@ class ConnectorConnection:
     tally_running: bool = True
     tally_version: str | None = None
     connector_version: str | None = None
+    connector_build_sha: str | None = None
+    connector_built_at: str | None = None
     queued_outbound_count: int = 0
 
     # ------------------------------------------------------------------
@@ -246,6 +248,8 @@ class ConnectorRegistry:
             "tally_running": conn.tally_running,
             "tally_version": conn.tally_version,
             "connector_version": conn.connector_version,
+            "connector_build_sha": conn.connector_build_sha,
+            "connector_built_at": conn.connector_built_at,
             "queued_outbound_count": conn.queued_outbound_count,
         }
 

@@ -98,6 +98,8 @@ def test_register_and_register_ack(client: TestClient) -> None:
                 type_="register",
                 payload={
                     "connector_version": "1.0.0",
+                    "connector_build_sha": "abc1234",
+                    "connector_built_at": "2026-06-14T00:00:00+00:00",
                     "protocol_version": 1,
                     "tally_running": True,
                     "tally_version": "3.0",
@@ -114,6 +116,8 @@ def test_register_and_register_ack(client: TestClient) -> None:
         conn = _wait_for_registry(company_id)
         assert conn.connector_id == connector_id
         assert conn.tally_version == "3.0"
+        assert conn.connector_build_sha == "abc1234"
+        assert conn.connector_built_at == "2026-06-14T00:00:00+00:00"
 
 
 # ---------------- heartbeat / heartbeat_ack ----------------

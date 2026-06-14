@@ -14,9 +14,11 @@ GitHub Release.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 CONNECTOR_DIR = Path(__file__).resolve().parents[1]
@@ -25,11 +27,50 @@ INSTALLER_DIR = Path(__file__).resolve().parent
 EXE_NAME = "TaxMindBooksConnector"
 ENTRYPOINT = CONNECTOR_DIR / "connector" / "main.py"
 ICON_PATH = INSTALLER_DIR / "icon.ico"
+BUILD_INFO_PY = CONNECTOR_DIR / "connector" / "_build_info.py"
+BUILD_INFO_JSON_NAME = "BUILD_INFO.json"
+
+
+def _git(args: list[str]) -> str:
+    """Run a git command in the connector dir; '' on any failure."""
+    try:
+        out = subprocess.run(
+            ["git", *args],  # noqa: S607 - git resolved from PATH, by design
+            cwd=CONNECTOR_DIR,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _capture_build_info() -> dict[str, object]:
+    """Capture git provenance for this build. Best-effort; never raises."""
+    sha = _git(["rev-parse", "--short=7", "HEAD"]) or "unknown"
+    # Dirty == uncommitted changes under the connector package specifically.
+    dirty = bool(_git(["status", "--porcelain", "--", "connector/connector"]))
+    built_at = datetime.now(UTC).isoformat()
+    return {"sha": sha, "dirty": dirty, "built_at": built_at}
+
+
+def _write_build_info_module(info: dict[str, object]) -> None:
+    """Write the gitignored module PyInstaller bundles into the .exe."""
+    BUILD_INFO_PY.write_text(
+        '"""Auto-generated at build time by installer/build_exe.py.\n'
+        'Do not edit; gitignored; regenerated on every build."""\n'
+        "from __future__ import annotations\n\n"
+        f"BUILD_SHA = {info['sha']!r}\n"
+        f"BUILD_DIRTY = {info['dirty']!r}\n"
+        f"BUILT_AT = {info['built_at']!r}\n",
+        encoding="utf-8",
+    )
 
 
 def _check_pyinstaller_available() -> None:
     try:
-        import PyInstaller  # noqa: F401
+        import PyInstaller  # type: ignore[import-untyped]  # noqa: F401
     except ImportError:
         print(
             "PyInstaller is not installed. Run: pip install pyinstaller",
@@ -41,6 +82,13 @@ def _check_pyinstaller_available() -> None:
 def build() -> Path:
     """Run PyInstaller. Returns the path to the built .exe."""
     _check_pyinstaller_available()
+
+    # Stamp build provenance BEFORE PyInstaller so the generated module is
+    # bundled into the frozen .exe (runtime reporting via the register
+    # payload). The sidecar JSON is written after a successful build.
+    info = _capture_build_info()
+    _write_build_info_module(info)
+    print(f"Build info: sha={info['sha']} dirty={info['dirty']} built_at={info['built_at']}")
 
     # Clean prior build artifacts.
     for d in ("build", "dist"):
@@ -87,7 +135,13 @@ def build() -> Path:
             file=sys.stderr,
         )
         sys.exit(1)
+    # Sidecar next to the artifact: lets dev_stack.ps1 read the build SHA
+    # without launching the binary or holding a token (the pre-launch
+    # staleness guard).
+    sidecar = exe_path.parent / BUILD_INFO_JSON_NAME
+    sidecar.write_text(json.dumps(info, indent=2), encoding="utf-8")
     print(f"Built: {exe_path}")
+    print(f"Sidecar: {sidecar}")
     return exe_path
 
 

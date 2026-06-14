@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import sys
 
+from connector.build_info import format_version
 from connector.config import get_settings
 from connector.idempotency_cache import IdempotencyCache
 from connector.tally_client import TallyClient
@@ -86,6 +88,9 @@ async def _async_main() -> None:
 
 
 def main() -> None:
+    if "--version" in sys.argv[1:]:
+        print(format_version())
+        return
     asyncio.run(_async_main())
 
 

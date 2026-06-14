@@ -177,6 +177,8 @@ async def _handle_register(
     conn.tally_running = bool(payload.get("tally_running", True))
     conn.tally_version = payload.get("tally_version")
     conn.connector_version = payload.get("connector_version")
+    conn.connector_build_sha = payload.get("connector_build_sha")
+    conn.connector_built_at = payload.get("connector_built_at")
     conn.queued_outbound_count = int(payload.get("queued_outbound_count", 0))
     conn.touch_heartbeat()
 

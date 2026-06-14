@@ -45,6 +45,8 @@ class ConnectorStatusOut(TaxMindBooksBase):
     tally_running: bool | None = None
     tally_version: str | None = None
     connector_version: str | None = None
+    connector_build_sha: str | None = None
+    connector_built_at: str | None = None
     queued_outbound_count: int | None = None
 
 

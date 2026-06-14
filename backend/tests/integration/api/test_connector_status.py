@@ -81,6 +81,8 @@ def test_status_connected_snapshot(
     conn.tally_running = True
     conn.tally_version = "3.0"
     conn.connector_version = "1.0.0"
+    conn.connector_build_sha = "abc1234"
+    conn.connector_built_at = "2026-06-14T00:00:00+00:00"
     conn.queued_outbound_count = 0
     conn.last_heartbeat_at = datetime.now(UTC)
     import asyncio
@@ -94,6 +96,8 @@ def test_status_connected_snapshot(
     assert body["tally_running"] is True
     assert body["tally_version"] == "3.0"
     assert body["connector_version"] == "1.0.0"
+    assert body["connector_build_sha"] == "abc1234"
+    assert body["connector_built_at"] == "2026-06-14T00:00:00+00:00"
     assert body["queued_outbound_count"] == 0
     UUID(body["company_id"])
 

@@ -134,6 +134,7 @@ redis-data/
 *.msi
 connector/dist/
 connector/build/
+connector/connector/_build_info.py
 connector/installer/dist/
 connector/installer/build/
 connector/installer/icon.ico

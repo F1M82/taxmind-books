@@ -42,6 +42,7 @@ from websockets.exceptions import (
 )
 
 from connector import __version__ as CONNECTOR_VERSION
+from connector.build_info import BUILD_SHA, BUILT_AT
 from connector.envelope import (
     PROTOCOL_VERSION,
     ProtocolError,
@@ -201,6 +202,8 @@ class ConnectorWSClient:
             type_="register",
             payload={
                 "connector_version": CONNECTOR_VERSION,
+                "connector_build_sha": BUILD_SHA,
+                "connector_built_at": BUILT_AT,
                 "protocol_version": PROTOCOL_VERSION,
                 "tally_running": await self.tally.ping(),
                 "host": {

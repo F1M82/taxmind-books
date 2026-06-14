@@ -10,17 +10,40 @@ reply envelope.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from datetime import date as _date
 from decimal import Decimal
 from typing import Any
 
+from connector.idempotency_cache import (
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    STATUS_IN_FLIGHT,
+    IdempotencyCache,
+    hash_request_payload,
+)
 from connector.tally_client import (
     LedgerEntryInput,
     TallyClient,
     TallyError,
     VoucherInput,
+)
+
+logger = logging.getLogger("connector.message_handlers")
+
+# Per docs/connector_idempotency_design.md (DECISION 4): only these
+# mutating commands consult the idempotency cache. Read-only commands
+# (ping, sync_masters, get_*) bypass it — re-execution is harmless and
+# returns fresh data.
+MUTATING_COMMANDS = frozenset(
+    {
+        "post_voucher",
+        "approve_optional_voucher",
+        "reject_optional_voucher",
+    }
 )
 
 
@@ -155,9 +178,18 @@ async def dispatch_command(
     tally: TallyClient,
     payload: dict[str, Any],
     registered_company_id: str,
+    cache: IdempotencyCache | None = None,
 ) -> dict[str, Any]:
     """Run the command in `payload.command` and build the
     `command_result.payload` (minus `request_id` / `ts`).
+
+    When `cache` is provided and the command is mutating (`post_voucher`,
+    `approve_optional_voucher`, `reject_optional_voucher`), the call is
+    deduplicated on `payload.idempotency_key`: a previously-completed or
+    non-retryably-failed key returns its cached result without touching
+    Tally. Non-mutating commands, calls without a cache, and calls without
+    a usable key execute directly as before. See
+    docs/connector_idempotency_design.md.
 
     Raises:
         CompanyMismatch: if `payload.company_id` ≠ the connector's
@@ -185,6 +217,8 @@ async def dispatch_command(
             "duration_ms": _ms_since(started),
             "retryable": False,
         }
+    # A handler is only found for a str command, so command is a str here.
+    assert isinstance(command, str)
 
     args = payload.get("args") or {}
     if not isinstance(args, dict):
@@ -199,6 +233,40 @@ async def dispatch_command(
             "retryable": False,
         }
 
+    idempotency_key = payload.get("idempotency_key")
+    if (
+        cache is not None
+        and command in MUTATING_COMMANDS
+        and isinstance(idempotency_key, str)
+        and idempotency_key
+    ):
+        return await _dispatch_mutating_with_cache(
+            tally=tally,
+            cache=cache,
+            handler=handler,
+            command=command,
+            args=args,
+            idempotency_key=idempotency_key,
+            started=started,
+        )
+
+    return await _run_handler(handler, tally, args, command, started)
+
+
+async def _run_handler(
+    handler: HandlerFn,
+    tally: TallyClient,
+    args: dict[str, Any],
+    command: str,
+    started: float,
+) -> dict[str, Any]:
+    """Execute one handler and build its `command_result` payload.
+
+    `retryable` is True for transport / ambiguous Tally failures and
+    False for structural rejections — the classification BUG-004 Layer A
+    established. The idempotency layer keys its terminal decision off this
+    same flag.
+    """
     try:
         result = await handler(tally, args)
     except TallyError as exc:
@@ -210,7 +278,8 @@ async def dispatch_command(
                 "message": str(exc),
             },
             "duration_ms": _ms_since(started),
-            "retryable": exc.__class__.__name__ in {
+            "retryable": exc.__class__.__name__
+            in {
                 "TallyUnreachable",
                 "TallyResponseError",
                 "TallyAmbiguousResponse",
@@ -223,6 +292,79 @@ async def dispatch_command(
         "result": result,
         "duration_ms": _ms_since(started),
     }
+
+
+async def _dispatch_mutating_with_cache(
+    *,
+    tally: TallyClient,
+    cache: IdempotencyCache,
+    handler: HandlerFn,
+    command: str,
+    args: dict[str, Any],
+    idempotency_key: str,
+    started: float,
+) -> dict[str, Any]:
+    """Execute a mutating command under the idempotency cache.
+
+    Lifecycle (docs/connector_idempotency_design.md §"Lifecycle"):
+      - completed  → return the cached result, no Tally call
+      - failed     → return the cached (non-retryable) error, no Tally call
+      - in_flight  → crash window (OPEN-A): WARN and proceed as first-seen
+      - absent     → record in_flight, execute, settle terminal/retry
+
+    The terminal decision is driven by the result envelope's `retryable`
+    flag: a non-retryable error is cached as `failed`; a retryable one
+    deletes the in_flight row so the next attempt re-executes fresh.
+
+    Cache methods are synchronous (`sqlite3`); each is dispatched via
+    `asyncio.to_thread` so this coroutine never blocks the event loop.
+    """
+    request_hash = hash_request_payload(args)
+    existing = await asyncio.to_thread(cache.get, command, idempotency_key)
+
+    if existing is not None and existing.status == STATUS_COMPLETED:
+        return existing.result_payload or {}
+    if existing is not None and existing.status == STATUS_FAILED:
+        return existing.result_payload or {}
+    if existing is not None and existing.status == STATUS_IN_FLIGHT:
+        # OPEN-A: a prior attempt recorded intent but never settled —
+        # almost certainly a connector crash between the Tally post and
+        # the terminal write. We cannot know whether Tally accepted the
+        # post, so per the session-open decision we proceed as first-seen,
+        # accepting the bounded duplicate-post risk (manual reconciliation
+        # is the documented operator action). We do NOT re-insert the
+        # in_flight row (it already exists); the terminal settle below
+        # upserts it.
+        # TODO(OPEN-A): close this window via REMOTEID-on-Create / Tally
+        # reconciliation once BUG-004 Layer C lands.
+        logger.warning(
+            "idempotency: in-flight row for %s key=%s never settled "
+            "(possible crash); proceeding as first-seen, duplicate-post "
+            "risk accepted (OPEN-A)",
+            command,
+            idempotency_key,
+        )
+    else:
+        await asyncio.to_thread(
+            cache.record_in_flight, command, idempotency_key, request_hash
+        )
+
+    envelope = await _run_handler(handler, tally, args, command, started)
+
+    if envelope.get("status") == "success":
+        await asyncio.to_thread(
+            cache.record_completed, command, idempotency_key, envelope
+        )
+    elif envelope.get("retryable"):
+        await asyncio.to_thread(
+            cache.delete_for_retry, command, idempotency_key
+        )
+    else:
+        await asyncio.to_thread(
+            cache.record_failed, command, idempotency_key, envelope
+        )
+
+    return envelope
 
 
 def _ms_since(started: float) -> int:

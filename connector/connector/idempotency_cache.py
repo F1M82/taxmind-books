@@ -27,21 +27,29 @@ abrupt process exit cannot corrupt an already-committed row.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import sys
 import threading
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("connector.idempotency_cache")
 
 SCHEMA_VERSION = 1
 
 STATUS_IN_FLIGHT = "in_flight"
 STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
+
+# Settled rows older than this are swept by `cleanup_stale`. Long enough
+# to cover any plausible backend retry window, short enough to keep the
+# on-disk cache bounded. See docs/connector_idempotency_design.md.
+DEFAULT_TTL_DAYS = 30
 
 
 @dataclass(frozen=True)
@@ -284,3 +292,38 @@ class IdempotencyCache:
                 (command, idempotency_key),
             )
             self._conn.commit()
+
+    def cleanup_stale(self, *, older_than_days: int = DEFAULT_TTL_DAYS) -> int:
+        """Best-effort removal of settled rows older than the TTL.
+
+        Deletes ``completed`` / ``failed`` rows whose ``created_at`` is
+        older than the cutoff and returns the number removed.
+        ``in_flight`` rows are NEVER touched — they are crash-recovery
+        sentinels (OPEN-A), not stale data.
+
+        Best-effort by contract: any failure is logged at WARN and
+        swallowed (returns 0). An unbounded-growing cache is
+        bounded-bad; a connector that crashes over housekeeping is
+        unbounded-bad. See docs/connector_idempotency_design.md
+        §"Cleanup policy".
+        """
+        cutoff = (
+            datetime.now(UTC) - timedelta(days=older_than_days)
+        ).isoformat()
+        try:
+            with self._lock:
+                cur = self._conn.execute(
+                    "DELETE FROM command_idempotency "
+                    "WHERE status IN (?, ?) AND created_at < ?",
+                    (STATUS_COMPLETED, STATUS_FAILED, cutoff),
+                )
+                self._conn.commit()
+                return cur.rowcount
+        except Exception:
+            logger.warning(
+                "idempotency cache cleanup failed "
+                "(older_than_days=%s); leaving rows in place",
+                older_than_days,
+                exc_info=True,
+            )
+            return 0

@@ -48,6 +48,7 @@ from connector.envelope import (
     build_envelope,
     parse_envelope,
 )
+from connector.idempotency_cache import IdempotencyCache
 from connector.message_handlers import (
     CompanyMismatch,
     dispatch_command,
@@ -73,6 +74,7 @@ class ConnectorWSClient:
         heartbeat_seconds: int = 30,
         initial_backoff: float = 1.0,
         max_backoff: float = 60.0,
+        cache: IdempotencyCache | None = None,
     ) -> None:
         self.ws_url = ws_url
         self.connector_token = connector_token
@@ -81,6 +83,10 @@ class ConnectorWSClient:
         self.heartbeat_seconds = heartbeat_seconds
         self.initial_backoff = initial_backoff
         self.max_backoff = max_backoff
+        # Process-singleton idempotency cache (one per connector). When
+        # None (tests, or pre-activation), dispatch_command runs without
+        # dedup — identical to the original behaviour.
+        self._cache = cache
 
         # Set on `register_ack` and used by command dispatcher to verify
         # `command.payload.company_id` matches the registered company.
@@ -177,11 +183,11 @@ class ConnectorWSClient:
                 raise _Terminal(code) from exc
             raise
         except (ConnectionClosedOK, ConnectionClosedError) as exc:
-            if (
-                getattr(exc, "rcvd", None) is not None
-                and exc.rcvd.code in _CLOSE_CODES_TERMINAL
-            ):
-                raise _Terminal(exc.rcvd.code) from exc
+            # Narrow via a local so the `is not None` guard reaches the
+            # `.code` access (rcvd is typed `Close | None`).
+            rcvd = getattr(exc, "rcvd", None)
+            if rcvd is not None and rcvd.code in _CLOSE_CODES_TERMINAL:
+                raise _Terminal(rcvd.code) from exc
             raise
         except ConnectionClosed:
             raise
@@ -290,6 +296,7 @@ class ConnectorWSClient:
                 tally=self.tally,
                 payload=env["payload"],
                 registered_company_id=self.registered_company_id,
+                cache=self._cache,
             )
         except CompanyMismatch as exc:
             result_payload = {

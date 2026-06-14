@@ -7,9 +7,11 @@ dispatch_command. Every test uses its own temp-file database (via the
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import sys
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -22,6 +24,19 @@ from connector.idempotency_cache import (
     default_db_path,
     hash_request_payload,
 )
+
+
+def _backdate(
+    cache: IdempotencyCache, command: str, key: str, *, days: int
+) -> None:
+    """Rewrite a row's created_at to `days` in the past (test helper)."""
+    old = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    cache._conn.execute(
+        "UPDATE command_idempotency SET created_at = ? "
+        "WHERE command = ? AND idempotency_key = ?",
+        (old, command, key),
+    )
+    cache._conn.commit()
 
 
 @pytest.fixture
@@ -198,3 +213,61 @@ def test_db_file_created_on_init(tmp_path: Path) -> None:
         assert path.exists()
     finally:
         cache.close()
+
+
+# ---------------------------------------------------------------------
+# Cleanup policy (TTL)
+# ---------------------------------------------------------------------
+
+
+def test_cleanup_preserves_recent_rows(cache: IdempotencyCache) -> None:
+    cache.record_in_flight("post_voucher", "fresh", "h")
+    cache.record_completed("post_voucher", "fresh", {"status": "success"})
+    removed = cache.cleanup_stale(older_than_days=30)
+    assert removed == 0
+    assert cache.get("post_voucher", "fresh") is not None
+
+
+def test_cleanup_removes_settled_rows_older_than_ttl(
+    cache: IdempotencyCache,
+) -> None:
+    cache.record_in_flight("post_voucher", "old-ok", "h")
+    cache.record_completed("post_voucher", "old-ok", {"status": "success"})
+    cache.record_in_flight("post_voucher", "old-bad", "h")
+    cache.record_failed("post_voucher", "old-bad", {"code": "rejected"})
+    _backdate(cache, "post_voucher", "old-ok", days=40)
+    _backdate(cache, "post_voucher", "old-bad", days=40)
+
+    removed = cache.cleanup_stale(older_than_days=30)
+    assert removed == 2
+    assert cache.get("post_voucher", "old-ok") is None
+    assert cache.get("post_voucher", "old-bad") is None
+
+
+def test_cleanup_never_removes_in_flight(cache: IdempotencyCache) -> None:
+    cache.record_in_flight("post_voucher", "stuck", "h")
+    # Even a very old in_flight row is a crash-recovery sentinel (OPEN-A),
+    # never stale data — cleanup must leave it.
+    _backdate(cache, "post_voucher", "stuck", days=100)
+    removed = cache.cleanup_stale(older_than_days=30)
+    assert removed == 0
+    entry = cache.get("post_voucher", "stuck")
+    assert entry is not None
+    assert entry.status == STATUS_IN_FLIGHT
+
+
+def test_cleanup_failure_is_swallowed_and_warns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    cache = IdempotencyCache(tmp_path / "connector.db")
+    # Closing the connection makes the next execute raise — stands in for
+    # any DB-level failure during cleanup.
+    cache.close()
+    with caplog.at_level(
+        logging.WARNING, logger="connector.idempotency_cache"
+    ):
+        result = cache.cleanup_stale(older_than_days=30)
+    assert result == 0  # swallowed, no exception propagated
+    assert any(
+        "cleanup failed" in rec.getMessage() for rec in caplog.records
+    ), "expected a WARN on cleanup failure"

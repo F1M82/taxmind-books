@@ -351,6 +351,13 @@ async def _dispatch_mutating_with_cache(
 
     envelope = await _run_handler(handler, tally, args, command, started)
 
+    # Cache decisions are driven off the envelope's `retryable` flag (set
+    # from TallyError.retryable) per the session-2 decision, NOT off the
+    # exception class. This depends on the BUG-004 Layer A four-class
+    # hierarchy: TallyImportRejected/company_mismatch → non-retryable
+    # (cache as failed); TallyUnreachable/TallyResponseError/
+    # TallyAmbiguousResponse → retryable (delete, never cache). If that
+    # hierarchy or its retryable classification changes, revisit this.
     if envelope.get("status") == "success":
         await asyncio.to_thread(
             cache.record_completed, command, idempotency_key, envelope

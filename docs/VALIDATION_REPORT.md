@@ -403,6 +403,41 @@ def write_report(out_path: Path, phase: int, env: dict, tests: dict, migrations:
           to the first real-user successful POST. The unchecked §7.5b
           boxes above remain live-environment checks, not coding work.
           See PHASE_0_CLOSEOUT.md §"Known issues" BUG-Books-005.
+        - **2026-07-21: §7.5 COMPLETE — all checks PASS live (supersedes the
+          2026-05-26 deferral).** Full stack brought up cold: backend on the
+          dev DB (eager dispatch), connector rebuilt from source
+          (`sha=803921c`, contains the master_id emission + idempotency arc),
+          re-enrolled, launched, `/status` → `connected=true, tally_running=
+          true, connector_build_sha=803921c`. Results:
+          - **§7.5b happy-path: PASS (human-verified).** `sync_masters`
+            populated `tally_master_id` on 5/5 Tally ledgers with distinct
+            durable GUIDs (`ed86199b-…-000000cd` etc.) — BUG-Books-005 fix
+            validated live (was 0/5 in the 2026-05-26 stale-`.exe` attempt).
+            Fresh Receipt `058b0670-…` (HDFC BANK Dr / Xyz Ltd Cr, ₹100) went
+            `pending_tally_post → posted` in 3 s; operator confirmed the entry
+            in TallyPrime's Day Book. BUG-004 Layer A thereby validated on the
+            success lane (previously rejection-lane only, 2026-05-22).
+          - **BUG-004 Layer C: DONE + live-validated** (`6aee743`). REMOTEID-
+            on-Create: voucher `6f89af1c-…` posted with `tally_voucher_guid`
+            == the voucher id. Residual: REMOTEID year-end-split survivability
+            (open Tally-behavior question).
+          - **network-disconnect → reconnect: PASS.** Connector killed, voucher
+            `4abaec6e-…` stranded (`voucher.tally_post_queued`, "no active
+            connector"); on reconnect the BUG-Books-002 connector-up
+            re-enqueue hook auto-posted it (`e3bdf60`), no manual action.
+          - **idempotency replay: PASS.** Two POSTs with the same
+            Idempotency-Key → same voucher id, `Idempotent-Replay: true` on the
+            2nd, voucher-count delta = 1; replay short-circuits before dispatch
+            so no Tally duplicate.
+          - **sync_masters idempotency re-run: PASS.** Ledger count 6→6 (no
+            dup rows), all 5 GUIDs unchanged, zero `ledger.sync_failed`.
+          - **wrong-company: PASS.** Valid connector token + mismatched
+            `X-Company-ID` → WS handshake rejected (HTTP 403). NOTE:
+            connector_ws.py intends close code 4003, but a pre-`accept()`
+            close renders as a 403 handshake rejection, not a 4003 close frame
+            (CONNECTOR_PROTOCOL.md documents 4003) — cosmetic; rejection holds.
+          Only §7.6 (mobile end-to-end) remains, gated on the Expo app + a
+          device.
 
         ### 7.6 End-to-end (the Phase 0 deliverable)
         - [ ] Mobile app: register new user

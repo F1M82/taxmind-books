@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core.audit import AuditEmitter
 from app.core.exceptions import (
-    ConnectorOffline as ConnectorOfflineDomain,
-)
-from app.core.exceptions import (
+    Conflict,
     LedgerNotFound,
+    LedgerNotSyncedToTally,
     ValidationFailed,
     VoucherAlreadyCancelled,
     VoucherEntriesUnbalanced,
@@ -25,6 +25,9 @@ from app.core.exceptions import (
     VoucherNotOptional,
     VoucherRejected,
     VoucherTypeRuleViolation,
+)
+from app.core.exceptions import (
+    ConnectorOffline as ConnectorOfflineDomain,
 )
 from app.models.ledger import Ledger
 from app.models.user import User
@@ -421,6 +424,99 @@ class VoucherService:
             old_value=old,
             new_value=new,
         )
+        return voucher
+
+    # ------------------------------------------------------------------
+    # Operator-triggered Tally re-post  (BUG-Books-002)
+    # ------------------------------------------------------------------
+
+    async def retry_tally_post(
+        self,
+        voucher_id: UUID,
+        *,
+        actor: User,
+        registry: Any = None,
+        timeout_seconds: int = 30,
+    ) -> Voucher:
+        """Re-dispatch a stranded voucher to Tally at an operator's request.
+
+        The automatic re-enqueue ([[voucher_reenqueue]]) only covers the
+        *retryable* class (`voucher.tally_post_queued`). The rejection
+        class (`voucher.tally_post_failed`) and unsynced class
+        (`voucher.tally_post_blocked`) need operator action first — sync
+        the ledger, load the right Tally company, create the missing
+        master — after which the operator asks to retry *this* voucher.
+        This is that gesture.
+
+        Runs the same in-process dispatch (this API process owns the
+        connector WS + registry). Re-dispatch is idempotent via the
+        connector-side cache (`idempotency_key=str(voucher_id)`), so a
+        voucher Tally already accepted can never double-post.
+
+        The dispatch reports its outcome by mutating the row + emitting
+        its own audit (`posted_to_tally` / `tally_post_failed` /
+        `tally_post_blocked` / `tally_post_queued`). A handled dispatch
+        failure is therefore NOT an API error — the outcome is returned
+        on the voucher (status + `tally_last_error`). Only an
+        out-of-contract state (voucher not awaiting a post) is a 409.
+        """
+        from app.services.tally.connector_registry import (
+            CommandTimeout,
+            TallyRejectedEnvelope,
+            TallyRetryableEnvelope,
+        )
+        from app.services.tally.connector_registry import (
+            ConnectorOffline as RegistryOffline,
+        )
+        from app.services.tally.voucher_dispatcher import (
+            dispatch_voucher_to_tally,
+        )
+
+        voucher = self.get(voucher_id)
+        if voucher.status != VoucherStatus.pending_tally_post:
+            raise Conflict(
+                "Voucher is not awaiting a Tally post; nothing to retry.",
+                details={
+                    "status": voucher.status.value
+                    if hasattr(voucher.status, "value")
+                    else str(voucher.status)
+                },
+            )
+
+        # Record WHO asked, before dispatch emits the outcome row.
+        self.audit.emit(
+            action="voucher.tally_post_retry_requested",
+            entity_type="voucher",
+            entity_id=voucher.id,
+            old_value=None,
+            new_value={
+                "requested_by": str(actor.id),
+                "prior_error": voucher.tally_last_error,
+                "prior_attempts": voucher.tally_post_attempts,
+            },
+        )
+        self.db.flush()
+
+        # A handled dispatch failure is NOT an API error: the dispatcher
+        # already emitted its outcome audit + updated the row, so the
+        # result is surfaced on the voucher (status / tally_last_error),
+        # not raised. Only an out-of-contract state (guarded above) 4xxs.
+        with contextlib.suppress(
+            RegistryOffline,
+            CommandTimeout,
+            TallyRetryableEnvelope,
+            TallyRejectedEnvelope,
+            LedgerNotSyncedToTally,
+        ):
+            await dispatch_voucher_to_tally(
+                db=self.db,
+                voucher_id=voucher.id,
+                company_id=self.company_id,
+                user_id=actor.id,
+                request_id=uuid4(),
+                registry=registry,
+                timeout_seconds=timeout_seconds,
+            )
         return voucher
 
     # ------------------------------------------------------------------

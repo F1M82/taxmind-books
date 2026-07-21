@@ -269,6 +269,36 @@ def cancel_voucher(
 
 
 # ---------------------------------------------------------------------
+# Retry Tally post  (BUG-Books-002 — operator gesture)
+# ---------------------------------------------------------------------
+
+
+@router.post("/{voucher_id}/retry-tally-post", response_model=VoucherOut)
+async def retry_voucher_tally_post(
+    voucher_id: UUID,
+    request: Request,
+    company: Company = Depends(get_active_company),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_scoped_session),
+) -> VoucherOut:
+    """Operator re-triggers a Tally post for a stranded voucher.
+
+    For the rejection- and unsynced-class strands the automatic
+    re-enqueue excludes: once the operator has fixed the underlying issue
+    they call this to re-post. Returns the voucher's post-retry state —
+    `status=posted` on success, or still `pending_tally_post` with
+    `tally_last_error` if it failed again. A 409 is returned only when the
+    voucher is not awaiting a Tally post at all.
+    """
+    audit = _user_audit_emitter(request, db, user, company=company)
+    service = VoucherService(db, audit, company_id=company.id)
+    voucher = await service.retry_tally_post(voucher_id, actor=user)
+    db.commit()
+    db.refresh(voucher)
+    return _to_out(voucher)
+
+
+# ---------------------------------------------------------------------
 # Approve Optional → Regular  (v1.2, P0.46)
 # ---------------------------------------------------------------------
 

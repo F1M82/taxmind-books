@@ -9,7 +9,8 @@
 #                       Runs unit + integration + tenant_isolation + the
 #                       alembic round-trip (test_alembic_roundtrip.py).
 #                       Emits coverage.xml; fails under 70% line coverage.
-#   4. connector      — pytest on the connector/ package (no DB).
+#   4. connector      — mypy (connector's own config, blocking) + pytest
+#                       on the connector/ package (no DB).
 #   5. mobile         — tsc --noEmit + jest. Best-effort: deferred for any
 #                       runner without Node 20.
 #
@@ -158,6 +159,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+      - name: mypy connector
+        working-directory: connector
+        # Blocking (no `|| true`): the connector tree is clean under its
+        # own config, so there is no grandfathered debt to tolerate. This
+        # is the check whose absence let a real `union-attr` error in
+        # ws_client.py sit uncaught until eb22889 found it locally.
+        # `--config-file pyproject.toml` pins the connector's own (default)
+        # mypy config — running from repo root would inherit the stricter
+        # root `[tool.mypy]` and falsely flag `unused-ignore` in tests.
+        run: |
+          python -m mypy connector \
+            --ignore-missing-imports \
+            --no-incremental \
+            --config-file pyproject.toml
       - name: pytest
         working-directory: connector
         run: python -m pytest -q

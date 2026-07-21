@@ -192,6 +192,47 @@ async def _handle_register(
         conn, type_="register_ack", request_id=request_id, payload=ack_payload
     )
 
+    # BUG-Books-002: the connector is back and Tally is running — this is
+    # the exact moment an outage ends (laptop reopened, Tally restarted).
+    # Re-dispatch this company's retryable-class stranded vouchers. Runs
+    # in-process (this uvicorn owns the WS + the connector registry), so
+    # the dispatch can actually reach the connector.
+    if conn.tally_running:
+        _schedule_reenqueue_on_connector_up(conn.company_id)
+
+
+def _schedule_reenqueue_on_connector_up(company_id: UUID) -> None:
+    """Fire-and-forget re-enqueue of one company's retryable strands.
+
+    Opens its own ``SessionLocal`` (the WS handler holds no request
+    session) and runs on the current event loop. Gated by
+    ``TAXMIND_SKIP_TALLY_DISPATCH`` so the test suite never dispatches.
+    """
+    from app.config import get_settings
+
+    if get_settings().TAXMIND_SKIP_TALLY_DISPATCH:
+        return
+
+    import asyncio
+
+    from app.core.database import SessionLocal
+    from app.services.tally.voucher_reenqueue import (
+        reenqueue_retryable_vouchers,
+    )
+
+    async def _drive() -> None:
+        db = SessionLocal()
+        try:
+            await reenqueue_retryable_vouchers(db, company_id=company_id)
+        except Exception:
+            logger.exception(
+                "connector-up re-enqueue failed for company %s", company_id
+            )
+        finally:
+            db.close()
+
+    asyncio.get_running_loop().create_task(_drive())
+
 
 async def _handle_heartbeat(
     conn: ConnectorConnection, request_id: str, payload: dict[str, Any]

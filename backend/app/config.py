@@ -72,6 +72,16 @@ class Settings(BaseSettings):
     CELERY_TASK_ALWAYS_EAGER: bool = Field(default=False)
     TAXMIND_SKIP_TALLY_DISPATCH: bool = Field(default=False)
 
+    # ---------------- Voucher re-enqueue (BUG-Books-002) ----------------
+    # Retryable-class strands (status=pending_tally_post whose latest
+    # tally-post audit is `voucher.tally_post_queued`) are re-dispatched
+    # from the API process — the only process that can see the
+    # process-local connector registry. Two triggers share one core:
+    #   1. connector-up event (always on unless dispatch is skipped);
+    #   2. this periodic sweep (opt-in; off in tests + by default).
+    TALLY_REENQUEUE_SWEEP_ENABLED: bool = Field(default=False)
+    TALLY_REENQUEUE_SWEEP_INTERVAL_SECONDS: int = Field(default=300)
+
     @property
     def cors_origins(self) -> list[str]:
         """Origins allowed by CORS, derived from WEB_URL and MOBILE_URL."""

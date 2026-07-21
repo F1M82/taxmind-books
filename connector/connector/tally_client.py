@@ -144,6 +144,11 @@ class VoucherInput:
     narration: str
     entries: list[LedgerEntryInput]
     as_optional: bool = False
+    # BUG-004 Layer C: a client-assigned durable id stamped as the Tally
+    # voucher's REMOTEID on Create. We set it to the backend voucher id so
+    # the same handle drives later Alter/Delete (approve/reject) and is
+    # returned as `tally_voucher_guid`. None → no REMOTEID emitted (legacy).
+    remote_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -528,9 +533,11 @@ class TallyClient:
         the caller passed. Validates the response envelope's <CREATED>
         counter >= 1 (strict success).
 
-        `tally_voucher_guid` is returned as `None` — Layer C (durable
-        Tally GUID via REMOTEID or <LASTVCHID>) is deferred per
-        bug_books_004 'Layer A fix design'.
+        BUG-004 Layer C: when the caller supplies `remote_id`, it is
+        stamped as the voucher's Tally REMOTEID on Create and echoed back
+        as `tally_voucher_guid` — the durable, client-known handle the
+        backend persists and later approve/reject (Alter/Delete by
+        REMOTEID) rely on. Returns None only when no `remote_id` was given.
 
         Raises:
             TallyImportRejected: Tally rejected the create.
@@ -544,7 +551,7 @@ class TallyClient:
             "status": "success",
             "voucher_number": voucher.voucher_number,
             "as_optional": voucher.as_optional,
-            "tally_voucher_guid": None,
+            "tally_voucher_guid": voucher.remote_id,
             "raw": parsed.raw_body,
         }
 
@@ -813,6 +820,10 @@ class TallyClient:
         # Tally treats absence of ISOPTIONAL as "No"; emit only when
         # we want the voucher posted as Optional.
         optional_xml = "<ISOPTIONAL>Yes</ISOPTIONAL>" if v.as_optional else ""
+        # BUG-004 Layer C: stamp a durable REMOTEID on Create so the voucher
+        # carries a client-known handle (matches the Alter/Delete builders,
+        # which reference the voucher by REMOTEID).
+        remote_attr = f' REMOTEID="{v.remote_id}"' if v.remote_id else ""
         return (
             "<ENVELOPE>"
             "<HEADER>"
@@ -824,7 +835,7 @@ class TallyClient:
             "</REQUESTDESC>"
             "<REQUESTDATA>"
             '<TALLYMESSAGE xmlns:UDF="TallyUDF">'
-            f'<VOUCHER VCHTYPE="{v.voucher_type}" ACTION="Create">'
+            f'<VOUCHER{remote_attr} VCHTYPE="{v.voucher_type}" ACTION="Create">'
             f"<DATE>{date_str}</DATE>"
             f"<VOUCHERTYPENAME>{v.voucher_type}</VOUCHERTYPENAME>"
             f"<VOUCHERNUMBER>{v.voucher_number}</VOUCHERNUMBER>"

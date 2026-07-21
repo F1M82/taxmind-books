@@ -411,6 +411,11 @@ def _voucher_from_args(args: dict[str, Any]) -> VoucherInput:
         for e in entries_raw
     ]
 
+    # BUG-004 Layer C: the backend sends its voucher id so we can stamp it
+    # as the Tally REMOTEID on Create. Absent → no REMOTEID (legacy path).
+    rid = args.get("voucher_id")
+    remote_id = str(rid) if rid else None
+
     return VoucherInput(
         voucher_type=str(args.get("voucher_type", "Receipt")),
         voucher_date=voucher_date,
@@ -419,4 +424,5 @@ def _voucher_from_args(args: dict[str, Any]) -> VoucherInput:
         narration=str(args.get("narration", "")),
         entries=entries,
         as_optional=bool(args.get("as_optional", False)),
+        remote_id=remote_id,
     )

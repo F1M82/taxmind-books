@@ -288,6 +288,40 @@ def test_voucher_from_args_threads_as_optional_through() -> None:
     assert v.as_optional is True
 
 
+def test_voucher_from_args_threads_voucher_id_as_remote_id() -> None:
+    # BUG-004 Layer C: the backend's voucher_id becomes the Tally REMOTEID.
+    v = _voucher_from_args(
+        {
+            "voucher_id": "058b0670-80d2-4c1d-ae49-6e2573b07c17",
+            "voucher_type": "Receipt",
+            "date": "2026-07-21",
+            "party_name": "Xyz Ltd",
+            "narration": "",
+            "entries": [
+                {"ledger_name": "HDFC BANK", "amount": "100", "entry_type": "Dr"},
+                {"ledger_name": "Xyz Ltd", "amount": "100", "entry_type": "Cr"},
+            ],
+        }
+    )
+    assert v.remote_id == "058b0670-80d2-4c1d-ae49-6e2573b07c17"
+
+
+def test_voucher_from_args_remote_id_none_when_absent() -> None:
+    v = _voucher_from_args(
+        {
+            "voucher_type": "Receipt",
+            "date": "2026-07-21",
+            "party_name": "Xyz Ltd",
+            "narration": "",
+            "entries": [
+                {"ledger_name": "HDFC BANK", "amount": "100", "entry_type": "Dr"},
+                {"ledger_name": "Xyz Ltd", "amount": "100", "entry_type": "Cr"},
+            ],
+        }
+    )
+    assert v.remote_id is None
+
+
 # ---------------- Optional voucher commands (v1.2) ----------------
 
 

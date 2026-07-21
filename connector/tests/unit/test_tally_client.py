@@ -740,11 +740,11 @@ async def test_post_voucher_raises_TallyAmbiguousResponse_on_zero_everything(
 
 
 @pytest.mark.asyncio
-async def test_post_voucher_returns_tally_voucher_guid_none(
+async def test_post_voucher_without_remote_id_returns_guid_none(
     client: TallyClient, httpx_mock: HTTPXMock
 ) -> None:
-    # Layer C deferred: tally_voucher_guid is explicitly None on success
-    # until REMOTEID survivability is probed in §7.5b validation.
+    # Legacy path (BUG-004 Layer C): no remote_id supplied → no REMOTEID
+    # stamped, tally_voucher_guid comes back None.
     httpx_mock.add_response(
         url="http://localhost:9000",
         status_code=200,
@@ -753,6 +753,48 @@ async def test_post_voucher_returns_tally_voucher_guid_none(
     result = await client.post_voucher(_minimal_voucher())
     assert result["status"] == "success"
     assert result["tally_voucher_guid"] is None
+
+
+@pytest.mark.asyncio
+async def test_post_voucher_stamps_remoteid_and_echoes_guid(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    # BUG-004 Layer C: a remote_id is stamped as the Create VOUCHER's
+    # REMOTEID and echoed back as tally_voucher_guid (the durable handle).
+    captured: dict[str, str] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(200, text=_IMPORT_SUCCESS_CREATE)
+
+    httpx_mock.add_callback(_capture, url="http://localhost:9000")
+
+    rid = "058b0670-80d2-4c1d-ae49-6e2573b07c17"
+    voucher = VoucherInput(
+        voucher_type="Receipt",
+        voucher_date=date(2026, 7, 21),
+        voucher_number="",
+        party_name="Xyz Ltd",
+        narration="Layer C test",
+        entries=[
+            LedgerEntryInput(
+                ledger_name="HDFC BANK",
+                amount=Decimal("100.00"),
+                entry_type="Dr",
+            ),
+            LedgerEntryInput(
+                ledger_name="Xyz Ltd",
+                amount=Decimal("100.00"),
+                entry_type="Cr",
+            ),
+        ],
+        remote_id=rid,
+    )
+    result = await client.post_voucher(voucher)
+
+    assert result["tally_voucher_guid"] == rid
+    body = captured["body"]
+    assert f'<VOUCHER REMOTEID="{rid}" VCHTYPE="Receipt" ACTION="Create">' in body
 
 
 # ---------------- approve/reject: rejection + success counters ----------------

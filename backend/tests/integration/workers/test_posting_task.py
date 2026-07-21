@@ -168,6 +168,9 @@ async def test_dispatch_success_stamps_tally_posted_at(
     assert args["voucher_type"] == "Receipt"
     assert args["date"] == "2026-05-08"
     assert len(args["entries"]) == 2
+    # BUG-004 Layer C: the backend voucher id is passed so the connector
+    # can stamp it as the Tally REMOTEID on Create.
+    assert args["voucher_id"] == str(v.id)
     # Idempotency key = voucher id, used by the connector's local cache.
     assert reg.received_args["idempotency_key"] == str(v.id)
 

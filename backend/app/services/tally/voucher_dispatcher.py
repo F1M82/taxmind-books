@@ -303,6 +303,10 @@ async def dispatch_voucher_to_tally(
     party_name = ledger_names.get(entries[0].ledger_id, "") if entries else ""
 
     args = {
+        # BUG-004 Layer C: the connector stamps this as the Tally REMOTEID
+        # on Create and echoes it back as tally_voucher_guid — a durable,
+        # client-known handle for later approve/reject (Alter/Delete).
+        "voucher_id": str(voucher.id),
         "voucher_type": voucher.voucher_type.value
         if hasattr(voucher.voucher_type, "value")
         else str(voucher.voucher_type),

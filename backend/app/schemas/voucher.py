@@ -106,6 +106,7 @@ class VoucherListItem(TaxMindBooksBase):
     total_amount: Money
     status: str
     source: str
+    client_channel: str | None = None
     gst_applicable: bool
     is_optional_in_tally: bool = False
     approved_to_regular_at: datetime | None = None
@@ -146,6 +147,7 @@ class VoucherOut(TaxMindBooksBase):
     total_amount: Money
     status: str
     source: str
+    client_channel: str | None = None
     is_auto_posted: bool
     confidence_score: Decimal | None = None
     gst_applicable: bool

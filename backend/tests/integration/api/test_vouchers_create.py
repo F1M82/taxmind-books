@@ -114,6 +114,93 @@ def test_create_voucher_201(client: TestClient, db_session: Session) -> None:
     assert len(entries) == 2
 
 
+# ---------------- client_channel (X-Client header) ----------------
+
+
+def test_create_voucher_records_client_channel_from_header(
+    client: TestClient, db_session: Session
+) -> None:
+    """A voucher posted with `X-Client: mobile` is tagged
+    client_channel='mobile' — distinct from `source` (still 'manual').
+    """
+    user, company, bank, party = _setup(db_session)
+    r = client.post(
+        "/api/v1/vouchers/",
+        headers={**_h(user, company, idem=str(uuid4())), "X-Client": "mobile"},
+        json=_payload(bank, party),
+    )
+    assert r.status_code == 201, r.json()
+    body = r.json()
+    assert body["source"] == "manual"
+    assert body["client_channel"] == "mobile"
+    db_session.expire_all()
+    voucher = (
+        db_session.query(Voucher).filter(Voucher.id == UUID(body["id"])).one()
+    )
+    assert voucher.client_channel == "mobile"
+
+
+def test_create_voucher_without_client_header_is_null(
+    client: TestClient, db_session: Session
+) -> None:
+    user, company, bank, party = _setup(db_session)
+    r = client.post(
+        "/api/v1/vouchers/",
+        headers=_h(user, company, idem=str(uuid4())),
+        json=_payload(bank, party),
+    )
+    assert r.status_code == 201, r.json()
+    assert r.json()["client_channel"] is None
+
+
+def test_create_voucher_unknown_client_channel_is_nulled(
+    client: TestClient, db_session: Session
+) -> None:
+    """An unrecognised X-Client value is not trusted — stored as NULL,
+    never as arbitrary caller text (which the CHECK constraint would
+    reject anyway).
+    """
+    user, company, bank, party = _setup(db_session)
+    r = client.post(
+        "/api/v1/vouchers/",
+        headers={
+            **_h(user, company, idem=str(uuid4())),
+            "X-Client": "definitely-not-a-real-client",
+        },
+        json=_payload(bank, party),
+    )
+    assert r.status_code == 201, r.json()
+    assert r.json()["client_channel"] is None
+
+
+def test_list_vouchers_filters_by_channel(
+    client: TestClient, db_session: Session
+) -> None:
+    """`GET /vouchers/?channel=mobile` returns only mobile-recorded
+    entries — the reporting surface for 'entries recorded via the app'.
+    """
+    user, company, bank, party = _setup(db_session)
+    # one from mobile, one from web
+    client.post(
+        "/api/v1/vouchers/",
+        headers={**_h(user, company, idem=str(uuid4())), "X-Client": "mobile"},
+        json=_payload(bank, party, reference="MOB"),
+    )
+    client.post(
+        "/api/v1/vouchers/",
+        headers={**_h(user, company, idem=str(uuid4())), "X-Client": "web"},
+        json=_payload(bank, party, reference="WEB"),
+    )
+    r = client.get(
+        "/api/v1/vouchers/?channel=mobile", headers=_h(user, company)
+    )
+    assert r.status_code == 200, r.json()
+    items = r.json()["items"]
+    assert len(items) == 1
+    assert items[0]["client_channel"] == "mobile"
+    assert items[0]["reference"] == "MOB"
+
+
 def test_create_voucher_writes_audit(
     client: TestClient, db_session: Session
 ) -> None:

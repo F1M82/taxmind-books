@@ -44,6 +44,7 @@ def test_voucher_columns_match_schema() -> None:
         "total_amount",
         "status",
         "source",
+        "client_channel",
         "source_ingestion_id",
         "is_auto_posted",
         "confidence_score",

@@ -6,7 +6,15 @@ from datetime import date as _date
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -37,6 +45,20 @@ from app.services.voucher_service import VoucherService
 router = APIRouter(prefix="/vouchers", tags=["vouchers"])
 
 
+# Which clients may self-identify via the X-Client header. Anything else
+# (or an absent header) records client_channel = NULL rather than trusting
+# arbitrary caller-supplied text — the CHECK constraint would reject it
+# anyway, so normalise defensively at the edge.
+_ALLOWED_CLIENT_CHANNELS = {"mobile", "web", "api"}
+
+
+def _normalise_client_channel(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    value = raw.strip().lower()
+    return value if value in _ALLOWED_CLIENT_CHANNELS else None
+
+
 def _to_out(v) -> VoucherOut:  # type: ignore[no-untyped-def]
     return VoucherOut(
         id=v.id,
@@ -51,6 +73,7 @@ def _to_out(v) -> VoucherOut:  # type: ignore[no-untyped-def]
         total_amount=v.total_amount,
         status=v.status.value if hasattr(v.status, "value") else str(v.status),
         source=v.source,
+        client_channel=v.client_channel,
         is_auto_posted=v.is_auto_posted,
         confidence_score=v.confidence_score,
         gst_applicable=v.gst_applicable,
@@ -106,6 +129,7 @@ async def create_voucher(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_scoped_session),
     idem: IdempotencyHandler = Depends(get_idempotency_handler),
+    x_client: str | None = Header(default=None, alias="X-Client"),
 ) -> Response | VoucherOut:
     replay = await idem.check(required=True)
     if replay is not None:
@@ -113,7 +137,11 @@ async def create_voucher(
 
     audit = _user_audit_emitter(request, db, user, company=company)
     service = VoucherService(db, audit, company_id=company.id)
-    voucher = service.create(data, actor=user)
+    voucher = service.create(
+        data,
+        actor=user,
+        client_channel=_normalise_client_channel(x_client),
+    )
     db.commit()
     db.refresh(voucher)
 
@@ -161,6 +189,7 @@ def list_vouchers(
     status_filter: str | None = Query(default=None, alias="status"),
     ledger_id: UUID | None = None,
     source: str | None = None,
+    channel: str | None = Query(default=None, alias="channel"),
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> VoucherListResponse:
     service = VoucherService(db, audit=None, company_id=company.id)  # type: ignore[arg-type]
@@ -171,6 +200,7 @@ def list_vouchers(
         status_filter=status_filter,
         ledger_id=ledger_id,
         source=source,
+        client_channel=channel,
         limit=limit,
     )
     return VoucherListResponse(
@@ -189,6 +219,7 @@ def list_vouchers(
                 if hasattr(v.status, "value")
                 else str(v.status),
                 source=v.source,
+                client_channel=v.client_channel,
                 gst_applicable=v.gst_applicable,
                 is_optional_in_tally=v.is_optional_in_tally,
                 approved_to_regular_at=v.approved_to_regular_at,

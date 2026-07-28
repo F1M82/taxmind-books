@@ -127,6 +127,13 @@ class Voucher(Base, TenantScopedMixin):
     source: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'manual'")
     )
+    # Which client posted the entry (mobile / web / api). Orthogonal to
+    # `source` (how it was captured). NULL = unknown / legacy writer that
+    # did not send the X-Client header. Constrained by
+    # ck_vouchers_client_channel (migration 0011).
+    client_channel: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
     source_ingestion_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), nullable=True
     )

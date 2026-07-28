@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -117,7 +117,13 @@ class VoucherService:
     # Create
     # ------------------------------------------------------------------
 
-    def create(self, data: VoucherCreate, actor: User) -> Voucher:
+    def create(
+        self,
+        data: VoucherCreate,
+        actor: User,
+        *,
+        client_channel: str | None = None,
+    ) -> Voucher:
         self._validate_entries(data)
         self._validate_gst(data)
         ledger_groups = self._validate_ledger_ownership(data)
@@ -150,6 +156,7 @@ class VoucherService:
             status=VoucherStatus.pending_tally_post,
             tally_post_queued_at=datetime.now(UTC),
             source="manual",
+            client_channel=client_channel,
             is_auto_posted=False,
             gst_applicable=data.gst_applicable,
             place_of_supply=data.place_of_supply,
@@ -248,11 +255,12 @@ class VoucherService:
         self,
         *,
         voucher_type: str | None,
-        date_from,  # type: ignore[no-untyped-def]
-        date_to,  # type: ignore[no-untyped-def]
+        date_from: date | None,
+        date_to: date | None,
         status_filter: str | None,
         ledger_id: UUID | None,
         source: str | None,
+        client_channel: str | None = None,
         limit: int,
     ) -> tuple[list[Voucher], int]:
         from sqlalchemy import select
@@ -272,6 +280,8 @@ class VoucherService:
             q = q.filter(Voucher.status == VoucherStatus(status_filter))
         if source:
             q = q.filter(Voucher.source == source)
+        if client_channel:
+            q = q.filter(Voucher.client_channel == client_channel)
         if ledger_id is not None:
             sub = (
                 select(LedgerEntry.voucher_id)

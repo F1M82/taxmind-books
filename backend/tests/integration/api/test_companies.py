@@ -352,3 +352,176 @@ def test_add_member_writes_audit(
     assert audit.user_id == owner.id
     assert audit.new_value["user_email"] == "audit-mem@ex.com"
     assert audit.new_value["role"] == "viewer"
+
+
+# ---------------- List / update-role / remove members ----------------
+
+
+def _mk_company_with_owner(db_session):  # type: ignore[no-untyped-def]
+    owner = make_user(db_session, email="owner@ex.com")
+    company = make_company(db_session)
+    make_membership(db_session, owner, company, role=CompanyRole.owner)
+    return owner, company
+
+
+def test_list_members_owner_sees_all(
+    client: TestClient, db_session: Session
+) -> None:
+    owner, company = _mk_company_with_owner(db_session)
+    acc = make_user(db_session, email="acc@ex.com")
+    make_membership(db_session, acc, company, role=CompanyRole.accountant)
+
+    r = client.get(
+        f"/api/v1/companies/{company.id}/members", headers=_h(owner)
+    )
+    assert r.status_code == 200, r.json()
+    emails = {m["user_email"] for m in r.json()["items"]}
+    assert emails == {"owner@ex.com", "acc@ex.com"}
+
+
+def test_list_members_admin_allowed(
+    client: TestClient, db_session: Session
+) -> None:
+    admin = make_user(db_session, email="admin@ex.com")
+    company = make_company(db_session)
+    make_membership(db_session, admin, company, role=CompanyRole.admin)
+    r = client.get(
+        f"/api/v1/companies/{company.id}/members", headers=_h(admin)
+    )
+    assert r.status_code == 200
+
+
+def test_list_members_viewer_forbidden(
+    client: TestClient, db_session: Session
+) -> None:
+    viewer = make_user(db_session, email="viewer@ex.com")
+    company = make_company(db_session)
+    make_membership(db_session, viewer, company, role=CompanyRole.viewer)
+    r = client.get(
+        f"/api/v1/companies/{company.id}/members", headers=_h(viewer)
+    )
+    assert r.status_code == 403
+
+
+def test_list_members_non_member_404(
+    client: TestClient, db_session: Session
+) -> None:
+    outsider = make_user(db_session, email="out@ex.com")
+    _, company = _mk_company_with_owner(db_session)
+    r = client.get(
+        f"/api/v1/companies/{company.id}/members", headers=_h(outsider)
+    )
+    assert r.status_code == 404
+
+
+def test_update_member_role_owner_can_change(
+    client: TestClient, db_session: Session
+) -> None:
+    owner, company = _mk_company_with_owner(db_session)
+    target = make_user(db_session, email="t@ex.com")
+    make_membership(db_session, target, company, role=CompanyRole.viewer)
+
+    r = client.patch(
+        f"/api/v1/companies/{company.id}/members/{target.id}",
+        headers=_h(owner),
+        json={"role": "accountant"},
+    )
+    assert r.status_code == 200, r.json()
+    assert r.json()["role"] == "accountant"
+    audit = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.action == "user_company.role_changed",
+            AuditLog.company_id == company.id,
+        )
+        .one()
+    )
+    assert audit.old_value["role"] == "viewer"
+    assert audit.new_value["role"] == "accountant"
+
+
+def test_update_member_role_admin_forbidden(
+    client: TestClient, db_session: Session
+) -> None:
+    admin = make_user(db_session, email="admin@ex.com")
+    company = make_company(db_session)
+    make_membership(db_session, admin, company, role=CompanyRole.admin)
+    target = make_user(db_session, email="t@ex.com")
+    make_membership(db_session, target, company, role=CompanyRole.viewer)
+    r = client.patch(
+        f"/api/v1/companies/{company.id}/members/{target.id}",
+        headers=_h(admin),
+        json={"role": "admin"},
+    )
+    assert r.status_code == 403
+
+
+def test_demote_last_owner_blocked(
+    client: TestClient, db_session: Session
+) -> None:
+    owner, company = _mk_company_with_owner(db_session)
+    r = client.patch(
+        f"/api/v1/companies/{company.id}/members/{owner.id}",
+        headers=_h(owner),
+        json={"role": "admin"},
+    )
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "ownership_transfer_required"
+
+
+def test_demote_owner_ok_when_another_owner_exists(
+    client: TestClient, db_session: Session
+) -> None:
+    owner, company = _mk_company_with_owner(db_session)
+    owner2 = make_user(db_session, email="owner2@ex.com")
+    make_membership(db_session, owner2, company, role=CompanyRole.owner)
+    r = client.patch(
+        f"/api/v1/companies/{company.id}/members/{owner.id}",
+        headers=_h(owner),
+        json={"role": "admin"},
+    )
+    assert r.status_code == 200
+    assert r.json()["role"] == "admin"
+
+
+def test_remove_member_owner_can_remove(
+    client: TestClient, db_session: Session
+) -> None:
+    owner, company = _mk_company_with_owner(db_session)
+    target = make_user(db_session, email="t@ex.com")
+    make_membership(db_session, target, company, role=CompanyRole.viewer)
+    r = client.delete(
+        f"/api/v1/companies/{company.id}/members/{target.id}",
+        headers=_h(owner),
+    )
+    assert r.status_code == 204
+    remaining = (
+        db_session.query(UserCompany)
+        .filter(UserCompany.company_id == company.id)
+        .all()
+    )
+    assert {m.user_id for m in remaining} == {owner.id}
+
+
+def test_remove_last_owner_blocked(
+    client: TestClient, db_session: Session
+) -> None:
+    owner, company = _mk_company_with_owner(db_session)
+    r = client.delete(
+        f"/api/v1/companies/{company.id}/members/{owner.id}",
+        headers=_h(owner),
+    )
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "ownership_transfer_required"
+
+
+def test_remove_non_member_target_404(
+    client: TestClient, db_session: Session
+) -> None:
+    owner, company = _mk_company_with_owner(db_session)
+    ghost = make_user(db_session, email="ghost@ex.com")
+    r = client.delete(
+        f"/api/v1/companies/{company.id}/members/{ghost.id}",
+        headers=_h(owner),
+    )
+    assert r.status_code == 404

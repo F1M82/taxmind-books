@@ -32,7 +32,9 @@ endpoints:
   - path: /api/v1/companies/{company_id}
     methods: [GET, PATCH]
   - path: /api/v1/companies/{company_id}/members
-    methods: [POST]
+    methods: [POST, GET]
+  - path: /api/v1/companies/{company_id}/members/{user_id}
+    methods: [PATCH, DELETE]
 
   # ---- Ledgers ----
   - path: /api/v1/ledgers/

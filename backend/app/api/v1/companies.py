@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -20,7 +20,9 @@ from app.schemas.company import (
     CompanyOut,
     CompanyUpdate,
     MemberAddRequest,
+    MemberListResponse,
     MemberOut,
+    MemberRoleUpdate,
     PaginationMeta,
 )
 from app.services.company_service import CompanyService
@@ -179,6 +181,10 @@ def add_member(
     db.commit()
     db.refresh(membership)
     db.refresh(membership.user)
+    return _member_out(membership)
+
+
+def _member_out(membership) -> MemberOut:  # type: ignore[no-untyped-def]
     return MemberOut(
         id=membership.id,
         user_id=membership.user_id,
@@ -187,3 +193,53 @@ def add_member(
         user_email=membership.user.email,
         created_at=membership.created_at,
     )
+
+
+@router.get("/{company_id}/members", response_model=MemberListResponse)
+def list_members(
+    company_id: UUID,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MemberListResponse:
+    service = CompanyService(db, _audit(request, db, user))
+    members = service.list_members(company_id, actor=user)
+    return MemberListResponse(items=[_member_out(m) for m in members])
+
+
+@router.patch(
+    "/{company_id}/members/{user_id}", response_model=MemberOut
+)
+def update_member_role(
+    company_id: UUID,
+    user_id: UUID,
+    data: MemberRoleUpdate,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MemberOut:
+    service = CompanyService(db, _audit(request, db, user))
+    membership = service.set_member_role(
+        company_id, user_id, data.role, actor=user
+    )
+    db.commit()
+    db.refresh(membership)
+    db.refresh(membership.user)
+    return _member_out(membership)
+
+
+@router.delete(
+    "/{company_id}/members/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def remove_member(
+    company_id: UUID,
+    user_id: UUID,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    service = CompanyService(db, _audit(request, db, user))
+    service.remove_member(company_id, user_id, actor=user)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

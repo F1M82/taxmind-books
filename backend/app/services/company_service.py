@@ -12,6 +12,8 @@ from app.core.exceptions import (
     AlreadyMember,
     CompanyNotFound,
     GstinAlreadyRegistered,
+    InsufficientRole,
+    OwnershipTransferRequired,
     UserNotFound,
 )
 from app.models.company import Company, CompanyRole, CompanyStatus, UserCompany
@@ -274,9 +276,133 @@ class CompanyService:
         )
         return new_membership
 
+    def list_members(
+        self, company_id: UUID, actor: User
+    ) -> list[UserCompany]:
+        """All memberships of a company. Viewing is gated to owner/admin
+        (the admin surface); a 404 is raised for non-members so the
+        company's existence is not leaked (deny-by-hiding)."""
+        membership = self._require_membership(company_id, actor)
+        if membership.role not in (CompanyRole.owner, CompanyRole.admin):
+            raise InsufficientRole("Insufficient role.")
+        return (
+            self.db.query(UserCompany)
+            .filter(UserCompany.company_id == company_id)
+            .join(User, User.id == UserCompany.user_id)
+            .order_by(User.email)
+            .all()
+        )
+
+    def set_member_role(
+        self,
+        company_id: UUID,
+        target_user_id: UUID,
+        role: str,
+        actor: User,
+    ) -> UserCompany:
+        """Change a member's role. Owner-only. Refuses to demote the
+        last owner (the company must always retain at least one)."""
+        membership = self._require_membership(company_id, actor)
+        if membership.role != CompanyRole.owner:
+            raise InsufficientRole("Insufficient role.")
+
+        target = self._require_target_membership(company_id, target_user_id)
+        new_role = CompanyRole(role)
+        old_role = target.role
+        if old_role == new_role:
+            return target
+        if (
+            old_role == CompanyRole.owner
+            and new_role != CompanyRole.owner
+            and self._owner_count(company_id) <= 1
+        ):
+            raise OwnershipTransferRequired(
+                "Cannot demote the last owner. Promote another member to "
+                "owner first.",
+                details={"company_id": str(company_id)},
+            )
+
+        target.role = new_role
+        self.db.flush()
+        self.audit.emit(
+            action="user_company.role_changed",
+            entity_type="user_company",
+            entity_id=target.id,
+            old_value={"role": old_role.value},
+            new_value={
+                "user_id": str(target.user_id),
+                "role": new_role.value,
+            },
+            company_id_override=company_id,
+        )
+        return target
+
+    def remove_member(
+        self, company_id: UUID, target_user_id: UUID, actor: User
+    ) -> None:
+        """Remove a member. Owner-only. Refuses to remove the last
+        owner (would orphan the company)."""
+        membership = self._require_membership(company_id, actor)
+        if membership.role != CompanyRole.owner:
+            raise InsufficientRole("Insufficient role.")
+
+        target = self._require_target_membership(company_id, target_user_id)
+        if (
+            target.role == CompanyRole.owner
+            and self._owner_count(company_id) <= 1
+        ):
+            raise OwnershipTransferRequired(
+                "Cannot remove the last owner. Promote another member to "
+                "owner first.",
+                details={"company_id": str(company_id)},
+            )
+
+        removed = {
+            "user_id": str(target.user_id),
+            "role": target.role.value,
+        }
+        self.db.delete(target)
+        self.db.flush()
+        self.audit.emit(
+            action="user_company.removed",
+            entity_type="user_company",
+            entity_id=target.id,
+            old_value=removed,
+            new_value=None,
+            company_id_override=company_id,
+        )
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _owner_count(self, company_id: UUID) -> int:
+        return (
+            self.db.query(UserCompany)
+            .filter(
+                UserCompany.company_id == company_id,
+                UserCompany.role == CompanyRole.owner,
+            )
+            .count()
+        )
+
+    def _require_target_membership(
+        self, company_id: UUID, target_user_id: UUID
+    ) -> UserCompany:
+        target = (
+            self.db.query(UserCompany)
+            .filter(
+                UserCompany.user_id == target_user_id,
+                UserCompany.company_id == company_id,
+            )
+            .first()
+        )
+        if target is None:
+            raise UserNotFound(
+                "User is not a member of this company.",
+                details={"user_id": str(target_user_id)},
+            )
+        return target
 
     def _require_membership(
         self, company_id: UUID, actor: User

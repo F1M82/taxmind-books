@@ -108,3 +108,11 @@ class MemberOut(TaxMindBooksBase):
     role: str
     user_email: EmailStr
     created_at: datetime
+
+
+class MemberListResponse(TaxMindBooksBase):
+    items: list[MemberOut]
+
+
+class MemberRoleUpdate(TaxMindBooksBase):
+    role: RoleStr

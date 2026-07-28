@@ -5,12 +5,13 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "splash": {
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.taxmindbooks.app"
@@ -22,7 +23,21 @@
       "bundler": "metro"
     },
     "extra": {
-      "API_BASE_URL": "http://localhost:8000"
-    }
+      "API_BASE_URL": "http://192.168.1.34:8000",
+      "eas": {
+        "projectId": "51c1df50-8a00-40e3-af69-22f47e7aa362"
+      }
+    },
+    "owner": "f1m82",
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ]
   }
 }

@@ -36,6 +36,10 @@ export class ApiError extends Error {
 }
 
 function baseUrl(): string {
+  const envUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
+  if (envUrl) {
+    return envUrl.replace(/\/+$/, "");
+  }
   const extra = (Constants.expoConfig?.extra ?? {}) as Record<
     string,
     string | undefined
@@ -43,7 +47,7 @@ function baseUrl(): string {
   const url = extra.API_BASE_URL;
   if (!url) {
     throw new Error(
-      "API_BASE_URL missing from expo config (app.json extra)",
+      "API_BASE_URL missing: set EXPO_PUBLIC_API_BASE_URL or app.json extra.API_BASE_URL",
     );
   }
   return url.replace(/\/+$/, "");
@@ -99,6 +103,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const access = await getAccessToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    // Identify the posting client so the backend can tag entries recorded
+    // from the mobile app (vouchers.client_channel). Backend whitelists the
+    // value; anything unknown is stored as NULL.
+    "X-Client": "mobile",
     ...(init.headers ?? {}),
   };
   if (access) {

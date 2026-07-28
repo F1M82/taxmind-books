@@ -48,6 +48,8 @@ const HANDLERS = {
   onOpenBalanceSheet: jest.fn(),
   onOpenOutstanding: jest.fn(),
   onOpenOnboarding: jest.fn(),
+  onOpenMembers: jest.fn(),
+  onOpenAuditLog: jest.fn(),
 };
 
 beforeEach(() => {

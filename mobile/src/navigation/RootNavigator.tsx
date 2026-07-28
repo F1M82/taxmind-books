@@ -7,6 +7,8 @@ import React from "react";
 import { ActivityIndicator, View } from "react-native";
 
 import { useAuth } from "../context/AuthContext";
+import AuditLogScreen from "../screens/admin/AuditLogScreen";
+import MembersScreen from "../screens/admin/MembersScreen";
 import LoginScreen from "../screens/auth/LoginScreen";
 import RegisterScreen from "../screens/auth/RegisterScreen";
 import CompanyCreateScreen from "../screens/companies/CompanyCreateScreen";
@@ -38,6 +40,8 @@ type AppStackParamList = {
   BalanceSheet: undefined;
   Outstanding: undefined;
   Onboarding: undefined;
+  Members: undefined;
+  AuditLog: undefined;
 };
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -86,6 +90,8 @@ function AppFlow(): React.ReactElement {
             }
             onOpenOutstanding={() => props.navigation.navigate("Outstanding")}
             onOpenOnboarding={() => props.navigation.navigate("Onboarding")}
+            onOpenMembers={() => props.navigation.navigate("Members")}
+            onOpenAuditLog={() => props.navigation.navigate("AuditLog")}
           />
         )}
       </AppStack.Screen>
@@ -156,6 +162,16 @@ function AppFlow(): React.ReactElement {
         name="Outstanding"
         component={OutstandingScreen}
         options={{ title: "Outstanding" }}
+      />
+      <AppStack.Screen
+        name="Members"
+        component={MembersScreen}
+        options={{ title: "Members" }}
+      />
+      <AppStack.Screen
+        name="AuditLog"
+        component={AuditLogScreen}
+        options={{ title: "Activity Log" }}
       />
       <AppStack.Screen name="Onboarding" options={{ title: "Onboarding" }}>
         {(props: NativeStackScreenProps<AppStackParamList, "Onboarding">) => (

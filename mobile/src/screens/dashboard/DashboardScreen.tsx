@@ -32,6 +32,8 @@ export default function DashboardScreen({
   onOpenBalanceSheet,
   onOpenOutstanding,
   onOpenOnboarding,
+  onOpenMembers,
+  onOpenAuditLog,
 }: {
   onOpenCompanies: () => void;
   onOpenLedgers: () => void;
@@ -41,6 +43,8 @@ export default function DashboardScreen({
   onOpenBalanceSheet: () => void;
   onOpenOutstanding: () => void;
   onOpenOnboarding: () => void;
+  onOpenMembers: () => void;
+  onOpenAuditLog: () => void;
 }): React.ReactElement {
   const { user, signOut } = useAuth();
   const { activeCompanyId, loading: companyLoading } = useActiveCompany();
@@ -96,6 +100,9 @@ export default function DashboardScreen({
     activeCompanyId === null
       ? null
       : user.companies.find((c) => c.id === activeCompanyId) ?? null;
+  const isAdmin =
+    activeCompany !== null &&
+    (activeCompany.role === "owner" || activeCompany.role === "admin");
 
   return (
     <ScrollView
@@ -246,6 +253,40 @@ export default function DashboardScreen({
               <Text style={styles.shortcutSubtitle}>Assets vs liabilities</Text>
             </Pressable>
           </View>
+
+          {isAdmin && (
+            <>
+              <Text style={styles.sectionLabel}>ADMIN</Text>
+              <View style={styles.shortcuts}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="open-members"
+                  onPress={onOpenMembers}
+                  style={({ pressed }) => [
+                    styles.shortcut,
+                    pressed && { opacity: 0.85 },
+                  ]}
+                >
+                  <Text style={styles.shortcutTitle}>Members</Text>
+                  <Text style={styles.shortcutSubtitle}>
+                    Assign users + roles
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="open-audit-log"
+                  onPress={onOpenAuditLog}
+                  style={({ pressed }) => [
+                    styles.shortcut,
+                    pressed && { opacity: 0.85 },
+                  ]}
+                >
+                  <Text style={styles.shortcutTitle}>Activity Log</Text>
+                  <Text style={styles.shortcutSubtitle}>Who did what</Text>
+                </Pressable>
+              </View>
+            </>
+          )}
         </>
       )}
 

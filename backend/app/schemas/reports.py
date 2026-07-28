@@ -10,7 +10,7 @@ from datetime import date
 from typing import Literal
 from uuid import UUID
 
-from app.schemas.common import Money, TaxMindBooksBase
+from app.schemas.common import Money, SignedMoney, TaxMindBooksBase
 
 DrCr = Literal["Dr", "Cr"]
 ProfitLoss = Literal["profit", "loss"]
@@ -86,21 +86,25 @@ class ProfitLossResponse(TaxMindBooksBase):
 # ---------------------------------------------------------------------
 
 
+# Balance-sheet magnitudes carry their sign in the value itself (there is no
+# accompanying Dr/Cr field like Trial Balance / Outstanding have), so a
+# contra-balance — e.g. a Sundry Debtor with a credit balance — legitimately
+# yields a negative amount. Use SignedMoney; plain Money (>= 0) 500s on it.
 class BSLine(TaxMindBooksBase):
     ledger_id: UUID
     ledger_name: str
-    amount: Money
+    amount: SignedMoney
 
 
 class BSGroup(TaxMindBooksBase):
     group_name: str
     ledgers: list[BSLine]
-    total: Money
+    total: SignedMoney
 
 
 class BSSection(TaxMindBooksBase):
     groups: list[BSGroup]
-    total: Money
+    total: SignedMoney
 
 
 class BSPnL(TaxMindBooksBase):
@@ -109,8 +113,8 @@ class BSPnL(TaxMindBooksBase):
 
 
 class BSEquation(TaxMindBooksBase):
-    assets: Money
-    liabilities_plus_equity: Money
+    assets: SignedMoney
+    liabilities_plus_equity: SignedMoney
     in_balance: bool
 
 

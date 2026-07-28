@@ -169,3 +169,67 @@ def test_balance_sheet_groups_split_correctly(
     # into the current-period P&L instead).
     assert "Sales Accounts" not in asset_groups
     assert "Sales Accounts" not in liability_groups
+
+
+def test_balance_sheet_allows_negative_contra_balance(
+    client: TestClient, db_session: Session
+) -> None:
+    """A Sundry Debtor with a *credit* balance yields a negative
+    balance-sheet line. This regressed as a 500 when the line/total
+    fields were typed `Money` (>= 0) instead of `SignedMoney`: the
+    balance sheet carries its sign in the value, so contra-balances
+    are legitimate. See §7.6 reports validation 2026-07-28.
+    """
+    db = db_session
+    user = make_user(db)
+    company = make_company(db)
+    make_membership(db, user, company, role=CompanyRole.viewer)
+    bank = Ledger(
+        company_id=company.id,
+        name="Bank",
+        name_normalized="bank",
+        group_name="Bank Accounts",
+        balance_type=BalanceType.Dr,
+    )
+    debtor = Ledger(
+        company_id=company.id,
+        name="Xyz Ltd",
+        name_normalized="xyz ltd",
+        group_name="Sundry Debtors",
+        balance_type=BalanceType.Dr,
+    )
+    db.add_all([bank, debtor])
+    db.commit()
+    # Receipt: Bank Dr 1000 / Xyz Ltd Cr 1000. With no opening receivable,
+    # the debtor ends the period with a 1000 *credit* balance -> -1000 on
+    # the assets side.
+    _voucher(
+        db,
+        company.id,
+        voucher_type=VoucherType.Receipt,
+        on_date=date(2026, 4, 10),
+        dr_ledger=bank,
+        cr_ledger=debtor,
+        amount=Decimal("1000.00"),
+    )
+    r = client.get(
+        "/api/v1/reports/balance-sheet?as_of_date=2026-04-30",
+        headers=_h(user, company),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    debtor_group = next(
+        g
+        for g in body["assets"]["groups"]
+        if g["group_name"] == "Sundry Debtors"
+    )
+    assert Decimal(debtor_group["total"]) == Decimal("-1000.00")
+    line = next(
+        line
+        for line in debtor_group["ledgers"]
+        if line["ledger_name"] == "Xyz Ltd"
+    )
+    assert Decimal(line["amount"]) == Decimal("-1000.00")
+    # Bank +1000 nets the debtor -1000 -> assets total 0, equation holds.
+    assert Decimal(body["assets"]["total"]) == Decimal("0.00")
+    assert body["equation"]["in_balance"] is True

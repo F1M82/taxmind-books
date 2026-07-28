@@ -60,3 +60,31 @@ export async function getDashboardHome(): Promise<DashboardHomeResponse> {
     withCompany: true,
   });
 }
+
+export interface DashboardNetProfit {
+  value: string;
+  type: "profit" | "loss";
+}
+
+export interface DashboardFinancialsResponse {
+  from_date: string;
+  to_date: string;
+  sales: string;
+  purchase: string;
+  expenses: string;
+  net_profit: DashboardNetProfit;
+}
+
+export async function getDashboardFinancials(
+  from?: string,
+  to?: string,
+): Promise<DashboardFinancialsResponse> {
+  const params = new URLSearchParams();
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  const qs = params.toString();
+  return api.get<DashboardFinancialsResponse>(
+    `/api/v1/dashboard/financials${qs ? `?${qs}` : ""}`,
+    { withCompany: true },
+  );
+}

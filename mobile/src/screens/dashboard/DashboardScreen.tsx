@@ -16,6 +16,7 @@ import {
 } from "../../api/onboarding";
 import AlertsList from "../../components/dashboard/AlertsList";
 import ConnectorTile from "../../components/dashboard/ConnectorTile";
+import FinancialsTile from "../../components/dashboard/FinancialsTile";
 import GstTile from "../../components/dashboard/GstTile";
 import MetricsTile from "../../components/dashboard/MetricsTile";
 import OnboardingTile from "../../components/dashboard/OnboardingTile";
@@ -193,6 +194,8 @@ export default function DashboardScreen({
             />
             <GstTile gst={data.gst_liability_indicative} />
           </View>
+
+          <FinancialsTile />
 
           <Text style={styles.sectionLabel}>SHORTCUTS</Text>
           <View style={styles.shortcuts}>

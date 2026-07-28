@@ -179,3 +179,98 @@ def compute_profit_loss(
 def fiscal_year_start(d: date) -> date:
     """First day of the Indian FY containing `d`. April 1 cut-over."""
     return date(d.year if d.month >= 4 else d.year - 1, 4, 1)
+
+
+# ---------------------------------------------------------------------
+# Dashboard financials — headline Sales / Purchase / Expenses / Net Profit
+# ---------------------------------------------------------------------
+
+# Sales and Purchase are broken out as their own headline figures, so the
+# dashboard "Expenses" line is operating expenses ONLY (direct + indirect),
+# EXCLUDING purchases. Net profit still uses the full P&L (income minus the
+# whole EXPENSE_GROUPS set, purchases included), so it reconciles with the
+# P&L report.
+_SALES_GROUPS: frozenset[str] = frozenset({"sales accounts"})
+_PURCHASE_GROUPS: frozenset[str] = frozenset({"purchase accounts"})
+_OPERATING_EXPENSE_GROUPS: frozenset[str] = frozenset(
+    {"direct expenses", "indirect expenses"}
+)
+
+
+@dataclass
+class DashboardFinancials:
+    from_date: date
+    to_date: date
+    sales: Decimal
+    purchase: Decimal
+    expenses: Decimal
+    net_profit_value: Decimal
+    net_profit_type: Literal["profit", "loss"]
+
+
+def _group_net(
+    db: Session,
+    *,
+    company_id: UUID,
+    from_date: date,
+    to_date: date,
+    groups: frozenset[str],
+    credit_natured: bool,
+) -> Decimal:
+    total = Decimal("0")
+    for _lid, _name, _grp, sum_dr, sum_cr in _movements_for_groups(
+        db,
+        company_id=company_id,
+        from_date=from_date,
+        to_date=to_date,
+        groups=groups,
+    ):
+        total += sum_cr - sum_dr if credit_natured else sum_dr - sum_cr
+    return total
+
+
+def compute_dashboard_financials(
+    db: Session,
+    *,
+    company_id: UUID,
+    from_date: date,
+    to_date: date,
+) -> DashboardFinancials:
+    """Headline financials over [from_date, to_date]: Sales (Cr-natured),
+    Purchase and Expenses (Dr-natured), and Net Profit (full P&L)."""
+    sales = _group_net(
+        db,
+        company_id=company_id,
+        from_date=from_date,
+        to_date=to_date,
+        groups=_SALES_GROUPS,
+        credit_natured=True,
+    )
+    purchase = _group_net(
+        db,
+        company_id=company_id,
+        from_date=from_date,
+        to_date=to_date,
+        groups=_PURCHASE_GROUPS,
+        credit_natured=False,
+    )
+    expenses = _group_net(
+        db,
+        company_id=company_id,
+        from_date=from_date,
+        to_date=to_date,
+        groups=_OPERATING_EXPENSE_GROUPS,
+        credit_natured=False,
+    )
+    pl = compute_profit_loss(
+        db, company_id=company_id, from_date=from_date, to_date=to_date
+    )
+    return DashboardFinancials(
+        from_date=from_date,
+        to_date=to_date,
+        sales=sales,
+        purchase=purchase,
+        expenses=expenses,
+        net_profit_value=pl.net_value,
+        net_profit_type=pl.net_type,
+    )

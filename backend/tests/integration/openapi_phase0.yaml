@@ -69,6 +69,8 @@ endpoints:
   # ---- Dashboard ----
   - path: /api/v1/dashboard/home
     methods: [GET]
+  - path: /api/v1/dashboard/financials
+    methods: [GET]
 
   # ---- Onboarding ----
   - path: /api/v1/onboarding/checklist

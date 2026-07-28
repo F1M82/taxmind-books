@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from app.schemas.common import Money, TaxMindBooksBase
+from app.schemas.common import Money, SignedMoney, TaxMindBooksBase
 
 AlertSeverity = Literal["info", "warning", "critical"]
 AlertKind = Literal[
@@ -61,3 +61,22 @@ class DashboardHomeResponse(TaxMindBooksBase):
     outstanding: DashboardOutstanding
     gst_liability_indicative: DashboardGstLiability
     alerts: list[DashboardAlert]
+
+
+# ---- Financials (date-selectable Sales / Purchase / Expenses / Net Profit) ----
+
+
+class DashboardNetProfit(TaxMindBooksBase):
+    value: Money  # magnitude; sign is carried by `type`
+    type: Literal["profit", "loss"]
+
+
+class DashboardFinancialsResponse(TaxMindBooksBase):
+    from_date: date
+    to_date: date
+    # Period flows can be negative in edge cases (e.g. net sales returns),
+    # so these are signed — plain Money (>= 0) would 500 on such data.
+    sales: SignedMoney
+    purchase: SignedMoney
+    expenses: SignedMoney
+    net_profit: DashboardNetProfit

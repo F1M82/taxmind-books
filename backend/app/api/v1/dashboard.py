@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from datetime import date as _date
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -15,13 +17,19 @@ from app.models.user import User
 from app.schemas.dashboard import (
     DashboardAlert,
     DashboardConnector,
+    DashboardFinancialsResponse,
     DashboardGstLiability,
     DashboardHomeResponse,
     DashboardMonthMetrics,
+    DashboardNetProfit,
     DashboardOutstanding,
     DashboardTodayMetrics,
 )
 from app.services.dashboard_service import build_dashboard
+from app.services.reporting.profit_loss import (
+    compute_dashboard_financials,
+    fiscal_year_start,
+)
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -69,4 +77,33 @@ def dashboard_home(
             )
             for a in data.alerts
         ],
+    )
+
+
+@router.get("/financials", response_model=DashboardFinancialsResponse)
+def dashboard_financials(
+    company: Company = Depends(get_active_company),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_scoped_session),
+    from_date: _date | None = Query(default=None, alias="from"),
+    to_date: _date | None = Query(default=None, alias="to"),
+) -> DashboardFinancialsResponse:
+    """Headline financials (Sales / Purchase / Expenses / Net Profit) over
+    a selectable period. Defaults to the current Indian financial year
+    (April 1 → today) when no dates are supplied."""
+    end = to_date or _date.today()
+    start = from_date or fiscal_year_start(end)
+    result = compute_dashboard_financials(
+        db, company_id=company.id, from_date=start, to_date=end
+    )
+    return DashboardFinancialsResponse(
+        from_date=result.from_date,
+        to_date=result.to_date,
+        sales=result.sales,
+        purchase=result.purchase,
+        expenses=result.expenses,
+        net_profit=DashboardNetProfit(
+            value=result.net_profit_value,
+            type=result.net_profit_type,
+        ),
     )

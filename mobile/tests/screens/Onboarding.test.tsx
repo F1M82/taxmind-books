@@ -13,6 +13,7 @@ jest.mock("../../src/api/onboarding", () => ({
 const HANDLERS = {
   onOpenLedgers: jest.fn(),
   onOpenNewVoucher: jest.fn(),
+  onOpenTallySetup: jest.fn(),
 };
 
 beforeEach(() => {
@@ -72,6 +73,20 @@ test("renders all five items with the right completion state", async () => {
   expect(getByLabelText("item-ledgers_synced")).toBeTruthy();
   expect(getByLabelText("item-first_voucher_posted")).toBeTruthy();
   expect(getByLabelText("item-first_invoice_extracted")).toBeTruthy();
+});
+
+
+test("tapping an incomplete connector_installed item opens Tally Setup", async () => {
+  mockGetOnboardingChecklist.mockResolvedValue(baseChecklist);
+
+  const { findByLabelText } = render(<OnboardingScreen {...HANDLERS} />);
+
+  const button = await findByLabelText("open-connector_installed");
+  await act(async () => {
+    fireEvent.press(button);
+  });
+
+  expect(HANDLERS.onOpenTallySetup).toHaveBeenCalled();
 });
 
 

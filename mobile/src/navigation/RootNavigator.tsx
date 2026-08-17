@@ -16,6 +16,7 @@ import CompanyListScreen from "../screens/companies/CompanyListScreen";
 import DashboardScreen from "../screens/dashboard/DashboardScreen";
 import LedgerListScreen from "../screens/ledgers/LedgerListScreen";
 import OnboardingScreen from "../screens/onboarding/OnboardingScreen";
+import TallySetupScreen from "../screens/onboarding/TallySetupScreen";
 import BalanceSheetScreen from "../screens/reports/BalanceSheetScreen";
 import OutstandingScreen from "../screens/reports/OutstandingScreen";
 import ProfitLossScreen from "../screens/reports/ProfitLossScreen";
@@ -40,6 +41,7 @@ type AppStackParamList = {
   BalanceSheet: undefined;
   Outstanding: undefined;
   Onboarding: undefined;
+  TallySetup: undefined;
   Members: undefined;
   AuditLog: undefined;
 };
@@ -188,9 +190,15 @@ function AppFlow(): React.ReactElement {
                 routes: [{ name: "Dashboard" }, { name: "NewVoucher" }],
               })
             }
+            onOpenTallySetup={() => props.navigation.navigate("TallySetup")}
           />
         )}
       </AppStack.Screen>
+      <AppStack.Screen
+        name="TallySetup"
+        component={TallySetupScreen}
+        options={{ title: "Tally Setup" }}
+      />
     </AppStack.Navigator>
   );
 }

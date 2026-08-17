@@ -23,12 +23,12 @@ import {
  * current completion state. Tapping an incomplete item navigates to
  * the relevant flow; completed and out-of-scope items are inert.
  *
- * Per-item navigation (Phase 0):
+ * Per-item navigation (Phase 0 + P3.7 Phase 7C):
  *   - company_created           → inert, always done.
- *   - connector_installed       → inert. The connector ships as a
- *                                 Windows .exe; there's no mobile
- *                                 install flow. The subtitle tells
- *                                 the user where to look.
+ *   - connector_installed       → Tally Setup. P3.7 wired the
+ *                                 formerly-inert row to the real
+ *                                 connector/mapping workflow
+ *                                 (TallySetupScreen).
  *   - ledgers_synced            → Ledgers screen (the user can see
  *                                 the current ledger list and the
  *                                 sync button lives there once it
@@ -39,9 +39,11 @@ import {
 export default function OnboardingScreen({
   onOpenLedgers,
   onOpenNewVoucher,
+  onOpenTallySetup,
 }: {
   onOpenLedgers: () => void;
   onOpenNewVoucher: () => void;
+  onOpenTallySetup: () => void;
 }): React.ReactElement {
   const [data, setData] = useState<OnboardingChecklistResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +67,8 @@ export default function OnboardingScreen({
 
   const tapHandlerFor = (key: OnboardingItemKey): (() => void) | undefined => {
     switch (key) {
+      case "connector_installed":
+        return onOpenTallySetup;
       case "ledgers_synced":
         return onOpenLedgers;
       case "first_voucher_posted":
@@ -165,7 +169,7 @@ function ItemRow({
 function subtitleFor(key: OnboardingItemKey): string | undefined {
   switch (key) {
     case "connector_installed":
-      return "Download the Tally Connector on your PC and pair it from Settings";
+      return "Connect your Tally company in Tally Setup";
     case "first_invoice_extracted":
       return "Coming in Phase 1";
     case "ledgers_synced":

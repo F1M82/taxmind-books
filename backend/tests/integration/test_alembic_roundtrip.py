@@ -141,7 +141,122 @@ def test_alembic_upgrade_creates_initial_tables(clean_db: str) -> None:
         )
         assert result.scalar() == "idx_ledgers_name_trgm"
 
-    # voucher_number uniqueness is DEFERRABLE INITIALLY DEFERRED
+    # P3.7: the durable voucher identity is now the partial unique index
+    # (company_id, tally_guid), NOT (company_id, voucher_type, voucher_number).
+    with engine.connect() as conn:
+        old = conn.execute(
+            text(
+                "SELECT conname FROM pg_constraint "
+                "WHERE conname = 'uq_vouchers_company_number_type'"
+            )
+        ).first()
+        assert old is None  # old constraint is gone
+    # New partial unique index must exist and be unique.
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT indexname, indexdef FROM pg_indexes "
+                "WHERE indexname = 'uq_vouchers_company_tally_guid'"
+            )
+        ).one()
+        assert row.indexname == "uq_vouchers_company_tally_guid"
+        assert "UNIQUE" in row.indexdef
+        assert "tally_guid IS NOT NULL" in row.indexdef
+    # Vouchers table carries the four P3.7 Tally identity columns.
+    voucher_cols = {c["name"] for c in inspector.get_columns("vouchers")}
+    assert {
+        "tally_guid",
+        "tally_master_id",
+        "tally_vchkey",
+        "tally_alter_id",
+    }.issubset(voucher_cols)
+    # P3.7 Phase 6A: Tally-origin metadata columns.
+    assert {
+        "tally_voucher_type",
+        "tally_is_cancelled",
+        "tally_is_deleted",
+        "tally_is_optional",
+    }.issubset(voucher_cols)
+    # P3.7 Phase 7B: companies.tally_master_id (Tally company GUID) with a
+    # global unique constraint (defense-in-depth against cross-company reuse).
+    company_cols = {c["name"] for c in inspector.get_columns("companies")}
+    assert "tally_master_id" in company_cols
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT conname FROM pg_constraint "
+                "WHERE conname = 'uq_companies_tally_master_id'"
+            )
+        ).one()
+        assert row.conname == "uq_companies_tally_master_id"
+        idx = conn.execute(
+            text(
+                "SELECT indexname FROM pg_indexes "
+                "WHERE indexname = 'idx_companies_tally_master_id'"
+            )
+        ).one()
+        assert idx.indexname == "idx_companies_tally_master_id"
+    engine.dispose()
+
+
+@pytest.mark.integration
+def test_alembic_0014_import_metadata_and_downgrade(clean_db: str) -> None:
+    """0014 makes voucher_type nullable and adds the Tally-origin columns.
+
+    Downgrade must drop the four new columns and restore voucher_type
+    NOT NULL (safe — no imported row has a NULL type yet)."""
+    cfg = _alembic_cfg()
+    command.upgrade(cfg, "head")
+
+    engine = create_engine(clean_db)
+    inspector = inspect(engine)
+    voucher_cols = {c["name"]: c for c in inspector.get_columns("vouchers")}
+    assert voucher_cols["voucher_type"]["nullable"] is True
+    for name in (
+        "tally_voucher_type",
+        "tally_is_cancelled",
+        "tally_is_deleted",
+        "tally_is_optional",
+    ):
+        assert name in voucher_cols
+        assert voucher_cols[name]["nullable"] is True
+    engine.dispose()
+
+    command.downgrade(cfg, "0013")
+
+    engine = create_engine(clean_db)
+    voucher_cols = {c["name"]: c for c in inspect(engine).get_columns("vouchers")}
+    assert voucher_cols["voucher_type"]["nullable"] is False
+    for name in (
+        "tally_voucher_type",
+        "tally_is_cancelled",
+        "tally_is_deleted",
+        "tally_is_optional",
+    ):
+        assert name not in voucher_cols
+    engine.dispose()
+
+    # Re-upgrade must land cleanly.
+    command.upgrade(cfg, "head")
+
+
+@pytest.mark.integration
+def test_alembic_p37_partial_downgrade_restores_old_identity(clean_db: str) -> None:
+    """Migration 0013 downgrade must restore the EXACT old constraint.
+
+    Before any Tally GUID data exists (all tally_guid NULL), downgrading
+    0013 → 0011 must drop the partial index and recreate
+    `uq_vouchers_company_number_type` as DEFERRABLE INITIALLY DEFERRED —
+    exactly as it was before P3.7. Re-upgrade must then re-apply the
+    P3.7 identity cleanly (GATE 2/3, Phase 5 item 9/10).
+    """
+    cfg = _alembic_cfg()
+    command.upgrade(cfg, "head")
+
+    # Downgrade only the two P3.7 migrations.
+    command.downgrade(cfg, "0011")
+
+    engine = create_engine(clean_db)
     with engine.connect() as conn:
         result = conn.execute(
             text(
@@ -151,6 +266,42 @@ def test_alembic_upgrade_creates_initial_tables(clean_db: str) -> None:
         ).one()
         assert result.condeferrable is True
         assert result.condeferred is True
+        # Partial index is gone.
+        idx = conn.execute(
+            text(
+                "SELECT indexname FROM pg_indexes "
+                "WHERE indexname = 'uq_vouchers_company_tally_guid'"
+            )
+        ).first()
+        assert idx is None
+    # The four P3.7 columns must be gone at 0011.
+    voucher_cols = {c["name"] for c in inspect(engine).get_columns("vouchers")}
+    assert not {
+        "tally_guid",
+        "tally_master_id",
+        "tally_vchkey",
+        "tally_alter_id",
+    }.issubset(voucher_cols)
+    engine.dispose()
+
+    # Re-upgrade to head — the new identity must land cleanly.
+    command.upgrade(cfg, "head")
+    engine = create_engine(clean_db)
+    with engine.connect() as conn:
+        old = conn.execute(
+            text(
+                "SELECT conname FROM pg_constraint "
+                "WHERE conname = 'uq_vouchers_company_number_type'"
+            )
+        ).first()
+        assert old is None
+        row = conn.execute(
+            text(
+                "SELECT indexdef FROM pg_indexes "
+                "WHERE indexname = 'uq_vouchers_company_tally_guid'"
+            )
+        ).one()
+        assert "tally_guid IS NOT NULL" in row.indexdef
     engine.dispose()
 
 

@@ -357,6 +357,40 @@ async def test_get_all_groups_parses(
     assert all(g.parent == "Current Assets" for g in groups)
 
 
+# ---------------- get_company_info ----------------
+
+# Live-captured Company collection export (P3.7 Phase 7A probe).
+_COMPANY_XML = """<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <STATUS>1</STATUS>
+  </HEADER>
+  <BODY>
+    <DATA>
+      <COLLECTION>
+        <COMPANY NAME="Vighnaharta Agro Chemicals - FROM 1-APR-2025" RESERVEDNAME="">
+          <NAME TYPE="String">Vighnaharta Agro Chemicals - FROM 1-APR-2025</NAME>
+          <GUID TYPE="String">c30a0ee5-4fc5-4fdc-a10e-bd489d5423b9</GUID>
+        </COMPANY>
+      </COLLECTION>
+    </DATA>
+  </BODY>
+</ENVELOPE>
+"""
+
+
+@pytest.mark.asyncio
+async def test_get_company_info_parses_name_and_guid(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(
+        url="http://localhost:9000", status_code=200, text=_COMPANY_XML
+    )
+    info = await client.get_company_info()
+    assert info.name == "Vighnaharta Agro Chemicals - FROM 1-APR-2025"
+    assert info.guid == "c30a0ee5-4fc5-4fdc-a10e-bd489d5423b9"
+
+
 # ---------------- get_trial_balance ----------------
 
 

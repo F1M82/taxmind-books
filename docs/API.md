@@ -634,6 +634,211 @@ Trigger a master-data sync from Tally. Requires auth, `X-Company-ID`, and Idempo
 }
 ```
 
+#### `GET /api/v1/connector/company-mapping`
+
+Read the active company's Tally company binding (P3.7 Phase 7B). Requires auth and `X-Company-ID`.
+
+The response makes the unresolved state explicit: `mapped=false` with a null
+`tally_master_id` means no identity proof exists yet, so the master-data
+persistence gate remains closed.
+
+**Response 200:**
+```json
+{
+  "company_id": "uuid",
+  "tally_master_id": "c30a0ee5-4fc5-4fdc-a10e-bd489d5423b9",
+  "mapped": true
+}
+```
+
+When unmapped:
+```json
+{
+  "company_id": "uuid",
+  "tally_master_id": null,
+  "mapped": false
+}
+```
+
+#### `POST /api/v1/connector/company-mapping/confirm`
+
+Operator confirmation that binds the active company to a Tally company GUID
+(P3.7 Phase 7B). Requires auth, `X-Company-ID`, role `owner`.
+
+The operator explicitly selects the company (via `X-Company-ID`) AND supplies
+the Tally company GUID (from the connector `company_info` command). The GUID
+is never inferred from the name, and no company is ever auto-selected.
+
+**Request:**
+```json
+{
+  "tally_company_guid": "c30a0ee5-4fc5-4fdc-a10e-bd489d5423b9",
+  "tally_company_name": "Vighnaharta Agro Chemicals - FROM 1-APR-2025"
+}
+```
+
+**Response 200:**
+```json
+{
+  "company_id": "uuid",
+  "tally_master_id": "c30a0ee5-4fc5-4fdc-a10e-bd489d5423b9",
+  "tally_company_name": "Vighnaharta Agro Chemicals - FROM 1-APR-2025"
+}
+```
+
+**Side effects:**
+- Audit row written: `company.tally_mapping_configured` (first binding) or `company.tally_mapping_changed` (re-binding).
+- Once confirmed, the `sync_masters` persistence gate opens for this company (a sync payload whose Tally company GUID matches `tally_master_id` may persist ledgers).
+
+**Errors:**
+- `409 company_mapping_conflict` — the company is already mapped to a different GUID, or the GUID is already bound to another local company.
+- `422 company_mapping_conflict` (via the fail-closed gate when no GUID is supplied).
+
+---
+
+### Tally Company Mapping (v1.3)
+
+> The endpoints in this section are the **planned** multi-Tally-company
+> workflow (folder path + company identifier + discovery list). They are not
+> yet implemented. The currently-implemented company binding mechanism is
+> `GET /connector/company-mapping` + `POST /connector/company-mapping/confirm`
+> above (P3.7 Phase 7B), which binds a company to a Tally company GUID.
+
+These endpoints support the multi-Tally-company workflow: one connector PC hosts the Tally data folder; multiple backend companies each map to one specific Tally company on that PC.
+
+#### `GET /api/v1/connector/{connector_id}/tally-companies`
+
+Trigger the connector to read its data folder and list all Tally companies found. Returns the cached list from `tally_companies_discovered`, refreshed by this call.
+
+Requires auth, owner-or-admin role on at least one backend company served by this connector.
+
+**Query params:**
+- `refresh?: boolean` — if `true`, force the connector to re-scan the data folder. If `false` or absent, return the most recent cached list.
+
+**Response 200:**
+```json
+{
+  "connector_id": "uuid",
+  "tally_data_folder_path": "C:\\Users\\Public\\TallyPrime\\Data",
+  "scanned_at": "2026-05-14T12:00:00Z",
+  "companies": [
+    {
+      "tally_company_identifier": "10000",
+      "tally_company_name": "Acme Traders",
+      "gstin": "27AAAAA0000A1Z5",
+      "financial_year_start": "2026-04-01",
+      "mapped_to_backend_company_id": "<uuid-or-null>"
+    },
+    {
+      "tally_company_identifier": "10001",
+      "tally_company_name": "Beta Industries",
+      "gstin": null,
+      "financial_year_start": "2026-04-01",
+      "mapped_to_backend_company_id": null
+    }
+  ]
+}
+```
+
+**Errors:**
+- `403 connector_not_authorized_for_user` — user has no admin role on any backend company served by this connector
+- `503 connector_offline` — connector not currently connected; cannot refresh
+- `424 data_folder_unreadable` — connector reports the data folder is invalid
+
+#### `POST /api/v1/companies/{id}/tally-mapping`
+
+Configure the Tally mapping for a backend company. Requires auth, `X-Company-ID`, role `owner` or `admin`. Idempotency-Key required.
+
+**Request:**
+```json
+{
+  "connector_id": "uuid",
+  "tally_data_folder_path": "C:\\Users\\Public\\TallyPrime\\Data",
+  "tally_company_identifier": "10000",
+  "tally_company_display_name": "Acme Traders"
+}
+```
+
+**Response 201 (first time configure) or 200 (re-configure):**
+```json
+{
+  "company_id": "uuid",
+  "tally_data_folder_path": "C:\\Users\\Public\\TallyPrime\\Data",
+  "tally_company_identifier": "10000",
+  "tally_company_display_name": "Acme Traders",
+  "tally_mapping_configured_at": "2026-05-14T12:05:00+05:30",
+  "tally_mapping_configured_by": "uuid"
+}
+```
+
+**Side effects:**
+- The selected `tally_companies_discovered` row's `is_mapped_to_company_id` is updated.
+- Audit row written: `company.tally_mapping_configured` (first time) or `company.tally_mapping_changed`.
+- If any queued vouchers (`pending_tally_post`) existed for this backend company, they are re-evaluated against the new mapping.
+
+**Errors:**
+- `409 tally_mapping_collision` — another backend company already claims this Tally company on this folder
+- `404 tally_company_not_found_in_discovery` — the requested identifier was not in the connector's discovered list
+- `403 forbidden_role` — user is not owner or admin
+
+#### `GET /api/v1/companies/{id}/tally-mapping`
+
+Read the current mapping. Requires auth, `X-Company-ID`, role ≥ viewer.
+
+**Response 200:** same shape as POST response above, or:
+```json
+{
+  "company_id": "uuid",
+  "tally_data_folder_path": null,
+  "tally_company_identifier": null,
+  "tally_company_display_name": null,
+  "tally_mapping_configured_at": null
+}
+```
+when no mapping is configured.
+
+#### `DELETE /api/v1/companies/{id}/tally-mapping`
+
+Clear the mapping. Requires auth, `X-Company-ID`, role `owner`.
+
+**Response 204.**
+
+**Side effects:**
+- `company.tally_mapping_cleared` audit row written
+- Any queued vouchers for this company that depended on the mapping are NOT auto-cancelled — they enter manual review and will fail post until a new mapping is configured
+
+#### `GET /api/v1/connector/{connector_id}/active-tally-company`
+
+Ask the connector to report which Tally company is currently open. Requires auth, owner-or-admin role.
+
+**Response 200:**
+```json
+{
+  "connector_id": "uuid",
+  "tally_running": true,
+  "active_company_identifier": "10000",
+  "active_company_name": "Acme Traders",
+  "checked_at": "2026-05-14T12:10:00+05:30"
+}
+```
+
+**Errors:**
+- `503 connector_offline`
+
+---
+
+### Voucher Queue (v1.3)
+
+#### `GET /api/v1/vouchers/?status=pending_tally_post`
+
+List vouchers queued because Tally was not on the right company when post was attempted. (`status` filter already exists on the vouchers endpoint; this is the documented v1.3 use of it.)
+
+**Response 200:** standard paginated voucher list. Each item includes:
+- `tally_post_queued_at` — when it first entered the queue
+- `tally_post_queue_reason` — usually `wrong_company_open` or `connector_offline`
+- `expires_at` — `tally_post_queued_at + 30 days` (informational)
+
+
 **Errors:**
 - `503 connector_offline` — connector not connected
 - `400 idempotency_key_required`
@@ -1143,6 +1348,13 @@ The following `error.code` values are stable v1 contracts. Clients depend on the
 | `draft_rejected` | 409 | (deprecated in v1.2) |
 | `voucher_not_optional` | 409 | (v1.2) Approve/reject called on a non-Optional voucher |
 | `voucher_rejected` | 409 | (v1.2) Voucher already rejected |
+| `tally_mapping_required` | 412 | (v1.3) Voucher post requires the backend company to have a Tally mapping |
+| `tally_mapping_collision` | 409 | (v1.3) Two backend companies cannot map to the same Tally company on the same folder |
+| `tally_company_not_found_in_discovery` | 404 | (v1.3) Mapping references a Tally company the connector hasn't discovered |
+| `wrong_company_open` | 202 | (v1.3) Voucher accepted and queued because Tally is on a different company |
+| `tally_post_expired` | 410 | (v1.3) Queued voucher expired after 30 days; user must re-submit |
+| `data_folder_unreadable` | 424 | (v1.3) Connector reports Tally data folder is invalid |
+| `connector_not_authorized_for_user` | 403 | (v1.3) User has no admin role on any backend company served by this connector |
 | `ownership_transfer_required` | 409 | (v1.2) Account deletion blocked; user is sole owner |
 | `extraction_quota_exceeded` | 429 | (v1.2) Daily AI extraction limit reached |
 | `rate_limit_exceeded` | 429 | Too many requests |

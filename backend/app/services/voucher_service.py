@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -52,8 +52,8 @@ def _voucher_snapshot(v: Voucher) -> dict[str, Any]:
         "id": str(v.id),
         "company_id": str(v.company_id),
         "voucher_type": v.voucher_type.value
-        if hasattr(v.voucher_type, "value")
-        else str(v.voucher_type),
+        if v.voucher_type is not None
+        else None,
         "voucher_number": v.voucher_number,
         "date": v.date.isoformat(),
         "narration": v.narration,
@@ -90,6 +90,15 @@ def _voucher_snapshot(v: Voucher) -> dict[str, Any]:
         "optional_rejected_by": (
             str(v.optional_rejected_by) if v.optional_rejected_by else None
         ),
+        "tally_voucher_guid": v.tally_voucher_guid,
+        "tally_guid": v.tally_guid,
+        "tally_master_id": v.tally_master_id,
+        "tally_vchkey": v.tally_vchkey,
+        "tally_alter_id": v.tally_alter_id,
+        "tally_voucher_type": v.tally_voucher_type,
+        "tally_is_cancelled": v.tally_is_cancelled,
+        "tally_is_deleted": v.tally_is_deleted,
+        "tally_is_optional": v.tally_is_optional,
         "entries": [
             {
                 "ledger_id": str(e.ledger_id),
@@ -366,6 +375,133 @@ class VoucherService:
             new_value=new,
         )
         return voucher
+
+    # ------------------------------------------------------------------
+    # Tally import persistence (P3.7 Phase 6B)
+    # ------------------------------------------------------------------
+
+    def upsert_from_tally(
+        self,
+        *,
+        tally_guid: str,
+        voucher_type: VoucherType | None,
+        tally_voucher_type: str | None,
+        voucher_number: str | None,
+        date: date,
+        narration: str | None,
+        reference: str | None,
+        total_amount: Decimal,
+        tally_master_id: str | None,
+        tally_vchkey: str | None,
+        tally_alter_id: str | None,
+        tally_is_cancelled: bool | None,
+        tally_is_deleted: bool | None,
+        tally_is_optional: bool | None,
+        entries: Sequence[dict[str, Any]],
+    ) -> Voucher:
+        """Insert or update ONE voucher by its durable Tally identity.
+
+        Durable identity is ``(company_id, tally_guid)``. A voucher whose
+        ``tally_guid`` already exists for this company is UPDATED in place
+        (identity + core fields + origin flags); otherwise a new row is
+        INSERTED. ``voucher_number`` is display-only and never a match key,
+        so two distinct GUIDs with the same (type, number, date) coexist.
+
+        This method is atomic per voucher: it constructs the voucher and
+        its ledger entries in the current transaction and relies on the
+        caller to commit/rollback. A reconciliation failure upstream never
+        reaches this method (the import layer resolves ledger_ids first and
+        routes unresolved vouchers to manual review instead).
+
+        Imported vouchers are stamped ``source='tally_sync'`` and
+        ``status='posted'`` — neither value enters the TaxMind→Tally
+        dispatch/re-post path (which selects only
+        ``status='pending_tally_post'``). ``tally_voucher_guid`` (REMOTEID)
+        is never set here; it belongs to the dispatch workflow.
+        """
+        existing = (
+            self.db.query(Voucher)
+            .filter(
+                Voucher.company_id == self.company_id,
+                Voucher.tally_guid == tally_guid,
+            )
+            .first()
+        )
+
+        if existing is None:
+            voucher = Voucher(
+                company_id=self.company_id,
+                voucher_type=voucher_type,
+                tally_voucher_type=tally_voucher_type,
+                voucher_number=voucher_number,
+                date=date,
+                narration=narration,
+                reference=reference,
+                total_amount=total_amount,
+                status=VoucherStatus.posted,
+                source="tally_sync",
+                tally_guid=tally_guid,
+                tally_master_id=tally_master_id,
+                tally_vchkey=tally_vchkey,
+                tally_alter_id=tally_alter_id,
+                tally_is_cancelled=tally_is_cancelled,
+                tally_is_deleted=tally_is_deleted,
+                tally_is_optional=tally_is_optional,
+            )
+            self.db.add(voucher)
+            self.db.flush()
+            self._write_import_entries(voucher, entries)
+            self.db.flush()
+            self.audit.emit(
+                action="voucher.created",
+                entity_type="voucher",
+                entity_id=voucher.id,
+                old_value=None,
+                new_value=_voucher_snapshot(voucher),
+            )
+            return voucher
+
+        old = _voucher_snapshot(existing)
+        existing.voucher_type = voucher_type
+        existing.tally_voucher_type = tally_voucher_type
+        existing.voucher_number = voucher_number
+        existing.date = date
+        existing.narration = narration
+        existing.reference = reference
+        existing.total_amount = total_amount
+        existing.tally_master_id = tally_master_id
+        existing.tally_vchkey = tally_vchkey
+        existing.tally_alter_id = tally_alter_id
+        existing.tally_is_cancelled = tally_is_cancelled
+        existing.tally_is_deleted = tally_is_deleted
+        existing.tally_is_optional = tally_is_optional
+        self.db.flush()
+        new = _voucher_snapshot(existing)
+        if new != old:
+            self.audit.emit(
+                action="voucher.updated",
+                entity_type="voucher",
+                entity_id=existing.id,
+                old_value=old,
+                new_value=new,
+            )
+        return existing
+
+    def _write_import_entries(  # audit-exempt: helper for upsert_from_tally, which emits voucher.created in the same transaction
+        self, voucher: Voucher, entries: Sequence[dict[str, Any]]
+    ) -> None:
+        """Create LedgerEntry rows for a newly imported voucher."""
+        for idx, entry in enumerate(entries, start=1):
+            row = LedgerEntry(
+                company_id=self.company_id,
+                voucher_id=voucher.id,
+                ledger_id=entry["ledger_id"],
+                amount=entry["amount"],
+                entry_type=EntryType(entry["entry_type"]),
+                line_number=idx,
+                narration=entry.get("narration"),
+            )
+            self.db.add(row)
 
     # ------------------------------------------------------------------
     # Approve Optional → Regular  (v1.2, P0.46)

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
@@ -160,6 +160,19 @@ class LedgerMaster:
 
 
 @dataclass(frozen=True)
+class CompanyInfo:
+    """The current Tally company's identity (Phase 7B).
+
+    ``guid`` is the Tally company GUID read from the Company collection
+    export — the durable external identity. ``name`` is the display name,
+    captured separately; the GUID is never inferred from the name.
+    """
+
+    name: str
+    guid: str | None = None
+
+
+@dataclass(frozen=True)
 class GroupMaster:
     name: str
     parent: str
@@ -188,6 +201,55 @@ class LedgerVoucherRow:
     voucher_date: date
     amount: Decimal
     narration: str
+
+
+@dataclass(frozen=True)
+class VoucherExportEntry:
+    """One Dr/Cr line of an exported (read-only) Tally voucher.
+
+    `amount` keeps Tally's signed convention (Dr positive, Cr negative);
+    `entry_type` is the derived 'Dr'/'Cr' label. Export/mirror-only — this
+    type never drives a write back to Tally.
+
+    `ledger_guid` is the referenced ledger's native Tally GUID. The
+    voucher XML itself only carries the ledger NAME (`LEDGERNAME`); the
+    GUID is enriched from the `get_all_ledgers` collection (verified
+    `<GUID>` source) via an exact-name join — no field name is invented.
+    It is None when the ledger list has no unambiguous match for the name.
+    """
+
+    ledger_name: str
+    amount: Decimal
+    entry_type: str
+    ledger_guid: str | None = None
+
+
+@dataclass(frozen=True)
+class VoucherExportRow:
+    """A read-only projection of one Tally voucher for the historical mirror.
+
+    Produced by `TallyClient.get_vouchers` (P3.1). Carries Tally's durable
+    identifiers (guid / remote_id / vchkey / master_id / alter_id / voucher_key)
+    alongside the accounting payload. It is deliberately inert: nothing in the
+    export path posts, alters, or deletes a voucher.
+    """
+
+    tally_guid: str | None
+    remote_id: str | None
+    vchkey: str | None
+    master_id: str | None
+    alter_id: str | None
+    voucher_key: str | None
+    voucher_type: str
+    date: date
+    voucher_number: str | None
+    narration: str | None
+    reference: str | None
+    party_ledger_name: str | None
+    is_cancelled: bool
+    is_optional: bool
+    is_deleted: bool
+    entries: tuple[VoucherExportEntry, ...]
 
 
 @dataclass(frozen=True)
@@ -314,6 +376,129 @@ def _parse_import_response(body: str) -> ImportResponse:
         last_vch_id=_str_or_none("LASTVCHID"),
         line_error=_str_or_none("LINEERROR"),
         raw_body=body,
+    )
+
+
+# ---------------------------------------------------------------------
+# Voucher export parsing (P3.1 — read-only historical mirror)
+# ---------------------------------------------------------------------
+
+# `<VOUCHER` immediately followed by whitespace or `>` — matches the real
+# voucher element and the CMPINFO `<VOUCHER>N</VOUCHER>` counter, but NOT
+# `<VOUCHERNUMBER>` / `<VOUCHERTYPENAME>` / `<VOUCHERKEY>`.
+_VCH_OPEN_RE = re.compile(r"<VOUCHER(?=[\s>])", re.IGNORECASE)
+# A *real* voucher opening tag carries attributes (REMOTEID/VCHTYPE/…); the
+# CMPINFO counter (`<VOUCHER>2</VOUCHER>`) does not — this filters it out.
+_VCH_REAL_RE = re.compile(r"(?is)^<VOUCHER\s+[A-Za-z]")
+_VCH_CLOSE = "</VOUCHER>"
+
+
+def _yesno(text: str | None) -> bool:
+    return (text or "").strip().lower() == "yes"
+
+
+class _VoucherBlockScanner:
+    """Incremental extractor of complete ``<VOUCHER …>…</VOUCHER>`` blocks.
+
+    Feeds arbitrary text chunks (as they arrive off the wire) and returns any
+    whole voucher blocks that have completed. It holds at most the current
+    in-progress block plus an ~8-char tail in memory, so a multi-megabyte
+    export is never materialised at once. The CMPINFO ``<VOUCHER>N</VOUCHER>``
+    counter is skipped (no attributes). Purely a text state machine — it never
+    talks to Tally.
+    """
+
+    __slots__ = ("_buf",)
+
+    def __init__(self) -> None:
+        self._buf = ""
+
+    def feed(self, text: str) -> list[str]:
+        self._buf += text
+        out: list[str] = []
+        while True:
+            m = _VCH_OPEN_RE.search(self._buf)
+            if m is None:
+                # No opening tag left; keep only a short tail that could be a
+                # partial "<VOUCHER" split across the next chunk boundary.
+                if len(self._buf) > len("<VOUCHER"):
+                    self._buf = self._buf[-len("<VOUCHER"):]
+                break
+            start = m.start()
+            close = self._buf.find(_VCH_CLOSE, m.end())
+            if close == -1:
+                # Incomplete block: drop the consumed prefix, keep from the
+                # open tag so the next chunk can complete it.
+                self._buf = self._buf[start:]
+                break
+            end = close + len(_VCH_CLOSE)
+            block = self._buf[start:end]
+            self._buf = self._buf[end:]
+            if _VCH_REAL_RE.match(block):
+                out.append(block)
+        return out
+
+
+def _parse_voucher_block(block: str) -> VoucherExportRow:
+    """Parse ONE ``<VOUCHER>`` block into a `VoucherExportRow`. Read-only.
+
+    Sanitises Tally's XML-forbidden control refs first (shared with the rest
+    of the client), then parses the self-contained block. Raises
+    `TallyParseError` if the block is malformed after sanitisation.
+    """
+    # A voucher block can reference the ``UDF:`` namespace (Tally user-defined
+    # fields, e.g. ``<UDF:USERDESCRIPTION.LIST>``) whose ``xmlns:UDF``
+    # declaration lives on an ancestor in the full export, not on the
+    # extracted ``<VOUCHER>``. Parsing the block standalone would fail with
+    # "unbound prefix", so wrap it in a root that declares the namespace.
+    # The namespaced descendants are ignored — we only read plain-named tags.
+    wrapped = f'<TMVOUCHERWRAP xmlns:UDF="TallyUDF">{block}</TMVOUCHERWRAP>'
+    try:
+        root = ET.fromstring(_sanitize_tally_xml(wrapped))
+    except ET.ParseError as exc:
+        raise TallyParseError(str(exc)) from exc
+    el = root.find("VOUCHER")
+    if el is None:
+        raise TallyParseError("no <VOUCHER> element in block")
+
+    entries: list[VoucherExportEntry] = []
+    for le in el.findall("ALLLEDGERENTRIES.LIST"):
+        name = _get_text(le, "LEDGERNAME").strip()
+        if not name:
+            continue
+        amount = _decimal(_get_text(le, "AMOUNT", "0"))
+        deemed = le.find("ISDEEMEDPOSITIVE")
+        if deemed is not None and (deemed.text or "").strip():
+            entry_type = "Dr" if _yesno(deemed.text) else "Cr"
+        else:
+            entry_type = "Dr" if amount >= 0 else "Cr"
+        entries.append(
+            VoucherExportEntry(
+                ledger_name=name, amount=amount, entry_type=entry_type
+            )
+        )
+
+    def _opt(tag: str) -> str | None:
+        return _get_text(el, tag).strip() or None
+
+    return VoucherExportRow(
+        tally_guid=_opt("GUID"),
+        remote_id=el.get("REMOTEID"),
+        vchkey=el.get("VCHKEY"),
+        master_id=_opt("MASTERID"),
+        alter_id=_opt("ALTERID"),
+        voucher_key=_opt("VOUCHERKEY"),
+        voucher_type=_get_text(el, "VOUCHERTYPENAME").strip()
+        or (el.get("VCHTYPE") or ""),
+        date=_parse_tally_date(_get_text(el, "DATE")),
+        voucher_number=_opt("VOUCHERNUMBER"),
+        narration=_opt("NARRATION"),
+        reference=_opt("REFERENCE"),
+        party_ledger_name=_opt("PARTYLEDGERNAME"),
+        is_cancelled=_yesno(_get_text(el, "ISCANCELLED")),
+        is_optional=_yesno(_get_text(el, "ISOPTIONAL")),
+        is_deleted=_yesno(_get_text(el, "ISDELETED")),
+        entries=tuple(entries),
     )
 
 
@@ -521,6 +706,175 @@ class TallyClient:
         )
         body = await self._post_xml(xml)
         return self._parse_groups_list(body)
+
+    # ------------------------------------------------------------------
+    # get_company_info  (P3.7 Phase 7B — company identity capture)
+    # ------------------------------------------------------------------
+
+    async def get_company_info(self) -> CompanyInfo:
+        # Company collection Export. The company GUID is the durable external
+        # identity and the ONLY key the backend trusts for automatic ledger
+        # attachment. Name is captured separately and never used to infer the
+        # GUID.
+        xml = (
+            "<ENVELOPE>"
+            "<HEADER>"
+              "<VERSION>1</VERSION>"
+              "<TALLYREQUEST>Export</TALLYREQUEST>"
+              "<TYPE>Collection</TYPE>"
+              "<ID>TaxMindCompany</ID>"
+            "</HEADER>"
+            "<BODY><DESC>"
+              "<STATICVARIABLES>"
+                "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
+              "</STATICVARIABLES>"
+              "<TDL>"
+                "<TDLMESSAGE>"
+                  '<COLLECTION NAME="TaxMindCompany" ISMODIFY="No">'
+                    "<TYPE>Company</TYPE>"
+                    "<FETCH>Name,GUID</FETCH>"
+                  "</COLLECTION>"
+                "</TDLMESSAGE>"
+              "</TDL>"
+            "</DESC></BODY></ENVELOPE>"
+        )
+        body = await self._post_xml(xml)
+        return self._parse_company_info(body)
+
+    def _parse_company_info(self, xml_string: str) -> CompanyInfo:
+        try:
+            root = ET.fromstring(xml_string)
+        except ET.ParseError as exc:
+            raise TallyParseError(str(exc)) from exc
+
+        company = root.find(".//COMPANY")
+        if company is None:
+            raise TallyParseError("no <COMPANY> element in Tally response")
+        name = _strip_tally_ctrl(company.get("NAME", ""))
+        guid = _get_text(company, "GUID", "").strip() or None
+        return CompanyInfo(name=name, guid=guid)
+
+    # ------------------------------------------------------------------
+    # get_vouchers  (P3.1 — read-only historical export)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_get_vouchers_xml(from_date: str, to_date: str) -> str:
+        """Build a READ-ONLY, date-scoped Voucher COLLECTION export request.
+
+        Scoping uses a TDL date FILTER with the requested dates embedded as
+        literals — the only form empirically confirmed (P3.0 spike) to honour
+        the range in TallyPrime; ``@@SVFromDate`` does not resolve inside a
+        collection FILTER, so it cannot be used here. `from_date`/`to_date`
+        are Tally ``YYYYMMDD`` strings.
+
+        This is an Export request: it contains no ``<IMPORTDATA>``, no
+        ``<TALLYMESSAGE>``, and no ``ACTION`` attribute — by construction it
+        can never create, alter, or delete anything in Tally.
+        """
+        formula = (
+            f'$Date &gt;= $$Date:"{from_date}" '
+            f'AND $Date &lt;= $$Date:"{to_date}"'
+        )
+        return (
+            "<ENVELOPE><HEADER><VERSION>1</VERSION>"
+            "<TALLYREQUEST>Export Data</TALLYREQUEST><TYPE>Collection</TYPE>"
+            "<ID>TaxMindVouchers</ID></HEADER><BODY><DESC><STATICVARIABLES>"
+            "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
+            "</STATICVARIABLES><TDL><TDLMESSAGE>"
+            '<COLLECTION NAME="TaxMindVouchers" ISINITIALIZE="Yes">'
+            "<TYPE>Voucher</TYPE>"
+            "<FETCH>Date,VoucherTypeName,VoucherNumber,Reference,Narration,"
+            "PartyLedgerName,Amount,GUID,RemoteId,MasterId,AlterId,VoucherKey,"
+            "IsCancelled,IsOptional,IsDeleted,AllLedgerEntries</FETCH>"
+            "<FILTER>TaxMindDateFilter</FILTER></COLLECTION>"
+            '<SYSTEM TYPE="Formula" NAME="TaxMindDateFilter">'
+            f"{formula}</SYSTEM>"
+            "</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>"
+        )
+
+    async def get_vouchers(
+        self, from_date: str, to_date: str
+    ) -> list[VoucherExportRow]:
+        """Export vouchers dated within ``[from_date, to_date]`` (YYYYMMDD).
+
+        READ-ONLY. Streams the HTTP response and parses one ``<VOUCHER>``
+        block at a time (`_VoucherBlockScanner`), so a large date window is
+        never fully materialised in memory. Returns the parsed rows in the
+        order Tally emits them. The caller paginates by choosing the window.
+
+        Raises:
+            TallyUnreachable: transport failure reaching Tally.
+            TallyResponseError: Tally returned a non-200 status.
+            TallyParseError: a voucher block is malformed after sanitisation.
+        """
+        xml = self._build_get_vouchers_xml(from_date, to_date)
+        scanner = _VoucherBlockScanner()
+        rows: list[VoucherExportRow] = []
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client, (
+                client.stream(
+                    "POST",
+                    self.base_url,
+                    content=xml,
+                    headers=self.headers,
+                )
+            ) as response:
+                if response.status_code != 200:
+                    body = await response.aread()
+                    raise TallyResponseError(
+                        response.status_code,
+                        body.decode("utf-8", errors="replace"),
+                    )
+                async for chunk in response.aiter_text():
+                    for block in scanner.feed(chunk):
+                        rows.append(_parse_voucher_block(block))
+        except httpx.HTTPError as exc:
+            raise TallyUnreachable(str(exc)) from exc
+        return rows
+
+    @staticmethod
+    def enrich_ledger_guids(
+        rows: list[VoucherExportRow], ledgers: list[LedgerMaster]
+    ) -> list[VoucherExportRow]:
+        """Attach each entry's ledger GUID from the ledger master list.
+
+        The voucher export XML carries only `LEDGERNAME` per line; the
+        ledger's native GUID is available from `get_all_ledgers` (the
+        verified `<GUID>` field, surfaced as `LedgerMaster.master_id`).
+        This join is exact on normalized name and only fills a GUID when
+        exactly one ledger matches — an ambiguous or absent name leaves
+        `ledger_guid` None so the downstream reconciler flags manual
+        review rather than guessing. No fuzzy matching.
+        """
+        guid_by_name: dict[str, str] = {}
+        ambiguous: set[str] = set()
+        for led in ledgers:
+            key = led.name.strip().lower()
+            if not key:
+                continue
+            if led.master_id is None:
+                continue
+            if key in guid_by_name:
+                ambiguous.add(key)
+                continue
+            guid_by_name[key] = led.master_id
+        for key in ambiguous:
+            guid_by_name.pop(key, None)
+
+        enriched: list[VoucherExportRow] = []
+        for row in rows:
+            new_entries = tuple(
+                replace(
+                    entry,
+                    ledger_guid=guid_by_name.get(
+                        entry.ledger_name.strip().lower()
+                    ),
+                )
+                for entry in row.entries
+            )
+            enriched.append(replace(row, entries=new_entries))
+        return enriched
 
     # ------------------------------------------------------------------
     # post_voucher

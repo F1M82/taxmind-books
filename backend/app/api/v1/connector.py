@@ -27,6 +27,9 @@ from app.core.security import CONNECTOR_TOKEN_DEFAULT_EXPIRE_DAYS
 from app.models.company import Company, CompanyRole
 from app.models.user import User
 from app.schemas.connector import (
+    CompanyMappingConfirmRequest,
+    CompanyMappingConfirmResponse,
+    CompanyMappingStatusOut,
     ConnectorStatusOut,
     EnrollmentCodeOut,
     EnrollRequest,
@@ -47,6 +50,10 @@ from app.services.ledger_service import LedgerService
 # registry, dispatcher, external clients. See CONNECTOR_PROTOCOL.md
 # §"Patchable singletons".
 from app.services.tally import connector_registry as _connector_registry_mod
+from app.services.tally.company_mapping import (
+    confirm_company_mapping,
+    require_safe_company_mapping,
+)
 
 logger = logging.getLogger("app.api.v1.connector")
 
@@ -193,6 +200,7 @@ async def trigger_sync(
             if status_str != "success":
                 return
             payload = result.get("result") or {}
+            company_info = payload.get("company") or {}
             ledgers_in = payload.get("ledgers") or []
             groups_in = payload.get("groups") or []
             try:
@@ -202,6 +210,8 @@ async def trigger_sync(
                     request_id=task_id,
                     ledgers=ledgers_in,
                     groups=groups_in,
+                    tally_company_guid=company_info.get("guid"),
+                    tally_company_name=company_info.get("name"),
                 )
                 logger.info(
                     "sync_masters %s persisted for %s: "
@@ -246,6 +256,65 @@ async def trigger_sync(
 
 
 # ---------------------------------------------------------------------
+# Company Tally mapping (P3.7 Phase 7B)
+# ---------------------------------------------------------------------
+
+
+@router.get("/company-mapping", response_model=CompanyMappingStatusOut)
+def company_mapping_status(
+    company: Company = Depends(get_active_company),
+    user: User = Depends(get_current_user),
+) -> CompanyMappingStatusOut:
+    """Read-only status of the active company's Tally company binding.
+
+    Makes the unresolved state explicit: ``mapped=False`` + NULL
+    ``tally_master_id`` means no identity proof exists yet, so the ledger
+    persistence gate remains closed.
+    """
+    return CompanyMappingStatusOut(
+        company_id=company.id,
+        tally_master_id=company.tally_master_id,
+        mapped=company.tally_master_id is not None,
+    )
+
+
+@router.post(
+    "/company-mapping/confirm",
+    response_model=CompanyMappingConfirmResponse,
+)
+def company_mapping_confirm(
+    body: CompanyMappingConfirmRequest,
+    request: Request,
+    company: Company = Depends(require_role(CompanyRole.owner)),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CompanyMappingConfirmResponse:
+    """Operator confirmation: bind the active company to a Tally company GUID.
+
+    The operator explicitly selects the company (via X-Company-ID) AND
+    supplies the Tally company GUID (from connector `company_info`); the GUID
+    is never inferred from the name and never auto-selected. Confirmation is
+    auditable (`company.tally_mapping_configured`). Conflicting GUID/name
+    bindings raise 409 and leave the database unchanged.
+    """
+    audit = _user_audit_emitter(request, db, user, company=company)
+    confirmed = confirm_company_mapping(
+        db,
+        company_id=company.id,
+        tally_company_guid=body.tally_company_guid,
+        tally_company_name=body.tally_company_name,
+        audit=audit,
+    )
+    db.commit()
+    db.refresh(confirmed)
+    return CompanyMappingConfirmResponse(
+        company_id=confirmed.id,
+        tally_master_id=confirmed.tally_master_id or "",
+        tally_company_name=body.tally_company_name,
+    )
+
+
+# ---------------------------------------------------------------------
 # sync_masters payload persistence (P0.46b)
 # ---------------------------------------------------------------------
 
@@ -257,6 +326,8 @@ def persist_sync_masters_payload(
     request_id: UUID,
     ledgers: list[dict[str, Any]],
     groups: list[dict[str, Any]],
+    tally_company_guid: str | None = None,
+    tally_company_name: str | None = None,
 ) -> dict[str, int]:
     """Persist a successful `sync_masters` reply for `company_id`.
 
@@ -264,10 +335,19 @@ def persist_sync_masters_payload(
     by the time the background task fires) and commits atomically.
     Loads the actor `Company` and `User` so the AuditEmitter writes
     rows with the correct tenant + actor attribution.
+
+    Phase 7B fail-closed gate: the reply must carry the Tally company
+    GUID and it must deterministically match ``company.tally_master_id``.
+    If the company is unmapped or mapped to a *different* GUID, this
+    raises ``CompanyMappingError`` before any ledger is written — no
+    identity proof, no persistence.
     """
     db = SessionLocal()
     try:
         company = db.query(Company).filter(Company.id == company_id).first()
+        require_safe_company_mapping(
+            db, company_id=company_id, tally_company_guid=tally_company_guid
+        )
         user = (
             db.query(User).filter(User.id == user_id).first()
             if user_id is not None

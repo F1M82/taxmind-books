@@ -64,8 +64,8 @@ def _to_out(v) -> VoucherOut:  # type: ignore[no-untyped-def]
         id=v.id,
         company_id=v.company_id,
         voucher_type=v.voucher_type.value
-        if hasattr(v.voucher_type, "value")
-        else str(v.voucher_type),
+        if v.voucher_type is not None
+        else None,
         voucher_number=v.voucher_number,
         date=v.date,
         narration=v.narration,
@@ -208,8 +208,8 @@ def list_vouchers(
             VoucherListItem(
                 id=v.id,
                 voucher_type=v.voucher_type.value
-                if hasattr(v.voucher_type, "value")
-                else str(v.voucher_type),
+                if v.voucher_type is not None
+                else None,
                 voucher_number=v.voucher_number,
                 date=v.date,
                 narration=v.narration,

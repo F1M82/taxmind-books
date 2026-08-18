@@ -1,8 +1,9 @@
 """Dispatch backend `command` messages to the local TallyClient.
 
 Each backend command (`ping`, `sync_masters`, `post_voucher`,
-`get_trial_balance`, `get_outstanding`, `approve_optional_voucher`,
-`reject_optional_voucher`) maps to one handler that reads
+`get_trial_balance`, `get_outstanding`, `export_vouchers`,
+`approve_optional_voucher`, `reject_optional_voucher`) maps to one
+handler that reads
 `payload.args`, calls the appropriate `TallyClient` method, and
 returns a `result` dict for inclusion in the `command_result`
 reply envelope.
@@ -29,6 +30,7 @@ from connector.tally_client import (
     LedgerEntryInput,
     TallyClient,
     TallyError,
+    VoucherExportRow,
     VoucherInput,
 )
 
@@ -74,10 +76,17 @@ async def _handle_ping(
 async def _handle_sync_masters(
     tally: TallyClient, args: dict[str, Any]
 ) -> dict[str, Any]:
-    """Pull all ledgers + groups. Phase-0: full pull, no `since` delta."""
+    """Pull all ledgers + groups + the Tally company identity.
+
+    The company identity (name + GUID) is captured alongside the masters so
+    the backend's persistence gate can prove the ledgers belong to the mapped
+    Tally company (Phase 7B). Phase-0: full pull, no `since` delta.
+    """
     ledgers = await tally.get_all_ledgers()
     groups = await tally.get_all_groups()
+    company = await tally.get_company_info()
     return {
+        "company": {"name": company.name, "guid": company.guid},
         "ledgers": [
             {
                 "name": led.name,
@@ -91,6 +100,18 @@ async def _handle_sync_masters(
             {"name": g.name, "parent": g.parent} for g in groups
         ],
     }
+
+
+async def _handle_company_info(
+    tally: TallyClient, args: dict[str, Any]
+) -> dict[str, Any]:
+    """READ-ONLY Tally company identity discovery (Phase 7B).
+
+    Returns the current Tally company's display name and durable GUID as
+    separate fields — the GUID is never inferred from the name.
+    """
+    company = await tally.get_company_info()
+    return {"name": company.name, "guid": company.guid}
 
 
 async def _handle_post_voucher(
@@ -157,12 +178,83 @@ async def _handle_reject_optional_voucher(
     return await tally.reject_optional_voucher(guid)
 
 
+def _is_yyyymmdd(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 8 and value.isdigit()
+
+
+def _export_row_to_dict(r: VoucherExportRow) -> dict[str, Any]:
+    """Serialise a VoucherExportRow for the command_result envelope."""
+    return {
+        "tally_guid": r.tally_guid,
+        "remote_id": r.remote_id,
+        "vchkey": r.vchkey,
+        "master_id": r.master_id,
+        "alter_id": r.alter_id,
+        "voucher_key": r.voucher_key,
+        "voucher_type": r.voucher_type,
+        "date": r.date.isoformat(),
+        "voucher_number": r.voucher_number,
+        "narration": r.narration,
+        "reference": r.reference,
+        "party_ledger_name": r.party_ledger_name,
+        "is_cancelled": r.is_cancelled,
+        "is_optional": r.is_optional,
+        "is_deleted": r.is_deleted,
+        "entries": [
+            {
+                "ledger_name": e.ledger_name,
+                "ledger_guid": e.ledger_guid,
+                "amount": str(e.amount),
+                "entry_type": e.entry_type,
+            }
+            for e in r.entries
+        ],
+    }
+
+
+async def _handle_export_vouchers(
+    tally: TallyClient, args: dict[str, Any]
+) -> dict[str, Any]:
+    """READ-ONLY historical voucher export (P3.1).
+
+    Args: ``from_date`` / ``to_date`` as Tally ``YYYYMMDD`` strings. Delegates
+    to `TallyClient.get_vouchers`, which issues only an Export request — this
+    command can never write to, alter, or delete anything in Tally. It is
+    deliberately absent from `MUTATING_COMMANDS`, so it bypasses the
+    idempotency cache: re-running is side-effect-free and returns fresh data.
+    """
+    from_date = args.get("from_date")
+    to_date = args.get("to_date")
+    if not _is_yyyymmdd(from_date):
+        raise ValueError(
+            "export_vouchers.args.from_date must be a YYYYMMDD string"
+        )
+    if not _is_yyyymmdd(to_date):
+        raise ValueError(
+            "export_vouchers.args.to_date must be a YYYYMMDD string"
+        )
+    rows = await tally.get_vouchers(from_date, to_date)  # type: ignore[arg-type]
+    # Enrich each ledger line with the ledger's native GUID (P3.7 Phase 6A):
+    # the voucher XML carries only LEDGERNAME; the GUID comes from the ledger
+    # master list (verified <GUID> field) via an exact-name join.
+    ledgers = await tally.get_all_ledgers()
+    rows = tally.enrich_ledger_guids(rows, ledgers)
+    return {
+        "from_date": from_date,
+        "to_date": to_date,
+        "count": len(rows),
+        "vouchers": [_export_row_to_dict(r) for r in rows],
+    }
+
+
 HANDLERS: dict[str, HandlerFn] = {
     "ping": _handle_ping,
     "sync_masters": _handle_sync_masters,
+    "company_info": _handle_company_info,
     "post_voucher": _handle_post_voucher,
     "get_trial_balance": _handle_get_trial_balance,
     "get_outstanding": _handle_get_outstanding,
+    "export_vouchers": _handle_export_vouchers,
     "approve_optional_voucher": _handle_approve_optional_voucher,
     "reject_optional_voucher": _handle_reject_optional_voucher,
 }

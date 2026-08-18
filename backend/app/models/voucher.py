@@ -111,8 +111,19 @@ class Voucher(Base, TenantScopedMixin):
 
     id: Mapped[UUID] = uuid_pk()
 
-    voucher_type: Mapped[VoucherType] = mapped_column(
-        voucher_type_enum, nullable=False
+    # P3.7 Phase 6A: nullable so a Tally VOUCHERTYPENAME with no TaxMind
+    # accounting equivalent is preserved rather than coerced. NULL means
+    # "unknown/unmapped Tally type" — the raw name lives in
+    # `tally_voucher_type`. TaxMind-created vouchers still require a known
+    # VoucherType (enforced at the API/schema layer).
+    voucher_type: Mapped[VoucherType | None] = mapped_column(
+        voucher_type_enum, nullable=True
+    )
+    # Exact raw Tally VOUCHERTYPENAME, always preserved verbatim. For a
+    # known type this mirrors the enum; for an unknown type it is the ONLY
+    # record of what Tally reported. Never coerced into a known enum value.
+    tally_voucher_type: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
     )
     voucher_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -165,6 +176,10 @@ class Voucher(Base, TenantScopedMixin):
     tally_posted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # NOTE ON IDENTITY (P3.7): `tally_voucher_guid` is the TaxMind-issued
+    # REMOTEID / dispatch identity echoed back by Tally when we POST a
+    # voucher. It is NOT the same thing as `tally_guid` below. Keep the
+    # two distinct — `tally_voucher_guid` semantics are unchanged.
     tally_voucher_guid: Mapped[str | None] = mapped_column(
         String(100), nullable=True
     )
@@ -174,6 +189,40 @@ class Voucher(Base, TenantScopedMixin):
     tally_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     tally_post_queued_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # P3.7 Tally native identity. `tally_guid` carries Tally's own GUID
+    # and is the durable identity for imported Tally vouchers (confirmed
+    # necessary because Tally reuses (voucher_type, voucher_number)
+    # across financial years). `tally_master_id`, `tally_vchkey`,
+    # `tally_alter_id` are change/version metadata only — NOT identity.
+    # NULL until a future import/backfill populates them. Do not confuse
+    # with `tally_voucher_guid` (REMOTEID/dispatch identity above).
+    tally_guid: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    tally_master_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    tally_vchkey: Mapped[str | None] = mapped_column(
+        String(150), nullable=True
+    )
+    tally_alter_id: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+
+    # P3.7 Phase 6A: Tally source-of-truth state, preserved verbatim.
+    # NULL means the source did not supply the flag. These MUST NOT mutate
+    # TaxMind `status` (in particular ISDELETED=Yes is NOT `cancelled`),
+    # and are independent of `is_optional_in_tally` (TaxMind-mutable).
+    tally_is_cancelled: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+    tally_is_deleted: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+    tally_is_optional: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
     )
 
     # v1.2: Optional voucher flow
@@ -224,16 +273,18 @@ class Voucher(Base, TenantScopedMixin):
     )
 
     __table_args__ = (
-        # DEFERRABLE so a multi-statement insert can update voucher_number
-        # after row creation in the same transaction without tripping the
-        # uniqueness check mid-flight.
-        UniqueConstraint(
+        # P3.7: (company_id, voucher_type, voucher_number) is NOT a valid
+        # durability key — Tally reuses (type, number) across financial
+        # years (verified live). Durable identity for imported Tally
+        # vouchers is (company_id, tally_guid), enforced by a PARTIAL
+        # unique index so manual vouchers (tally_guid IS NULL) can share
+        # any voucher_number freely (duplicates are display-legal).
+        Index(
+            "uq_vouchers_company_tally_guid",
             "company_id",
-            "voucher_type",
-            "voucher_number",
-            name="uq_vouchers_company_number_type",
-            deferrable=True,
-            initially="DEFERRED",
+            "tally_guid",
+            unique=True,
+            postgresql_where="tally_guid IS NOT NULL",
         ),
         CheckConstraint(
             "total_amount >= 0",
@@ -299,8 +350,11 @@ class Voucher(Base, TenantScopedMixin):
     )
 
     def __repr__(self) -> str:
+        type_label = (
+            self.voucher_type.value if self.voucher_type is not None else None
+        )
         return (
-            f"<Voucher id={self.id} type={self.voucher_type.value} "
+            f"<Voucher id={self.id} type={type_label} "
             f"number={self.voucher_number!r} date={self.date}>"
         )
 

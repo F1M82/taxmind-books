@@ -99,6 +99,10 @@ endpoints:
     methods: [GET]
   - path: /api/v1/connector/sync/{company_id}
     methods: [POST]
+  - path: /api/v1/connector/company-mapping
+    methods: [GET]
+  - path: /api/v1/connector/company-mapping/confirm
+    methods: [POST]
 
   # ---- Liveness / placeholder ----
   - path: /

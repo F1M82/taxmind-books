@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from app.models.base import TenantScopedMixin
 from app.models.voucher import (
     EntryType,
@@ -68,6 +70,14 @@ def test_voucher_columns_match_schema() -> None:
         "optional_rejection_reason",
         "optional_rejected_at",
         "optional_rejected_by",
+        "tally_guid",
+        "tally_master_id",
+        "tally_vchkey",
+        "tally_alter_id",
+        "tally_voucher_type",
+        "tally_is_cancelled",
+        "tally_is_deleted",
+        "tally_is_optional",
         "created_by",
         "approved_by",
         "approved_at",
@@ -139,14 +149,36 @@ def test_voucher_boolean_flags() -> None:
         assert col.nullable is False
 
 
-def test_voucher_unique_constraint_is_deferrable() -> None:
-    [uc] = [
-        c
-        for c in Voucher.__table__.constraints
-        if c.name == "uq_vouchers_company_number_type"
-    ]
-    assert uc.deferrable is True
-    assert uc.initially == "DEFERRED"
+def test_voucher_tally_identity_columns_are_optional_strings() -> None:
+    for name, length in (
+        ("tally_guid", 100),
+        ("tally_master_id", 100),
+        ("tally_vchkey", 150),
+        ("tally_alter_id", 20),
+    ):
+        col = Voucher.__table__.columns[name]
+        assert isinstance(col.type, String)
+        assert col.type.length == length
+        assert col.nullable is True
+
+
+def test_voucher_new_unique_index_is_partial_over_tally_guid() -> None:
+    names = {ix.name for ix in Voucher.__table__.indexes}
+    assert "uq_vouchers_company_tally_guid" in names
+    ix = next(
+        ix
+        for ix in Voucher.__table__.indexes
+        if ix.name == "uq_vouchers_company_tally_guid"
+    )
+    assert ix.unique is True
+    assert [c.name for c in ix.columns] == ["company_id", "tally_guid"]
+    where = ix.dialect_options["postgresql"].get("where")
+    assert str(where) == "tally_guid IS NOT NULL"
+
+
+def test_voucher_old_number_constraint_is_gone() -> None:
+    names = {c.name for c in Voucher.__table__.constraints if c.name is not None}
+    assert "uq_vouchers_company_number_type" not in names
 
 
 def test_voucher_check_constraints_present() -> None:
@@ -170,6 +202,7 @@ def test_voucher_indexes_match_schema() -> None:
         "idx_vouchers_source_ingestion",
         "idx_vouchers_unposted_to_tally",
         "idx_vouchers_optional_pending",
+        "uq_vouchers_company_tally_guid",
     }.issubset(names)
 
 
@@ -184,6 +217,37 @@ def test_voucher_type_enum_values() -> None:
         "Debit Note",
         "Credit Note",
     }
+
+
+def test_voucher_type_nullable_for_unknown_tally_type() -> None:
+    col = Voucher.__table__.columns["voucher_type"]
+    assert col.nullable is True
+
+
+def test_tally_voucher_type_column_present() -> None:
+    col = Voucher.__table__.columns["tally_voucher_type"]
+    assert isinstance(col.type, String)
+    assert col.nullable is True
+
+
+def test_tally_origin_flag_columns_nullable() -> None:
+    for name in ("tally_is_cancelled", "tally_is_deleted", "tally_is_optional"):
+        col = Voucher.__table__.columns[name]
+        assert isinstance(col.type, Boolean)
+        assert col.nullable is True
+
+
+def test_null_voucher_type_repr_safe() -> None:
+    v = Voucher(voucher_type=None, date=date(2026, 9, 12), total_amount=0)
+    assert repr(v)  # must not raise
+
+
+def test_null_voucher_type_snapshot_safe() -> None:
+    from app.services.voucher_service import _voucher_snapshot
+
+    v = Voucher(voucher_type=None, date=date(2026, 9, 12), total_amount=0)
+    snap = _voucher_snapshot(v)
+    assert snap["voucher_type"] is None
 
 
 def test_voucher_status_enum_values() -> None:

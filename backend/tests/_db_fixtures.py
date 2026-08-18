@@ -180,9 +180,11 @@ def make_company(
     *,
     name: str | None = None,
     status: str = "active",
+    tally_master_id: str | None = None,
 ) -> Company:
     company = Company(
         name=name or f"Co-{uuid4().hex[:6]}",
+        tally_master_id=tally_master_id,
     )
     db.add(company)
     db.commit()

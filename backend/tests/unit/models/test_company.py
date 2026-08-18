@@ -31,6 +31,7 @@ def test_company_has_expected_columns() -> None:
         "city",
         "state_code",
         "pincode",
+        "tally_master_id",
         "created_by",
         "created_at",
         "updated_at",
@@ -67,6 +68,7 @@ def test_company_constraints_match_schema() -> None:
     names = {c.name for c in Company.__table__.constraints if c.name is not None}
     expected = {
         "uq_companies_gstin",
+        "uq_companies_tally_master_id",
         "ck_companies_gstin_format",
         "ck_companies_pan_format",
         "ck_companies_pincode_format",
@@ -79,7 +81,18 @@ def test_company_constraints_match_schema() -> None:
 
 def test_company_indexes() -> None:
     names = {ix.name for ix in Company.__table__.indexes}
-    assert {"idx_companies_status", "idx_companies_gstin"}.issubset(names)
+    assert {
+        "idx_companies_status",
+        "idx_companies_gstin",
+        "idx_companies_tally_master_id",
+    }.issubset(names)
+
+
+def test_company_tally_master_id_nullable_string() -> None:
+    col = Company.__table__.columns["tally_master_id"]
+    assert isinstance(col.type, String)
+    assert col.type.length == 100
+    assert col.nullable is True
 
 
 def test_company_status_enum_values() -> None:

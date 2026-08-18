@@ -86,6 +86,12 @@ class Company(Base):
     city: Mapped[str | None] = mapped_column(String(100), nullable=True)
     state_code: Mapped[str | None] = mapped_column(String(2), nullable=True)
     pincode: Mapped[str | None] = mapped_column(String(6), nullable=True)
+    # Tally company GUID (Phase 7B). Durable external identity for the Tally
+    # company this local company is bound to. Nullable for legacy/manual
+    # companies that predate Tally identity capture; never fabricated. It is
+    # the *only* key the ledger persistence gate trusts for automatic
+    # attachment — name equality alone is never sufficient.
+    tally_master_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_by: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -104,6 +110,13 @@ class Company(Base):
 
     __table_args__ = (
         UniqueConstraint("gstin", name="uq_companies_gstin"),
+        # A Tally company GUID is globally unique (one GUID per Tally data
+        # file). Two local companies must never map to the same Tally company
+        # — cross-company identity collision is a data-integrity violation.
+        # NULLs stay distinct (legacy companies may share NULL).
+        UniqueConstraint(
+            "tally_master_id", name="uq_companies_tally_master_id"
+        ),
         CheckConstraint(
             r"gstin IS NULL OR gstin ~ "
             r"'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$'",
@@ -140,6 +153,11 @@ class Company(Base):
             "idx_companies_gstin",
             "gstin",
             postgresql_where="gstin IS NOT NULL",
+        ),
+        Index(
+            "idx_companies_tally_master_id",
+            "tally_master_id",
+            postgresql_where="tally_master_id IS NOT NULL",
         ),
     )
 

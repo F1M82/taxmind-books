@@ -56,3 +56,30 @@ class SyncTriggerResponse(TaxMindBooksBase):
     task_id: UUID
     status: str
     estimated_duration_seconds: int
+
+
+class CompanyMappingConfirmRequest(TaxMindBooksBase):
+    """Operator confirmation of the active company's Tally company GUID.
+
+    The GUID is supplied explicitly by the operator (never inferred from the
+    name); the company is the active `X-Company-ID` company.
+    """
+
+    tally_company_guid: str
+    tally_company_name: str | None = None
+
+
+class CompanyMappingConfirmResponse(TaxMindBooksBase):
+    """Result of a confirmed company ↔ Tally GUID binding."""
+
+    company_id: UUID
+    tally_master_id: str
+    tally_company_name: str | None = None
+
+
+class CompanyMappingStatusOut(TaxMindBooksBase):
+    """Read-only status of the active company's Tally mapping."""
+
+    company_id: UUID
+    tally_master_id: str | None = None
+    mapped: bool

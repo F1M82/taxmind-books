@@ -147,6 +147,7 @@ Sent immediately after WebSocket open. Identifies the connector and reports the 
     "tally_running": true,
     "tally_version": "3.0",
     "tally_company_open": "Acme Traders",
+    "tally_data_folder_path": "C:\\Users\\Public\\TallyPrime\\Data",
     "host": {
       "os": "Windows 11",
       "hostname": "DESKTOP-ABC123",
@@ -156,6 +157,8 @@ Sent immediately after WebSocket open. Identifies the connector and reports the 
   }
 }
 ```
+
+The `tally_data_folder_path` (v1.3) is the connector's configured Tally data root. Backend stores this alongside the connector enrollment so the mobile UI knows which folder the connector reads.
 
 The backend responds with a `register_ack` (see below). If the registration is rejected (token problem, etc.), the backend sends an `error` and closes the WS with the appropriate close code.
 
@@ -418,6 +421,7 @@ Post a voucher to Tally.
   "narration": "Payment received from Sharma Traders",
   "reference": "UTR1234567",
   "as_optional": false,
+  "target_tally_company_identifier": "10000",
   "entries": [
     {
       "ledger_name": "Bank Account",
@@ -437,6 +441,8 @@ Post a voucher to Tally.
 
 **v1.2:** the `as_optional` field controls whether the connector marks the voucher as Optional in TallyPrime (translates to `<ISOPTIONAL>Yes</ISOPTIONAL>` in the XML envelope). Optional vouchers exist in Tally but do not affect financial statements until promoted to Regular via `approve_optional_voucher`. Manual mobile entries set `as_optional=false`; AI-extracted entries set `as_optional=true`.
 
+**v1.3:** the `target_tally_company_identifier` field is required. Before posting, the connector calls `get_active_tally_company` internally and verifies the active Tally company matches the target. On mismatch, the connector does NOT attempt the post; it returns `wrong_company_open` (retryable). The backend then keeps the voucher in `pending_tally_post` status until the right Tally company is opened by the user.
+
 **result:**
 ```json
 {
@@ -454,6 +460,7 @@ The post is idempotent on `idempotency_key`. If the connector's local cache show
 - `tally_unreachable` — Tally HTTP server not responding (retryable)
 - `tally_validation_failed` — Tally rejected the XML (not retryable; see `error.details.tally_response`)
 - `tally_company_mismatch` — the open company in Tally doesn't match `expected_tally_company` (retryable after user fixes)
+- `wrong_company_open` — (v1.3) the active Tally company doesn't match `target_tally_company_identifier`; backend queues the voucher and retries on `tally_company_changed` event
 - `ledger_not_found` — a ledger named in the entries doesn't exist in Tally (retryable after sync_masters)
 - `voucher_number_collision` — explicit voucher_number conflicts in Tally (not retryable)
 - `tally_timeout` — Tally took longer than `timeout_seconds` (retryable)
@@ -532,6 +539,122 @@ The connector sends an XML deletion request for the voucher. Tally removes it; n
 - `tally_voucher_not_found` — already gone (idempotent: returns success with `deleted=true`)
 - `voucher_not_optional` — the voucher has been promoted to Regular and cannot be silently deleted; admin must use `cancel_voucher` instead
 - `tally_unreachable` (retryable)
+
+
+### `list_tally_companies` (v1.3)
+
+Read the connector's configured `tally_data_folder_path` and enumerate all companies present. Used during initial setup and on demand from the mobile UI.
+
+**args:**
+```json
+{}
+```
+
+**result:**
+```json
+{
+  "tally_data_folder_path": "C:\\Users\\Public\\TallyPrime\\Data",
+  "companies": [
+    {
+      "tally_company_identifier": "10000",
+      "tally_company_name": "Acme Traders",
+      "gstin": "27AAAAA0000A1Z5",
+      "financial_year_start": "2026-04-01"
+    },
+    {
+      "tally_company_identifier": "10001",
+      "tally_company_name": "Beta Industries",
+      "gstin": null,
+      "financial_year_start": "2026-04-01"
+    }
+  ],
+  "scanned_at": "2026-05-14T12:00:00Z"
+}
+```
+
+The connector enumerates subdirectories under `tally_data_folder_path`. Each directory is a Tally company; the directory name is `tally_company_identifier`. The company display name and metadata are parsed from Tally's `manager.500` or equivalent metadata files inside the directory.
+
+If the data folder is unreadable (wrong path, permission denied), the connector returns:
+
+```json
+{
+  "command": "list_tally_companies",
+  "status": "error",
+  "error": {
+    "code": "data_folder_unreadable",
+    "message": "Path '<x>' does not exist or is not a directory.",
+    "details": {"path": "<x>"}
+  }
+}
+```
+
+The backend caches the result in `tally_companies_discovered`. Re-running this command refreshes the cache.
+
+### `get_active_tally_company` (v1.3)
+
+Query Tally's HTTP/XML API for the currently-open company. Used by `post_voucher` internally before posting; also exposed for the mobile "active company" indicator.
+
+**args:**
+```json
+{}
+```
+
+**result:**
+```json
+{
+  "tally_running": true,
+  "active_company_identifier": "10000",
+  "active_company_name": "Acme Traders"
+}
+```
+
+If Tally is running but no company is open:
+
+```json
+{
+  "tally_running": true,
+  "active_company_identifier": null,
+  "active_company_name": null
+}
+```
+
+If Tally is not running:
+
+```json
+{
+  "tally_running": false,
+  "active_company_identifier": null,
+  "active_company_name": null
+}
+```
+
+### `tally_company_changed` event (v1.3, connector → backend)
+
+Connector emits this event proactively whenever it detects the active Tally company has switched. The detection mechanism: the connector polls `get_active_tally_company` every 10 seconds (lightweight; reads Tally's `<TDLMESSAGE>` envelope). On change, emit:
+
+```json
+{
+  "type": "tally_company_changed",
+  "request_id": "...",
+  "ts": "...",
+  "payload": {
+    "previous_company_identifier": "10000",
+    "previous_company_name": "Acme Traders",
+    "new_company_identifier": "10001",
+    "new_company_name": "Beta Industries"
+  }
+}
+```
+
+The backend reacts:
+1. Acknowledges the event.
+2. Queries `vouchers` for `status='pending_tally_post' AND companies.tally_company_identifier = <new_company_identifier>`.
+3. Triggers the posting task for each matching voucher (in date order).
+4. Writes audit row `voucher.tally_post_queued` → cleared, replaced by `voucher.posted_to_tally` (or `tally_post_failed`).
+
+This is the mechanism by which queued vouchers automatically post when the user switches Tally to the right company. No manual "retry" button is needed in the common case.
+
+If the connector observes Tally being closed (active_company → null with tally_running=false), no `tally_company_changed` is fired. The state simply reverts to "no company active" and queued vouchers stay queued.
 
 ### `get_outstanding`
 
@@ -724,50 +847,6 @@ If the connector has never connected, the status returns `connected: false` and 
 - **Storing customer data on the connector beyond the local queue.** Voucher data passes through; it is not retained after successful post (queue row deleted).
 - **Connector executing commands without verifying `company_id`.** Defense in depth.
 - **Re-using `request_id` across reconnects.** Each WS lifetime starts fresh.
-
-## Patchable singletons
-
-The connector subsystem leans on a few process-wide singletons —
-`connector_registry.get_registry()`, the voucher dispatcher, and
-(future) external clients like the FCM/APNs senders. Tests routinely
-monkeypatch these to inject fakes and assert behaviour without a real
-WebSocket or HTTP round-trip.
-
-For the patches to actually take effect, the consuming module must
-look the symbol up **lazily**, via the parent module, every call:
-
-```python
-# DO — the patch on connector_registry.get_registry is observed
-from app.services.tally import connector_registry as _connector_registry_mod
-...
-registry = _connector_registry_mod.get_registry()
-
-# DON'T — the patch is invisible to this module after import
-from app.services.tally.connector_registry import get_registry
-...
-registry = get_registry()
-```
-
-The second form binds `get_registry` to the importing module's
-namespace at import time; a later `monkeypatch.setattr(
-connector_registry, "get_registry", fake)` only updates the original
-module's attribute, not the bound name. Tests that look correct then
-silently exercise the real singleton.
-
-**The rule:** anything that's monkey-patched in tests — registry,
-dispatcher, external client factories, time / clock providers —
-imports the module, not the symbol. Exception classes and pure type
-aliases are exempt because tests rely on class identity for `except`
-and types aren't patched.
-
-Audited sites that follow the rule today:
-`app/services/dashboard_service.py`,
-`app/api/v1/connector.py`,
-`app/api/v1/connector_ws.py`,
-`app/services/tally/voucher_dispatcher.py`,
-`app/workers/posting_tasks.py`,
-`app/services/voucher_service.py` (already used function-local
-imports for the same reason).
 
 ## Test cases the human runs during validation
 

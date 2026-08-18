@@ -25,7 +25,11 @@ from connector.idempotency_cache import (
     hash_request_payload,
 )
 from connector.message_handlers import dispatch_command
-from connector.tally_client import TallyImportRejected, TallyUnreachable
+from connector.tally_client import (
+    CompanyInfo,
+    TallyImportRejected,
+    TallyUnreachable,
+)
 
 COMPANY = "11111111-1111-1111-1111-111111111111"
 
@@ -82,6 +86,9 @@ class _FakeTally:
 
     async def get_all_groups(self) -> list[Any]:
         return []
+
+    async def get_company_info(self) -> CompanyInfo:
+        return CompanyInfo(name="ACME", guid="c30a0ee5-0000-0000-0000-000000000000")
 
 
 @pytest.fixture

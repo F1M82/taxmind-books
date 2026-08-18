@@ -98,7 +98,7 @@ class VoucherRejectOptionalOut(TaxMindBooksBase):
 
 class VoucherListItem(TaxMindBooksBase):
     id: UUID
-    voucher_type: str
+    voucher_type: str | None = None
     voucher_number: str | None = None
     date: date
     narration: str | None = None
@@ -139,7 +139,7 @@ class VoucherEntryOut(TaxMindBooksBase):
 class VoucherOut(TaxMindBooksBase):
     id: UUID
     company_id: UUID
-    voucher_type: str
+    voucher_type: str | None = None
     voucher_number: str | None = None
     date: date
     narration: str | None = None

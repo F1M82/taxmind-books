@@ -14,6 +14,7 @@ from connector.message_handlers import (
     dispatch_command,
 )
 from connector.tally_client import (
+    CompanyInfo,
     GroupMaster,
     LedgerMaster,
     OutstandingItem,
@@ -36,6 +37,9 @@ def fake_tally() -> TallyClient:
     )
     c.get_all_groups = AsyncMock(  # type: ignore[method-assign]
         return_value=[GroupMaster(name="G1", parent="P1")]
+    )
+    c.get_company_info = AsyncMock(  # type: ignore[method-assign]
+        return_value=CompanyInfo(name="ACME", guid="c30a0ee5-0000-0000-0000-000000000000")
     )
     c.get_trial_balance = AsyncMock(  # type: ignore[method-assign]
         return_value=[TrialBalanceRow(name="Cash", closing_balance=Decimal("100.00"))]
@@ -98,6 +102,10 @@ async def test_sync_masters_collects_ledgers_and_groups(
     assert result["status"] == "success"
     assert result["result"]["ledgers"][0]["name"] == "L1"
     assert result["result"]["groups"][0]["name"] == "G1"
+    # Phase 7B: the Tally company identity is captured alongside the masters,
+    # with name + GUID as separate fields.
+    assert result["result"]["company"]["name"] == "ACME"
+    assert result["result"]["company"]["guid"] == "c30a0ee5-0000-0000-0000-000000000000"
     # Fixture's LedgerMaster omits master_id, so the dataclass default
     # (None) must propagate through the dict comprehension to the wire.
     assert "master_id" in result["result"]["ledgers"][0]
@@ -128,6 +136,20 @@ async def test_sync_masters_propagates_master_id_when_present(
     )
     assert result["status"] == "success"
     assert result["result"]["ledgers"][0]["master_id"] == "abc-123-guid"
+
+
+# ---------------- company_info ----------------
+
+@pytest.mark.asyncio
+async def test_company_info_returns_name_and_guid(fake_tally: TallyClient) -> None:
+    result = await dispatch_command(
+        tally=fake_tally,
+        payload={"command": "company_info", "args": {}, "company_id": "C"},
+        registered_company_id="C",
+    )
+    assert result["status"] == "success"
+    assert result["result"]["name"] == "ACME"
+    assert result["result"]["guid"] == "c30a0ee5-0000-0000-0000-000000000000"
 
 
 # ---------------- post_voucher ----------------

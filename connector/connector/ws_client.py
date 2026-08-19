@@ -76,6 +76,7 @@ class ConnectorWSClient:
         initial_backoff: float = 1.0,
         max_backoff: float = 60.0,
         cache: IdempotencyCache | None = None,
+        active_company_poll_seconds: float = 10.0,
     ) -> None:
         self.ws_url = ws_url
         self.connector_token = connector_token
@@ -88,10 +89,12 @@ class ConnectorWSClient:
         # None (tests, or pre-activation), dispatch_command runs without
         # dedup — identical to the original behaviour.
         self._cache = cache
+        self.active_company_poll_seconds = active_company_poll_seconds
+        self._active_company: dict[str, Any] | None = None
 
-        # Set on `register_ack` and used by command dispatcher to verify
-        # `command.payload.company_id` matches the registered company.
+        # Set on `register_ack`; the server is the authority for these IDs.
         self.registered_company_id: str | None = None
+        self.authorized_company_ids: set[str] = set()
 
         # Tracks the last heartbeat_ack timestamp for liveness detection.
         self._last_heartbeat_ack: float | None = None
@@ -161,11 +164,12 @@ class ConnectorWSClient:
             ) as ws:
                 await self._send_register(ws)
                 hb = asyncio.create_task(self._heartbeat_loop(ws))
+                active = asyncio.create_task(self._active_company_loop(ws))
                 rx = asyncio.create_task(
                     self._receive_loop(ws, on_register_ack)
                 )
                 done, pending = await asyncio.wait(
-                    {hb, rx},
+                    {hb, rx, active},
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 for t in pending:
@@ -212,6 +216,7 @@ class ConnectorWSClient:
                     "user": platform.node(),
                 },
                 "queued_outbound_count": 0,
+                "tally_data_folder_path": self.tally.data_folder_path,
             },
         )
         await ws.send(env)
@@ -249,6 +254,29 @@ class ConnectorWSClient:
             await asyncio.sleep(self.heartbeat_seconds)
             await self._send_heartbeat(ws)
 
+    async def _active_company_loop(self, ws: ClientConnection) -> None:
+        while True:
+            await asyncio.sleep(self.active_company_poll_seconds)
+            current = await self.tally.get_active_tally_company()
+            previous = self._active_company
+            self._active_company = current
+            previous_id = (previous or {}).get("tally_company_identifier")
+            current_id = current.get("tally_company_identifier")
+            if previous is not None and previous_id != current_id:
+                await ws.send(
+                    build_envelope(
+                        type_="tally_company_changed",
+                        payload={
+                            "previous_company_identifier": previous_id,
+                            "previous_company_name": (previous or {}).get(
+                                "tally_company_name"
+                            ),
+                            "new_company_identifier": current_id,
+                            "new_company_name": current.get("tally_company_name"),
+                        },
+                    )
+                )
+
     async def _receive_loop(
         self,
         ws: ClientConnection,
@@ -272,6 +300,10 @@ class ConnectorWSClient:
         payload = env["payload"]
         if type_ == "register_ack":
             self.registered_company_id = payload.get("company_id")
+            authorized = payload.get("authorized_target_company_ids")
+            self.authorized_company_ids = {
+                str(value) for value in authorized
+            } if isinstance(authorized, list) else set()
             self._register_event.set()
             if on_register_ack is not None:
                 await on_register_ack(payload)
@@ -299,6 +331,7 @@ class ConnectorWSClient:
                 tally=self.tally,
                 payload=env["payload"],
                 registered_company_id=self.registered_company_id,
+                authorized_company_ids=self.authorized_company_ids,
                 cache=self._cache,
             )
         except CompanyMismatch as exc:

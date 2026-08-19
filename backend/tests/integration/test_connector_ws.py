@@ -24,9 +24,12 @@ from app.core.security import (
     CONNECTOR_TOKEN_KIND,
     create_connector_token,
 )
+from app.models.connector import Connector, ConnectorCompanyBinding
 from app.services.tally.connector_registry import get_registry
 from fastapi.testclient import TestClient
 from starlette.testclient import WebSocketTestSession
+
+from tests._db_fixtures import make_company
 
 
 @pytest.fixture(autouse=True)
@@ -118,6 +121,40 @@ def test_register_and_register_ack(client: TestClient) -> None:
         assert conn.tally_version == "3.0"
         assert conn.connector_build_sha == "abc1234"
         assert conn.connector_built_at == "2026-06-14T00:00:00+00:00"
+
+
+def test_installation_scoped_token_uses_persisted_provisioning_scope(
+    client: TestClient, db_session
+) -> None:  # type: ignore[no-untyped-def]
+    connector_id = uuid4()
+    provisioning_company = make_company(db_session).id
+    mapped_company = make_company(db_session).id
+    db_session.add(
+        Connector(id=connector_id, enrolled_company_id=provisioning_company)
+    )
+    db_session.add(
+        ConnectorCompanyBinding(
+            connector_id=connector_id,
+            company_id=mapped_company,
+            data_folder_path="C:/Tally",
+            tally_company_identifier="mapped",
+            tally_company_display_name="Mapped",
+            configured_at=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
+
+    token = create_connector_token(connector_id=connector_id)
+    with _open(client, token=token, company_id=provisioning_company) as ws:
+        ws.send_text(_build_envelope(type_="register", payload={}))
+        ack = json.loads(ws.receive_text())
+        assert ack["payload"]["company_id"] == str(provisioning_company)
+        assert ack["payload"]["authorized_target_company_ids"] == sorted(
+            [str(mapped_company), str(provisioning_company)]
+        )
+
+        conn = _wait_for_registry(mapped_company)
+        assert conn.company_id == provisioning_company
 
 
 # ---------------- heartbeat / heartbeat_ack ----------------

@@ -10,6 +10,7 @@ import {
 } from "react-native";
 
 import { createCompany } from "../../api/companies";
+import { mapTallyCompany } from "../../api/connector";
 import { ApiError } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
 import { useActiveCompany } from "../../context/CompanyContext";
@@ -17,9 +18,11 @@ import { useActiveCompany } from "../../context/CompanyContext";
 export default function CompanyCreateScreen({
   onCreated,
   onCancel,
+  pendingDiscoveryId,
 }: {
   onCreated: () => void;
   onCancel: () => void;
+  pendingDiscoveryId?: string;
 }): React.ReactElement {
   const { refreshMe } = useAuth();
   const { setActive } = useActiveCompany();
@@ -42,6 +45,9 @@ export default function CompanyCreateScreen({
       // list, then make the new company active.
       await refreshMe();
       await setActive(created.id);
+      if (pendingDiscoveryId !== undefined) {
+        await mapTallyCompany(pendingDiscoveryId);
+      }
       onCreated();
     } catch (exc) {
       if (

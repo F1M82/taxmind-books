@@ -70,6 +70,9 @@ def migrated_engine() -> Generator[str, None, None]:
         conn.execute(
             text("DROP TABLE IF EXISTS connector_enrollment_codes CASCADE")
         )
+        conn.execute(text("DROP TABLE IF EXISTS connector_company_bindings CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS tally_companies_discovered CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS connectors CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS idempotency_keys CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS audit_logs CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS ledger_entries CASCADE"))
@@ -79,6 +82,7 @@ def migrated_engine() -> Generator[str, None, None]:
         conn.execute(text("DROP TABLE IF EXISTS companies CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+        conn.execute(text("DROP TYPE IF EXISTS alembic_version CASCADE"))
         conn.execute(
             text("DROP TYPE IF EXISTS account_deletion_status CASCADE")
         )
@@ -132,6 +136,18 @@ def db_session(migrated_engine: str) -> Generator[Session, None, None]:
 
 
 @pytest.fixture(autouse=True)
+def _ensure_schema_head(migrated_engine: str) -> None:
+    """Repair the shared test DB after migration round-trip tests.
+
+    The Alembic round-trip tests intentionally downgrade and rebuild the same
+    database. Later integration tests still use the session-scoped engine, so
+    restore the schema before each ordinary test if a round-trip left it
+    behind an older revision.
+    """
+    command.upgrade(_alembic_cfg(), "head")
+
+
+@pytest.fixture(autouse=True)
 def _reset_tenancy_tables(migrated_engine: str) -> Generator[None, None, None]:
     """Truncate per-test so factories don't collide on uniqueness."""
     yield
@@ -142,6 +158,7 @@ def _reset_tenancy_tables(migrated_engine: str) -> Generator[None, None, None]:
                 "TRUNCATE TABLE account_deletion_requests, "
                 "device_tokens, "
                 "connector_enrollment_codes, "
+                "connector_company_bindings, tally_companies_discovered, connectors, "
                 "idempotency_keys, audit_logs, ledger_entries, "
                 "vouchers, ledgers, user_companies, companies, users "
                 "RESTART IDENTITY CASCADE"

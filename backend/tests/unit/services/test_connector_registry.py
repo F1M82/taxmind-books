@@ -69,6 +69,36 @@ async def test_send_command_resolves_when_result_arrives() -> None:
 
 
 @pytest.mark.asyncio
+async def test_one_connector_serves_multiple_bound_companies() -> None:
+    ws = _FakeWS()
+    provisioning_company = uuid4()
+    mapped_company = uuid4()
+    conn = ConnectorConnection(
+        company_id=provisioning_company, connector_id=uuid4(), ws=ws  # type: ignore[arg-type]
+    )
+    registry = ConnectorRegistry()
+    await registry.register(conn, {mapped_company})
+
+    async def reply_after_send() -> None:
+        while not ws.sent:
+            await asyncio.sleep(0)
+        env = json.loads(ws.sent[0])
+        assert env["payload"]["company_id"] == str(mapped_company)
+        conn.resolve_command_result(
+            env["request_id"], {"status": "success", "result": {}}
+        )
+
+    asyncio.create_task(reply_after_send())
+    await registry.send_command(
+        company_id=mapped_company, command="ping", args={}, timeout_seconds=2
+    )
+    assert registry.get(mapped_company) is conn
+    snap = registry.status_for(mapped_company)
+    assert snap is not None
+    assert snap["company_id"] == str(mapped_company)
+
+
+@pytest.mark.asyncio
 async def test_send_command_times_out_when_no_reply() -> None:
     ws = _FakeWS()
     company_id = uuid4()
@@ -100,7 +130,7 @@ async def test_send_command_raises_when_no_connector() -> None:
 
 
 @pytest.mark.asyncio
-async def test_register_replaces_stale_connection() -> None:
+async def test_register_keeps_multiple_connector_installations() -> None:
     company_id = uuid4()
     old_ws = _FakeWS()
     new_ws = _FakeWS()
@@ -116,11 +146,12 @@ async def test_register_replaces_stale_connection() -> None:
     await registry.register(new_conn)
 
     assert registry.get(company_id) is new_conn
-    assert old_ws.closed == (4429, "superseded")
+    assert registry.get_by_connector(old_conn.connector_id) is old_conn
+    assert old_ws.closed is None
 
 
 @pytest.mark.asyncio
-async def test_register_cancels_pending_on_replace() -> None:
+async def test_connector_index_can_cancel_one_installation_independently() -> None:
     company_id = uuid4()
     old_ws = _FakeWS()
     new_ws = _FakeWS()
@@ -143,13 +174,16 @@ async def test_register_cancels_pending_on_replace() -> None:
     # Yield so the future gets registered.
     await asyncio.sleep(0)
 
-    # Replace the connection — old pending should be cancelled.
+    # A second installation does not replace the first one.
     new_conn = ConnectorConnection(
         company_id=company_id, connector_id=uuid4(), ws=new_ws  # type: ignore[arg-type]
     )
     await registry.register(new_conn)
 
-    with pytest.raises(ConnectorOffline):
+    assert registry.get_by_connector(old_conn.connector_id) is old_conn
+    assert registry.get_by_connector(new_conn.connector_id) is new_conn
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
         await task
 
 
@@ -200,6 +234,7 @@ async def test_status_for_returns_snapshot() -> None:
     snap = registry.status_for(company_id)
     assert snap is not None
     assert snap["connected"] is True
+    assert snap["connector_id"] == str(conn.connector_id)
     assert snap["tally_running"] is True
     assert snap["tally_version"] == "3.0"
     assert snap["queued_outbound_count"] == 2

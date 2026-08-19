@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import AuditEmitter
 from app.core.exceptions import NotFound, ValidationFailed
 from app.core.security import create_connector_token
+from app.models.connector import Connector
 from app.models.connector_enrollment import ConnectorEnrollmentCode
 
 ENROLLMENT_CODE_TTL = timedelta(minutes=15)
@@ -91,9 +92,10 @@ class ConnectorEnrollmentService:
             raise _CodeExpired("Enrollment code has expired.")
 
         connector_id = uuid4()
+        connector = Connector(id=connector_id, enrolled_company_id=row.company_id)
+        self.db.add(connector)
         token = create_connector_token(
             connector_id=connector_id,
-            company_id=row.company_id,
         )
         row.consumed_at = datetime.now(UTC)
         self.db.flush()

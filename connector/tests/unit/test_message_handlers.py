@@ -23,6 +23,7 @@ from connector.tally_client import (
     TallyUnreachable,
     TrialBalanceRow,
 )
+from connector.tally_data_folder import TallyCompanyDiscovery
 
 
 @pytest.fixture
@@ -70,6 +71,32 @@ async def test_dispatch_raises_company_mismatch(
             tally=fake_tally,
             payload=payload,
             registered_company_id="OURS",
+        )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_accepts_server_authorized_mapped_company(
+    fake_tally: TallyClient,
+) -> None:
+    result = await dispatch_command(
+        tally=fake_tally,
+        payload={"company_id": "MAPPED", "command": "ping", "args": {}},
+        registered_company_id="PROVISIONING",
+        authorized_company_ids={"PROVISIONING", "MAPPED"},
+    )
+    assert result["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_rejects_company_not_authorized_by_server(
+    fake_tally: TallyClient,
+) -> None:
+    with pytest.raises(CompanyMismatch):
+        await dispatch_command(
+            tally=fake_tally,
+            payload={"company_id": "OTHER", "command": "ping", "args": {}},
+            registered_company_id="PROVISIONING",
+            authorized_company_ids={"PROVISIONING", "MAPPED"},
         )
 
 
@@ -150,6 +177,53 @@ async def test_company_info_returns_name_and_guid(fake_tally: TallyClient) -> No
     assert result["status"] == "success"
     assert result["result"]["name"] == "ACME"
     assert result["result"]["guid"] == "c30a0ee5-0000-0000-0000-000000000000"
+
+
+@pytest.mark.asyncio
+async def test_list_tally_companies_returns_protocol_metadata(
+    fake_tally: TallyClient,
+) -> None:
+    fake_tally.data_folder_path = r"C:\Tally\Data"
+    fake_tally.list_tally_companies = lambda: [  # type: ignore[method-assign]
+        TallyCompanyDiscovery("10000", "ACME", guid="guid-1")
+    ]
+    result = await dispatch_command(
+        tally=fake_tally,
+        payload={"command": "list_tally_companies", "args": {}, "company_id": "C"},
+        registered_company_id="C",
+    )
+    assert result["status"] == "success"
+    assert result["result"]["companies"][0]["tally_company_identifier"] == "10000"
+
+
+@pytest.mark.asyncio
+async def test_target_company_check_is_only_applied_when_present(
+    fake_tally: TallyClient,
+) -> None:
+    fake_tally.get_active_tally_company = AsyncMock(  # type: ignore[method-assign]
+        return_value={"tally_company_identifier": "10000"}
+    )
+    result = await dispatch_command(
+        tally=fake_tally,
+        payload={
+            "command": "post_voucher",
+            "company_id": "C",
+            "args": {
+                "target_tally_company_identifier": "99999",
+                "voucher_type": "Receipt",
+                "date": "2026-05-08",
+                "party_name": "Sharma",
+                "narration": "x",
+                "entries": [
+                    {"ledger_name": "Bank", "amount": "1", "entry_type": "Dr"},
+                    {"ledger_name": "Sharma", "amount": "1", "entry_type": "Cr"},
+                ],
+            },
+        },
+        registered_company_id="C",
+    )
+    assert result["error"]["code"] == "wrong_company_open"
+    assert result["retryable"] is True
 
 
 # ---------------- post_voucher ----------------

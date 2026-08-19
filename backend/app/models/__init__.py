@@ -14,6 +14,7 @@ from app.models.account_deletion_request import (
 from app.models.audit_log import AuditLog
 from app.models.base import Base, TenantScopedMixin
 from app.models.company import Company, UserCompany
+from app.models.connector import Connector, ConnectorCompanyBinding, TallyCompanyDiscovery
 from app.models.connector_enrollment import ConnectorEnrollmentCode
 from app.models.device_token import DevicePlatform, DeviceToken
 from app.models.idempotency_key import IdempotencyKey
@@ -35,6 +36,9 @@ __all__ = [
     "Base",
     "Company",
     "ConnectorEnrollmentCode",
+    "Connector",
+    "ConnectorCompanyBinding",
+    "TallyCompanyDiscovery",
     "DevicePlatform",
     "DeviceToken",
     "EntryType",

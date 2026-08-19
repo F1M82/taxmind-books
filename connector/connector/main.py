@@ -56,6 +56,7 @@ async def _async_main() -> None:
         host=cfg.TALLY_HOST,
         port=cfg.TALLY_PORT,
         timeout=cfg.TALLY_TIMEOUT_SECONDS,
+        data_folder_path=cfg.TALLY_DATA_FOLDER_PATH,
     )
 
     # Process-singleton idempotency cache (BUG-003 prep). Created at the

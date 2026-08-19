@@ -10,19 +10,23 @@ import {
 } from "react-native";
 
 import { CompanyListItem, listCompanies } from "../../api/companies";
+import { mapTallyCompany } from "../../api/connector";
 import { useActiveCompany } from "../../context/CompanyContext";
 
 export default function CompanyListScreen({
   onCreate,
   onPick,
+  pendingDiscoveryId,
 }: {
   onCreate: () => void;
   onPick: () => void;
+  pendingDiscoveryId?: string;
 }): React.ReactElement {
   const { activeCompanyId, setActive } = useActiveCompany();
   const [items, setItems] = useState<CompanyListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [mapping, setMapping] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -56,7 +60,7 @@ export default function CompanyListScreen({
         <RefreshControl refreshing={refreshing} onRefresh={load} />
       }
     >
-      <Text style={styles.title}>Your companies</Text>
+      <Text style={styles.title}>{pendingDiscoveryId ? "Choose a company for Tally" : "Your companies"}</Text>
       {error !== null && <Text style={styles.error}>{error}</Text>}
       {items !== null && items.length === 0 && (
         <Text>You don't belong to any company yet.</Text>
@@ -69,10 +73,22 @@ export default function CompanyListScreen({
               key={c.id}
               accessibilityRole="button"
               accessibilityLabel={`select-${c.id}`}
-              onPress={async () => {
-                await setActive(c.id);
-                onPick();
-              }}
+               onPress={async () => {
+                 setError(null);
+                 setMapping(pendingDiscoveryId !== undefined);
+                 try {
+                   await setActive(c.id);
+                   if (pendingDiscoveryId !== undefined) {
+                     await mapTallyCompany(pendingDiscoveryId);
+                   }
+                   onPick();
+                 } catch {
+                   setError("Could not complete the Tally company mapping. Try again.");
+                 } finally {
+                   setMapping(false);
+                 }
+               }}
+               disabled={mapping}
               style={({ pressed }) => [
                 styles.card,
                 isActive && styles.cardActive,

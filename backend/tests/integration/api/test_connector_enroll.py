@@ -105,7 +105,9 @@ def test_enroll_returns_connector_token(
     assert body["expires_in_days"] == CONNECTOR_TOKEN_DEFAULT_EXPIRE_DAYS
 
     payload = decode_connector_token(body["connector_token"])
-    assert payload.company_id == str(company.id)
+    # New connector tokens are installation-scoped. The provisioning company
+    # remains persisted on Connector and is checked during WS enrollment.
+    assert payload.company_id is None
     assert payload.sub == body["connector_id"]
 
 

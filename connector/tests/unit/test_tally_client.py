@@ -5,12 +5,14 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from datetime import date
 from decimal import Decimal
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
 from connector.tally_client import (
+    CompanyInfo,
     ImportResponse,
     LedgerEntryInput,
     LedgerMaster,
@@ -163,6 +165,23 @@ def test_decimal_handles_blank_and_garbage() -> None:
     assert _decimal("") == Decimal("0.00")
     assert _decimal("garbage") == Decimal("0.00")
     assert _decimal("1500.50") == Decimal("1500.50")
+
+
+@pytest.mark.asyncio
+async def test_active_company_matches_discovered_guid(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    company_dir = tmp_path / "10000"
+    company_dir.mkdir()
+    (company_dir / "manager.500").write_text(
+        "<COMPANY><NAME>Acme</NAME><GUID>guid-1</GUID></COMPANY>",
+        encoding="utf-8",
+    )
+    client = TallyClient(data_folder_path=str(tmp_path))
+    client.get_company_info = AsyncMock(  # type: ignore[method-assign]
+        return_value=CompanyInfo(name="Acme", guid="guid-1")
+    )
+    result = await client.get_active_tally_company()
+    assert result["tally_company_identifier"] == "10000"
+    assert result["tally_company_name"] == "Acme"
 
 
 # ---------------- ping ----------------

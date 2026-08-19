@@ -54,6 +54,13 @@ def migrated_db(db_or_skip: str) -> str:
         conn.execute(
             text("DROP TABLE IF EXISTS connector_enrollment_codes CASCADE")
         )
+        conn.execute(
+            text("DROP TABLE IF EXISTS connector_company_bindings CASCADE")
+        )
+        conn.execute(
+            text("DROP TABLE IF EXISTS tally_companies_discovered CASCADE")
+        )
+        conn.execute(text("DROP TABLE IF EXISTS connectors CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS idempotency_keys CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS audit_logs CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS ledger_entries CASCADE"))
@@ -63,6 +70,7 @@ def migrated_db(db_or_skip: str) -> str:
         conn.execute(text("DROP TABLE IF EXISTS companies CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+        conn.execute(text("DROP TYPE IF EXISTS alembic_version CASCADE"))
         conn.execute(
             text("DROP TYPE IF EXISTS account_deletion_status CASCADE")
         )

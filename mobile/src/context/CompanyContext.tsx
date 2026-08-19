@@ -26,6 +26,8 @@ import { useAuth } from "./AuthContext";
 interface CompanyState {
   activeCompanyId: string | null;
   loading: boolean;
+  /** Changes whenever the active tenant changes, for screen cache invalidation. */
+  activeCompanyVersion: number;
   setActive: (id: string) => Promise<void>;
   /** Force a re-resolve from AuthContext (e.g. after creating a company). */
   reconcile: () => Promise<void>;
@@ -41,10 +43,12 @@ export function CompanyProvider({
   const { user, loading: authLoading } = useAuth();
   const [activeCompanyId, setActiveState] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [activeCompanyVersion, setActiveCompanyVersion] = useState(0);
 
   const reconcile = useCallback(async () => {
     if (user === null) {
       setActiveState(null);
+      setActiveCompanyVersion((version) => version + 1);
       setLoading(false);
       return;
     }
@@ -59,6 +63,7 @@ export function CompanyProvider({
       const first = user.companies[0]!;
       await setActiveCompanyId(first.id);
       setActiveState(first.id);
+      setActiveCompanyVersion((version) => version + 1);
     } else {
       setActiveState(null);
     }
@@ -75,11 +80,12 @@ export function CompanyProvider({
   const setActive = useCallback(async (id: string) => {
     await setActiveCompanyId(id);
     setActiveState(id);
+    setActiveCompanyVersion((version) => version + 1);
   }, []);
 
   const value = useMemo<CompanyState>(
-    () => ({ activeCompanyId, loading, setActive, reconcile }),
-    [activeCompanyId, loading, setActive, reconcile],
+    () => ({ activeCompanyId, activeCompanyVersion, loading, setActive, reconcile }),
+    [activeCompanyId, activeCompanyVersion, loading, setActive, reconcile],
   );
 
   return <CompanyCtx.Provider value={value}>{children}</CompanyCtx.Provider>;

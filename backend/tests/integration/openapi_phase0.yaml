@@ -103,6 +103,14 @@ endpoints:
     methods: [GET]
   - path: /api/v1/connector/company-mapping/confirm
     methods: [POST]
+  - path: /api/v1/connector/tally-mapping
+    methods: [POST]
+  - path: /api/v1/connector/{connector_id}/tally-companies
+    methods: [GET]
+  - path: /api/v1/connector/{connector_id}/active-tally-company
+    methods: [GET]
+  - path: /api/v1/companies/{company_id}/tally-mapping
+    methods: [POST]
 
   # ---- Liveness / placeholder ----
   - path: /

@@ -32,7 +32,9 @@ from connector.tally_client import (
     TallyError,
     VoucherExportRow,
     VoucherInput,
+    WrongCompanyOpen,
 )
+from connector.tally_data_folder import TallyDataFolderError
 
 logger = logging.getLogger("connector.message_handlers")
 
@@ -114,9 +116,42 @@ async def _handle_company_info(
     return {"name": company.name, "guid": company.guid}
 
 
+async def _handle_list_tally_companies(
+    tally: TallyClient, args: dict[str, Any]
+) -> dict[str, Any]:
+    try:
+        companies = tally.list_tally_companies()
+    except TallyDataFolderError as exc:
+        return {
+            "_error": {
+                "code": "data_folder_unreadable",
+                "message": str(exc),
+                "details": {"path": tally.data_folder_path},
+            }
+        }
+    return {
+        "tally_data_folder_path": tally.data_folder_path,
+        "companies": [company.as_dict() for company in companies],
+        "scanned_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+async def _handle_get_active_tally_company(
+    tally: TallyClient, args: dict[str, Any]
+) -> dict[str, Any]:
+    return await tally.get_active_tally_company()
+
+
 async def _handle_post_voucher(
     tally: TallyClient, args: dict[str, Any]
 ) -> dict[str, Any]:
+    target = args.get("target_tally_company_identifier")
+    if target is not None:
+        active = await tally.get_active_tally_company()
+        if active.get("tally_company_identifier") != target:
+            raise WrongCompanyOpen(
+                "requested company is not currently open in Tally"
+            )
     voucher = _voucher_from_args(args)
     return await tally.post_voucher(voucher)
 
@@ -251,6 +286,8 @@ HANDLERS: dict[str, HandlerFn] = {
     "ping": _handle_ping,
     "sync_masters": _handle_sync_masters,
     "company_info": _handle_company_info,
+    "list_tally_companies": _handle_list_tally_companies,
+    "get_active_tally_company": _handle_get_active_tally_company,
     "post_voucher": _handle_post_voucher,
     "get_trial_balance": _handle_get_trial_balance,
     "get_outstanding": _handle_get_outstanding,
@@ -270,6 +307,7 @@ async def dispatch_command(
     tally: TallyClient,
     payload: dict[str, Any],
     registered_company_id: str,
+    authorized_company_ids: set[str] | None = None,
     cache: IdempotencyCache | None = None,
 ) -> dict[str, Any]:
     """Run the command in `payload.command` and build the
@@ -284,16 +322,17 @@ async def dispatch_command(
     docs/connector_idempotency_design.md.
 
     Raises:
-        CompanyMismatch: if `payload.company_id` ≠ the connector's
-            registered company. The dispatcher forwards this as a
-            `company_mismatch` error in the reply.
+        CompanyMismatch: if `payload.company_id` is not authorized by the
+            server registration. Empty authorization lists preserve the
+            legacy exact-company check.
     """
     started = time.monotonic()
     company_id = payload.get("company_id")
-    if company_id is not None and str(company_id) != registered_company_id:
+    authorized = authorized_company_ids or {registered_company_id}
+    if company_id is not None and str(company_id) not in authorized:
         raise CompanyMismatch(
-            f"command targets {company_id!r}, connector registered for "
-            f"{registered_company_id!r}"
+            f"command targets {company_id!r}, connector is not authorized "
+            f"for that company"
         )
 
     command = payload.get("command")
@@ -362,11 +401,14 @@ async def _run_handler(
     try:
         result = await handler(tally, args)
     except TallyError as exc:
+        error_code = {
+            "WrongCompanyOpen": "wrong_company_open",
+        }.get(exc.__class__.__name__, exc.__class__.__name__)
         return {
             "command": command,
             "status": "error",
             "error": {
-                "code": exc.__class__.__name__,
+                "code": error_code,
                 "message": str(exc),
             },
             "duration_ms": _ms_since(started),
@@ -375,7 +417,18 @@ async def _run_handler(
                 "TallyUnreachable",
                 "TallyResponseError",
                 "TallyAmbiguousResponse",
+                "WrongCompanyOpen",
             },
+        }
+
+    if "_error" in result:
+        error = result["_error"]
+        return {
+            "command": command,
+            "status": "error",
+            "error": error,
+            "duration_ms": _ms_since(started),
+            "retryable": False,
         }
 
     return {

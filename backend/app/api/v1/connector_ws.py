@@ -27,7 +27,9 @@ from uuid import UUID
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
+from app.core.database import SessionLocal
 from app.core.security import TokenExpired, TokenInvalid, decode_connector_token
+from app.models.connector import Connector, ConnectorCompanyBinding
 from app.services.tally import connector_registry as _connector_registry_mod
 from app.services.tally.connector_registry import ConnectorConnection
 
@@ -44,7 +46,7 @@ CLOSE_PROTOCOL_UNSUPPORTED = 4400
 
 
 @router.websocket("/ws")
-async def connector_ws(ws: WebSocket) -> None:
+async def connector_ws(ws: WebSocket) -> None:  # noqa: PLR0912, PLR0915
     """Long-lived connector socket. One per (company_id, connector_id)."""
     # ---- Headers ----
     auth = ws.headers.get("authorization") or ""
@@ -73,23 +75,53 @@ async def connector_ws(ws: WebSocket) -> None:
         return
 
     try:
-        token_company = UUID(payload.company_id)
-    except ValueError:
-        await ws.close(code=1008, reason="invalid company id in token")
-        return
-
-    if raw_company_id and raw_company_id != payload.company_id:
-        await ws.close(
-            code=CLOSE_COMPANY_MISMATCH,
-            reason="X-Company-ID does not match token",
-        )
-        return
-
-    try:
         connector_id = UUID(payload.sub)
     except ValueError:
         await ws.close(code=1008, reason="invalid connector id in token")
         return
+
+    # Legacy tokens are company-bound and retain their original validation.
+    # New installation-scoped tokens must resolve their provisioning scope
+    # from the persisted connector; the header is never tenant authority.
+    token_company: UUID | None = None
+    if payload.company_id is not None:
+        try:
+            token_company = UUID(payload.company_id)
+        except ValueError:
+            await ws.close(code=1008, reason="invalid company id in token")
+            return
+        if raw_company_id and raw_company_id != payload.company_id:
+            await ws.close(
+                code=CLOSE_COMPANY_MISMATCH,
+                reason="X-Company-ID does not match token",
+            )
+            return
+
+    db = SessionLocal()
+    try:
+        connector = db.query(Connector).filter(Connector.id == connector_id).first()
+        if payload.company_id is None:
+            if connector is None or connector.enrolled_company_id is None:
+                await ws.close(code=1008, reason="connector not found")
+                return
+            if not raw_company_id or raw_company_id != str(connector.enrolled_company_id):
+                await ws.close(
+                    code=CLOSE_COMPANY_MISMATCH,
+                    reason="X-Company-ID does not match connector provisioning scope",
+                )
+                return
+            token_company = connector.enrolled_company_id
+
+        binding_company_ids = {
+            row[0]
+            for row in db.query(ConnectorCompanyBinding.company_id).filter(
+                ConnectorCompanyBinding.connector_id == connector_id
+            ).all()
+        }
+    finally:
+        db.close()
+
+    assert token_company is not None
 
     await ws.accept()
 
@@ -97,6 +129,7 @@ async def connector_ws(ws: WebSocket) -> None:
         company_id=token_company,
         connector_id=connector_id,
         ws=ws,
+        authorized_company_ids=binding_company_ids | {token_company},
     )
     registry = _connector_registry_mod.get_registry()
     await registry.register(conn)
@@ -156,6 +189,12 @@ async def _run_message_loop(conn: ConnectorConnection) -> None:
             logger.info(
                 "tally_event from %s: %s", conn.company_id, payload
             )
+        elif type_ == "tally_company_changed":
+            logger.info(
+                "tally company changed on connector %s: %s",
+                conn.connector_id,
+                payload,
+            )
         elif type_ == "error":
             logger.warning(
                 "connector-side error %s: %s", conn.company_id, payload
@@ -185,6 +224,10 @@ async def _handle_register(
     ack_payload = {
         "connector_id": str(conn.connector_id),
         "company_id": str(conn.company_id),
+        "authorized_target_company_ids": [
+            str(company_id)
+            for company_id in sorted(conn.authorized_company_ids, key=str)
+        ],
         "server_version": "0.1.0",
         "protocol_version": SUPPORTED_PROTOCOL_VERSION,
     }
@@ -215,7 +258,6 @@ def _schedule_reenqueue_on_connector_up(company_id: UUID) -> None:
 
     import asyncio
 
-    from app.core.database import SessionLocal
     from app.services.tally.voucher_reenqueue import (
         reenqueue_retryable_vouchers,
     )

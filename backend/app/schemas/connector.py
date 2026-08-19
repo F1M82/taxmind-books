@@ -40,6 +40,7 @@ class ConnectorStatusOut(TaxMindBooksBase):
     """
 
     company_id: UUID
+    connector_id: UUID | None = None
     connected: bool
     last_seen_at: datetime | None = None
     tally_running: bool | None = None

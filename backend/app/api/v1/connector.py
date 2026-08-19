@@ -8,7 +8,7 @@ import logging
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -24,7 +24,8 @@ from app.core.database import SessionLocal, get_db
 from app.core.exceptions import ConnectorOffline as ConnectorOfflineHTTP
 from app.core.idempotency import IdempotencyHandler
 from app.core.security import CONNECTOR_TOKEN_DEFAULT_EXPIRE_DAYS
-from app.models.company import Company, CompanyRole
+from app.models.company import Company, CompanyRole, UserCompany
+from app.models.connector import Connector, ConnectorCompanyBinding, TallyCompanyDiscovery
 from app.models.user import User
 from app.schemas.connector import (
     CompanyMappingConfirmRequest,
@@ -35,6 +36,13 @@ from app.schemas.connector import (
     EnrollRequest,
     EnrollResponse,
     SyncTriggerResponse,
+)
+from app.schemas.tally_mapping import (
+    ActiveTallyCompanyOut,
+    TallyCompaniesOut,
+    TallyCompanyDiscoveryOut,
+    TallyMappingOut,
+    TallyMappingRequest,
 )
 from app.services.connector_service import (
     ConnectorEnrollmentService,
@@ -54,10 +62,47 @@ from app.services.tally.company_mapping import (
     confirm_company_mapping,
     require_safe_company_mapping,
 )
+from app.services.tally.discovery_service import bind_discovery_reference, ingest_discovery
 
 logger = logging.getLogger("app.api.v1.connector")
 
 router = APIRouter(prefix="/connector", tags=["connector"])
+
+
+def _connector_authorized(db: Session, user: User, connector_id: UUID) -> bool:
+    """A connector is visible only through an owner/admin served company."""
+    return db.query(UserCompany).join(
+        ConnectorCompanyBinding, ConnectorCompanyBinding.company_id == UserCompany.company_id
+    ).filter(
+        ConnectorCompanyBinding.connector_id == connector_id,
+        UserCompany.user_id == user.id,
+        UserCompany.role.in_([CompanyRole.owner, CompanyRole.admin]),
+    ).first() is not None or db.query(UserCompany).join(
+        Connector, Connector.enrolled_company_id == UserCompany.company_id
+    ).filter(
+        Connector.id == connector_id, UserCompany.user_id == user.id,
+        UserCompany.role.in_([CompanyRole.owner, CompanyRole.admin]),
+    ).first() is not None
+
+
+def _connector_in_context(
+    db: Session, user: User, company: Company, connector_id: UUID, *, admin: bool = False
+) -> Connector:
+    connector = db.query(Connector).filter(Connector.id == connector_id).first()
+    if connector is None:
+        from app.core.exceptions import NotFound
+        raise NotFound("Connector not found.")
+    binding = db.query(ConnectorCompanyBinding).filter(
+        ConnectorCompanyBinding.connector_id == connector_id,
+        ConnectorCompanyBinding.company_id == company.id,
+    ).first()
+    if connector.enrolled_company_id != company.id and binding is None:
+        from app.core.exceptions import Forbidden
+        raise Forbidden("Connector is not authorized for this company.")
+    if admin and not _connector_authorized(db, user, connector_id):
+        from app.core.exceptions import Forbidden
+        raise Forbidden("Connector is not authorized for this user.")
+    return connector
 
 
 # ---------------------------------------------------------------------
@@ -124,13 +169,129 @@ def enroll(
 def connector_status(
     company: Company = Depends(get_active_company),
     user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> ConnectorStatusOut:
     snap = _connector_registry_mod.get_registry().status_for(company.id)
     if snap is None:
+        connector = db.query(Connector.id).filter(
+            Connector.enrolled_company_id == company.id
+        ).order_by(Connector.created_at.desc()).first()
+        if connector is None:
+            connector = db.query(ConnectorCompanyBinding.connector_id).filter(
+                ConnectorCompanyBinding.company_id == company.id
+            ).order_by(ConnectorCompanyBinding.configured_at.desc()).first()
         return ConnectorStatusOut(
-            company_id=company.id, connected=False
+            company_id=company.id, connector_id=connector[0] if connector else None,
+            connected=False
         )
     return ConnectorStatusOut(**snap)
+
+
+@router.get("/{connector_id}/tally-companies", response_model=TallyCompaniesOut)
+async def tally_companies(
+    connector_id: UUID,
+    request: Request,
+    refresh: bool = Query(False),
+    user: User = Depends(get_current_user),
+    company: Company = Depends(get_active_company),
+    db: Session = Depends(get_db),
+) -> TallyCompaniesOut:
+    connector = _connector_in_context(db, user, company, connector_id)
+    if refresh:
+        registry = _connector_registry_mod.get_registry()
+        if not registry.is_online(connector_id=connector_id):
+            from app.core.exceptions import ConnectorOffline
+            raise ConnectorOffline("Connector is not connected.")
+        result = await registry.send_command(connector_id=connector_id, company_id=company.id, command="list_tally_companies", args={})
+        if result.get("status") != "success":
+            from app.core.exceptions import ConnectorOffline
+            raise ConnectorOffline("Connector failed to discover Tally companies.")
+        payload = result.get("result")
+        if not isinstance(payload, dict):
+            payload = result if isinstance(result, dict) else {}
+        audit = _user_audit_emitter(request, db, user, company=company)
+        ingest_discovery(db, connector_id=connector_id,
+            data_folder_path=str(payload.get("tally_data_folder_path") or ""),
+            companies=payload.get("companies") or [], audit=audit)
+        db.commit()
+    rows = db.query(TallyCompanyDiscovery).filter(TallyCompanyDiscovery.connector_id == connector_id).order_by(TallyCompanyDiscovery.tally_company_identifier).all()
+    member_company_ids = {
+        row[0]
+        for row in db.query(UserCompany.company_id).filter(
+            UserCompany.user_id == user.id
+        ).all()
+    }
+    member_role = db.query(UserCompany.role).filter(
+        UserCompany.user_id == user.id,
+        UserCompany.company_id == company.id,
+    ).scalar()
+    show_diagnostics = member_role in {CompanyRole.owner, CompanyRole.admin}
+    mapped = {
+        r.tally_company_identifier: r.company_id
+        for r in db.query(ConnectorCompanyBinding).filter(
+            ConnectorCompanyBinding.connector_id == connector_id,
+            ConnectorCompanyBinding.company_id.in_(member_company_ids),
+        ).all()
+    }
+    return TallyCompaniesOut(connector_id=connector_id,
+        tally_data_folder_path=connector.data_folder_path if show_diagnostics else None,
+        scanned_at=max((r.scanned_at for r in rows), default=None), companies=[TallyCompanyDiscoveryOut(
+            discovery_id=r.id, tally_company_identifier=r.tally_company_identifier, tally_company_name=r.tally_company_name,
+            tally_master_id=r.tally_master_id if show_diagnostics else None,
+            gstin=r.gstin, financial_year_start=r.financial_year_start,
+            mapped_to_backend_company_id=mapped.get(r.tally_company_identifier)) for r in rows])
+
+
+@router.post("/tally-mapping", response_model=TallyMappingOut)
+def configure_discovery_mapping(
+    body: TallyMappingRequest,
+    request: Request,
+    company: Company = Depends(require_role(CompanyRole.owner, CompanyRole.admin)),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TallyMappingOut:
+    discovery = db.query(TallyCompanyDiscovery).filter(TallyCompanyDiscovery.id == body.discovery_id).first()
+    if discovery is None:
+        from app.core.exceptions import NotFound
+        raise NotFound("Tally company was not found in discovery.")
+    _connector_in_context(db, user, company, discovery.connector_id, admin=True)
+    audit = _user_audit_emitter(request, db, user, company=company)
+    binding = bind_discovery_reference(db, company=company, discovery_id=body.discovery_id,
+        user_id=user.id, audit=audit)
+    db.commit()
+    db.refresh(binding)
+    return TallyMappingOut(company_id=company.id, connector_id=binding.connector_id,
+        tally_data_folder_path=binding.data_folder_path, tally_company_identifier=binding.tally_company_identifier,
+        tally_company_display_name=binding.tally_company_display_name,
+        tally_mapping_configured_at=binding.configured_at, tally_mapping_configured_by=binding.configured_by)
+
+
+@router.get("/{connector_id}/active-tally-company", response_model=ActiveTallyCompanyOut)
+async def active_tally_company(
+    connector_id: UUID,
+    user: User = Depends(get_current_user),
+    company: Company = Depends(get_active_company),
+    db: Session = Depends(get_db),
+) -> ActiveTallyCompanyOut:
+    _connector_in_context(db, user, company, connector_id)
+    registry = _connector_registry_mod.get_registry()
+    if not registry.is_online(connector_id=connector_id):
+        from app.core.exceptions import ConnectorOffline
+        raise ConnectorOffline("Connector is not connected.")
+    result = await registry.send_command(connector_id=connector_id, company_id=company.id,
+        command="get_active_tally_company", args={})
+    active = result.get("result")
+    if not isinstance(active, dict):
+        active = result if isinstance(result, dict) else {}
+    member_role = db.query(UserCompany.role).filter(
+        UserCompany.user_id == user.id,
+        UserCompany.company_id == company.id,
+    ).scalar()
+    return ActiveTallyCompanyOut(connector_id=connector_id,
+        tally_company_identifier=active.get("tally_company_identifier") or active.get("identifier"),
+        tally_company_name=active.get("tally_company_name") or active.get("name"),
+        tally_master_id=(active.get("tally_master_id") or active.get("tally_company_guid"))
+        if member_role in {CompanyRole.owner, CompanyRole.admin} else None)
 
 
 # ---------------------------------------------------------------------

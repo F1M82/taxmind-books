@@ -207,3 +207,39 @@ async def test_terminal_close_code_4001_stops_reconnect() -> None:
         )
         # `run_forever` returns when terminal — should complete fast.
         await asyncio.wait_for(client.run_forever(), timeout=5.0)
+
+
+@pytest.mark.asyncio
+async def test_active_company_polling_emits_only_on_change() -> None:
+    from unittest.mock import AsyncMock
+
+    tally = _fake_tally()
+    tally.get_active_tally_company = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            {"tally_company_identifier": "10000", "tally_company_name": "A"},
+            {"tally_company_identifier": "10000", "tally_company_name": "A"},
+            {"tally_company_identifier": "10001", "tally_company_name": "B"},
+            {"tally_company_identifier": "10001", "tally_company_name": "B"},
+            {"tally_company_identifier": "10001", "tally_company_name": "B"},
+        ]
+    )
+    sent: list[dict[str, Any]] = []
+
+    class FakeWS:
+        async def send(self, raw: str) -> None:
+            sent.append(parse_envelope(raw))
+
+    client = ConnectorWSClient(
+        ws_url="ws://unused",
+        connector_token="token",
+        company_id="company",
+        tally=tally,
+        active_company_poll_seconds=0.01,
+    )
+    task = asyncio.create_task(client._active_company_loop(FakeWS()))  # type: ignore[arg-type]
+    await asyncio.sleep(0.08)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert [item["type"] for item in sent] == ["tally_company_changed"]
+    assert sent[0]["payload"]["new_company_identifier"] == "10001"

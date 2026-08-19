@@ -24,6 +24,10 @@ class ConnectorSettings(BaseSettings):
     TALLY_HOST: str = Field(default="localhost")
     TALLY_PORT: int = Field(default=9000, ge=1, le=65535)
     TALLY_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0)
+    TALLY_DATA_FOLDER_PATH: str = Field(
+        default=r"C:\Users\Public\TallyPrime\Data",
+        description="Tally data root used for read-only company discovery.",
+    )
 
     # ---------------- Backend WebSocket ----------------
     BACKEND_WS_URL: str = Field(

@@ -172,7 +172,7 @@ CONNECTOR_TOKEN_DEFAULT_EXPIRE_DAYS = 365
 @dataclass(frozen=True)
 class ConnectorTokenPayload:
     sub: str  # connector id
-    company_id: str
+    company_id: str | None
     exp: datetime
     raw: dict[str, Any]
 
@@ -180,7 +180,7 @@ class ConnectorTokenPayload:
 def create_connector_token(
     *,
     connector_id: UUID | str,
-    company_id: UUID | str,
+    company_id: UUID | str | None = None,
     expires_days: int = CONNECTOR_TOKEN_DEFAULT_EXPIRE_DAYS,
     settings: Settings | None = None,
 ) -> str:
@@ -194,11 +194,12 @@ def create_connector_token(
     now = datetime.now(UTC)
     payload: dict[str, Any] = {
         "sub": str(connector_id),
-        "company_id": str(company_id),
         "kind": CONNECTOR_TOKEN_KIND,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(days=expires_days)).timestamp()),
     }
+    if company_id is not None:
+        payload["company_id"] = str(company_id)
     return jwt.encode(
         payload,
         cfg.CONNECTOR_JWT_SECRET.get_secret_value(),
@@ -227,8 +228,8 @@ def decode_connector_token(
     exp = decoded.get("exp")
     if not isinstance(sub, str) or not sub:
         raise TokenInvalid("missing sub claim")
-    if not isinstance(company_id, str) or not company_id:
-        raise TokenInvalid("missing company_id claim")
+    if company_id is not None and (not isinstance(company_id, str) or not company_id):
+        raise TokenInvalid("invalid company_id claim")
     if kind != CONNECTOR_TOKEN_KIND:
         raise TokenInvalid("not a connector token")
     if not isinstance(exp, int):

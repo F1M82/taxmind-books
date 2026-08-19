@@ -7,6 +7,7 @@ import React from "react";
 import { ActivityIndicator, View } from "react-native";
 
 import { useAuth } from "../context/AuthContext";
+import { useActiveCompany } from "../context/CompanyContext";
 import AuditLogScreen from "../screens/admin/AuditLogScreen";
 import MembersScreen from "../screens/admin/MembersScreen";
 import LoginScreen from "../screens/auth/LoginScreen";
@@ -31,8 +32,8 @@ type AuthStackParamList = {
 
 type AppStackParamList = {
   Dashboard: undefined;
-  Companies: undefined;
-  CreateCompany: undefined;
+  Companies: { pendingDiscoveryId?: string } | undefined;
+  CreateCompany: { pendingDiscoveryId?: string } | undefined;
   Ledgers: undefined;
   Vouchers: undefined;
   NewVoucher: undefined;
@@ -74,8 +75,9 @@ function AuthFlow(): React.ReactElement {
 
 
 function AppFlow(): React.ReactElement {
+  const { activeCompanyVersion } = useActiveCompany();
   return (
-    <AppStack.Navigator>
+    <AppStack.Navigator key={activeCompanyVersion}>
       <AppStack.Screen
         name="Dashboard"
         options={{ title: "TaxMind Books" }}
@@ -102,6 +104,7 @@ function AppFlow(): React.ReactElement {
           <CompanyListScreen
             onCreate={() => props.navigation.navigate("CreateCompany")}
             onPick={() => props.navigation.navigate("Dashboard")}
+            pendingDiscoveryId={props.route.params?.pendingDiscoveryId}
           />
         )}
       </AppStack.Screen>
@@ -110,11 +113,17 @@ function AppFlow(): React.ReactElement {
           props: NativeStackScreenProps<AppStackParamList, "CreateCompany">,
         ) => (
           <CompanyCreateScreen
+            pendingDiscoveryId={props.route.params?.pendingDiscoveryId}
             onCreated={() =>
-              props.navigation.reset({
-                index: 0,
-                routes: [{ name: "Dashboard" }],
-              })
+              props.route.params?.pendingDiscoveryId
+                ? props.navigation.reset({
+                    index: 0,
+                    routes: [{ name: "TallySetup" }],
+                  })
+                : props.navigation.reset({
+                    index: 0,
+                    routes: [{ name: "Dashboard" }],
+                  })
             }
             onCancel={() => props.navigation.goBack()}
           />
@@ -196,9 +205,23 @@ function AppFlow(): React.ReactElement {
       </AppStack.Screen>
       <AppStack.Screen
         name="TallySetup"
-        component={TallySetupScreen}
         options={{ title: "Tally Setup" }}
-      />
+      >
+          {(props: NativeStackScreenProps<AppStackParamList, "TallySetup">) => (
+            <TallySetupScreen
+            onCreateCompany={(discoveryId) =>
+                props.navigation.navigate("CreateCompany", {
+                  pendingDiscoveryId: discoveryId,
+                })
+              }
+              onReviewExistingCompany={(discoveryId) =>
+                props.navigation.navigate("Companies", {
+                  pendingDiscoveryId: discoveryId,
+                })
+              }
+            />
+          )}
+        </AppStack.Screen>
     </AppStack.Navigator>
   );
 }

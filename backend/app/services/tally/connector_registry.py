@@ -80,6 +80,7 @@ class ConnectorConnection:
     company_id: UUID
     connector_id: UUID
     ws: WebSocket
+    authorized_company_ids: set[UUID] = field(default_factory=set)
     registered_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_heartbeat_at: datetime = field(
         default_factory=lambda: datetime.now(UTC)
@@ -120,6 +121,7 @@ class ConnectorConnection:
         *,
         command: str,
         args: dict[str, Any],
+        company_id: UUID | None = None,
         timeout_seconds: int = 30,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
@@ -132,7 +134,7 @@ class ConnectorConnection:
         self.pending[rid] = future
         try:
             payload = {
-                "company_id": str(self.company_id),
+                "company_id": str(company_id or self.company_id),
                 "command": command,
                 "args": args,
                 "timeout_seconds": timeout_seconds,
@@ -179,15 +181,25 @@ class ConnectorConnection:
 
 
 class ConnectorRegistry:
-    """Process-singleton: company_id → ConnectorConnection."""
+    """Process-singleton registry indexed by connector and company.
+
+    The connector index is authoritative for mapped P3.8 routing. The company
+    index is deliberately retained for legacy company-bound callers.
+    """
 
     def __init__(self) -> None:
         self._by_company: dict[UUID, ConnectorConnection] = {}
+        self._by_connector: dict[UUID, ConnectorConnection] = {}
         self._lock = asyncio.Lock()
 
-    async def register(self, conn: ConnectorConnection) -> None:
+    async def register(  # audit-exempt: in-memory operational connection state
+        self, conn: ConnectorConnection, company_ids: set[UUID] | None = None
+    ) -> None:
         async with self._lock:
-            existing = self._by_company.get(conn.company_id)
+            if company_ids:
+                conn.authorized_company_ids.update(company_ids)
+            conn.authorized_company_ids.add(conn.company_id)
+            existing = self._by_connector.get(conn.connector_id)
             if existing is not None:
                 # Replace stale connection. Cancel pendings on the
                 # old one so callers fail fast and reconnect logic
@@ -195,20 +207,40 @@ class ConnectorRegistry:
                 existing.cancel_pending()
                 with contextlib.suppress(Exception):
                     await existing.ws.close(code=4429, reason="superseded")
-            self._by_company[conn.company_id] = conn
+                self._remove_indexes(existing)
+            self._by_connector[conn.connector_id] = conn
+            for company_id in conn.authorized_company_ids:
+                self._by_company[company_id] = conn
 
     async def deregister(self, conn: ConnectorConnection) -> None:
         async with self._lock:
-            current = self._by_company.get(conn.company_id)
+            current = self._by_connector.get(conn.connector_id)
             if current is conn:
-                self._by_company.pop(conn.company_id, None)
+                self._remove_indexes(conn)
                 conn.cancel_pending()
+
+    def _remove_indexes(self, conn: ConnectorConnection) -> None:
+        self._by_connector.pop(conn.connector_id, None)
+        for company_id in conn.authorized_company_ids:
+            if self._by_company.get(company_id) is conn:
+                self._by_company.pop(company_id, None)
 
     def get(self, company_id: UUID) -> ConnectorConnection | None:
         return self._by_company.get(company_id)
 
-    def is_online(self, company_id: UUID) -> bool:
-        conn = self._by_company.get(company_id)
+    def get_by_connector(self, connector_id: UUID) -> ConnectorConnection | None:
+        return self._by_connector.get(connector_id)
+
+    def is_online(
+        self, company_id: UUID | None = None, *, connector_id: UUID | None = None
+    ) -> bool:
+        if connector_id is None and company_id is None:
+            return False
+        if connector_id is not None:
+            conn = self._by_connector.get(connector_id)
+        else:
+            assert company_id is not None
+            conn = self._by_company.get(company_id)
         if conn is None:
             return False
         # Treat as offline if heartbeat is stale (>90s per protocol).
@@ -218,20 +250,26 @@ class ConnectorRegistry:
     async def send_command(
         self,
         *,
-        company_id: UUID,
+        company_id: UUID | None = None,
+        connector_id: UUID | None = None,
         command: str,
         args: dict[str, Any],
         timeout_seconds: int = 30,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        conn = self._by_company.get(company_id)
+        conn = (
+            self._by_connector.get(connector_id)
+            if connector_id is not None
+            else self._by_company.get(company_id) if company_id is not None else None
+        )
         if conn is None:
             raise ConnectorOffline(
-                f"no active connector for company {company_id}"
+                f"no active connector for {connector_id or company_id}"
             )
         return await conn.send_command(
             command=command,
             args=args,
+            company_id=company_id,
             timeout_seconds=timeout_seconds,
             idempotency_key=idempotency_key,
         )
@@ -242,7 +280,8 @@ class ConnectorRegistry:
         if conn is None:
             return None
         return {
-            "company_id": str(conn.company_id),
+            "company_id": str(company_id),
+            "connector_id": str(conn.connector_id),
             "connected": True,
             "last_seen_at": conn.last_heartbeat_at.isoformat(),
             "tally_running": conn.tally_running,

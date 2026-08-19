@@ -26,6 +26,12 @@ from typing import Any, Literal
 
 import httpx
 
+from connector.tally_data_folder import (
+    TallyCompanyDiscovery,
+    TallyDataFolderError,
+    list_companies,
+)
+
 # ---------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------
@@ -108,6 +114,10 @@ class TallyAmbiguousResponse(TallyError):
         )
         self.parsed = parsed
         self.raw_body = raw_body
+
+
+class WrongCompanyOpen(TallyError):
+    """The requested company is not the company currently open in Tally."""
 
 
 # ---------------------------------------------------------------------
@@ -520,10 +530,12 @@ class TallyClient:
         host: str = "localhost",
         port: int = 9000,
         timeout: float = 30.0,
+        data_folder_path: str | None = None,
     ) -> None:
         self.base_url = f"http://{host}:{port}"
         self.timeout = timeout
         self.headers = {"Content-Type": "application/xml"}
+        self.data_folder_path = data_folder_path
 
     # ------------------------------------------------------------------
     # ping
@@ -740,6 +752,46 @@ class TallyClient:
         )
         body = await self._post_xml(xml)
         return self._parse_company_info(body)
+
+    def list_tally_companies(self) -> list[TallyCompanyDiscovery]:
+        if not self.data_folder_path:
+            raise ValueError("TALLY_DATA_FOLDER_PATH is not configured")
+        return list_companies(self.data_folder_path)
+
+    async def get_active_tally_company(self) -> dict[str, Any]:
+        """Return active company, matching its verified GUID to discovery."""
+        try:
+            company = await self.get_company_info()
+        except TallyError:
+            return {
+                "tally_running": False,
+                "active_company_identifier": None,
+                "active_company_name": None,
+                "tally_company_guid": None,
+                "tally_company_identifier": None,
+                "tally_company_name": None,
+            }
+        identifier = None
+        if self.data_folder_path and company.guid:
+            try:
+                identifier = next(
+                    (
+                        item.identifier
+                        for item in self.list_tally_companies()
+                        if item.guid and item.guid == company.guid
+                    ),
+                    None,
+                )
+            except TallyDataFolderError:
+                identifier = None
+        return {
+            "tally_running": True,
+            "tally_company_guid": company.guid,
+            "active_company_identifier": identifier,
+            "active_company_name": company.name,
+            "tally_company_identifier": identifier,
+            "tally_company_name": company.name,
+        }
 
     def _parse_company_info(self, xml_string: str) -> CompanyInfo:
         try:

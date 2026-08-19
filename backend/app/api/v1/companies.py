@@ -8,10 +8,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_role
 from app.api.v1.auth import _user_audit_emitter
 from app.core.audit import AuditEmitter
 from app.core.database import get_db
+from app.models.company import Company, CompanyRole
+from app.models.connector import Connector, ConnectorCompanyBinding, TallyCompanyDiscovery
 from app.models.user import User
 from app.schemas.company import (
     CompanyCreate,
@@ -25,9 +27,46 @@ from app.schemas.company import (
     MemberRoleUpdate,
     PaginationMeta,
 )
+from app.schemas.tally_mapping import TallyMappingOut, TallyMappingRequest
 from app.services.company_service import CompanyService
+from app.services.tally.discovery_service import bind_discovery_reference
 
 router = APIRouter(prefix="/companies", tags=["companies"])
+
+
+@router.post("/{company_id}/tally-mapping", response_model=TallyMappingOut)
+def configure_tally_mapping(
+    company_id: UUID,
+    body: TallyMappingRequest,
+    request: Request,
+    company: Company = Depends(require_role(CompanyRole.owner, CompanyRole.admin)),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TallyMappingOut:
+    if company_id != company.id:
+        from app.core.exceptions import CompanyNotFound
+        raise CompanyNotFound("Company not found.")
+    discovery = db.query(TallyCompanyDiscovery).filter(TallyCompanyDiscovery.id == body.discovery_id).first()
+    if discovery is None:
+        from app.core.exceptions import NotFound
+        raise NotFound("Tally company was not found in discovery.")
+    connector = db.query(Connector).filter(Connector.id == discovery.connector_id).first()
+    binding = db.query(ConnectorCompanyBinding).filter(
+        ConnectorCompanyBinding.connector_id == discovery.connector_id,
+        ConnectorCompanyBinding.company_id == company.id,
+    ).first()
+    if connector is None or (connector.enrolled_company_id != company.id and binding is None):
+        from app.core.exceptions import Forbidden
+        raise Forbidden("Connector is not authorized for this company.")
+    audit = _user_audit_emitter(request, db, user, company=company)
+    binding = bind_discovery_reference(db, company=company, discovery_id=body.discovery_id,
+        user_id=user.id, audit=audit)
+    db.commit()
+    db.refresh(binding)
+    return TallyMappingOut(company_id=company.id, connector_id=binding.connector_id,
+        tally_data_folder_path=binding.data_folder_path, tally_company_identifier=binding.tally_company_identifier,
+        tally_company_display_name=binding.tally_company_display_name,
+        tally_mapping_configured_at=binding.configured_at, tally_mapping_configured_by=binding.configured_by)
 
 
 def _audit(

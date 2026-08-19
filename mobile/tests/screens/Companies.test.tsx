@@ -16,10 +16,15 @@ const mockListCompanies = jest.fn();
 const mockCreateCompany = jest.fn();
 const mockSetActive = jest.fn();
 const mockRefreshMe = jest.fn();
+const mockMapTallyCompany = jest.fn();
 
 jest.mock("../../src/api/companies", () => ({
   listCompanies: (...args: unknown[]) => mockListCompanies(...args),
   createCompany: (...args: unknown[]) => mockCreateCompany(...args),
+}));
+
+jest.mock("../../src/api/connector", () => ({
+  mapTallyCompany: (...args: unknown[]) => mockMapTallyCompany(...args),
 }));
 
 jest.mock("../../src/context/CompanyContext", () => ({
@@ -55,6 +60,8 @@ beforeEach(() => {
   mockCreateCompany.mockReset();
   mockSetActive.mockReset();
   mockRefreshMe.mockReset();
+  mockMapTallyCompany.mockReset();
+  mockMapTallyCompany.mockResolvedValue({});
 });
 
 test("CompanyListScreen renders rows and marks the active one", async () => {
@@ -141,4 +148,17 @@ test("CompanyCreateScreen submits and switches active company", async () => {
   expect(mockRefreshMe).toHaveBeenCalled();
   expect(mockSetActive).toHaveBeenCalledWith("c-new");
   expect(onCreated).toHaveBeenCalled();
+});
+
+test("CompanyListScreen maps a reviewed discovery to the selected company", async () => {
+  mockListCompanies.mockResolvedValueOnce({
+    items: [{ id: "c2", name: "Beta", gstin: null, status: "active", your_role: "owner" }],
+    meta: { next_cursor: null, total: 1 },
+  });
+  const { findByLabelText } = render(
+    <CompanyListScreen onCreate={jest.fn()} onPick={jest.fn()} pendingDiscoveryId="discovery-1" />,
+  );
+  await act(async () => fireEvent.press(await findByLabelText("select-c2")));
+  await waitFor(() => expect(mockMapTallyCompany).toHaveBeenCalledWith("discovery-1"));
+  expect(mockSetActive).toHaveBeenCalledWith("c2");
 });

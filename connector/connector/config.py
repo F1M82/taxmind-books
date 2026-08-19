@@ -27,7 +27,7 @@ class ConnectorSettings(BaseSettings):
 
     # ---------------- Backend WebSocket ----------------
     BACKEND_WS_URL: str = Field(
-        default="wss://api.taxmindbooks.com/api/v1/connector/ws",
+        default="wss://books.gcwealthguru.com/api/v1/connector/ws",
         description="WS endpoint the connector dials into.",
     )
     CONNECTOR_TOKEN: SecretStr | None = Field(

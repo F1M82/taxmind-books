@@ -8,6 +8,7 @@ and expects a `command_result`.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 from contextlib import asynccontextmanager
 from typing import Any
@@ -214,14 +215,18 @@ async def test_active_company_polling_emits_only_on_change() -> None:
     from unittest.mock import AsyncMock
 
     tally = _fake_tally()
+    _sequence = [
+        {"tally_company_identifier": "10000", "tally_company_name": "A"},
+        {"tally_company_identifier": "10000", "tally_company_name": "A"},
+        {"tally_company_identifier": "10001", "tally_company_name": "B"},
+        {"tally_company_identifier": "10001", "tally_company_name": "B"},
+        {"tally_company_identifier": "10001", "tally_company_name": "B"},
+    ]
     tally.get_active_tally_company = AsyncMock(  # type: ignore[method-assign]
-        side_effect=[
-            {"tally_company_identifier": "10000", "tally_company_name": "A"},
-            {"tally_company_identifier": "10000", "tally_company_name": "A"},
-            {"tally_company_identifier": "10001", "tally_company_name": "B"},
-            {"tally_company_identifier": "10001", "tally_company_name": "B"},
-            {"tally_company_identifier": "10001", "tally_company_name": "B"},
-        ]
+        side_effect=itertools.chain(
+            _sequence,
+            itertools.repeat(_sequence[-1]),
+        )
     )
     sent: list[dict[str, Any]] = []
 

@@ -12,7 +12,7 @@ from app.api.deps import get_current_user, require_role
 from app.api.v1.auth import _user_audit_emitter
 from app.core.audit import AuditEmitter
 from app.core.database import get_db
-from app.models.company import Company, CompanyRole
+from app.models.company import Company, CompanyRole, UserCompany
 from app.models.connector import Connector, ConnectorCompanyBinding, TallyCompanyDiscovery
 from app.models.user import User
 from app.schemas.company import (
@@ -51,11 +51,21 @@ def configure_tally_mapping(
         from app.core.exceptions import NotFound
         raise NotFound("Tally company was not found in discovery.")
     connector = db.query(Connector).filter(Connector.id == discovery.connector_id).first()
-    binding = db.query(ConnectorCompanyBinding).filter(
-        ConnectorCompanyBinding.connector_id == discovery.connector_id,
-        ConnectorCompanyBinding.company_id == company.id,
+    authorized = db.query(UserCompany).filter(
+        UserCompany.user_id == user.id,
+        UserCompany.company_id == connector.enrolled_company_id,
+        UserCompany.role.in_([CompanyRole.owner, CompanyRole.admin]),
     ).first()
-    if connector is None or (connector.enrolled_company_id != company.id and binding is None):
+    if authorized is None:
+        authorized = db.query(UserCompany).join(
+            ConnectorCompanyBinding,
+            ConnectorCompanyBinding.company_id == UserCompany.company_id,
+        ).filter(
+            ConnectorCompanyBinding.connector_id == discovery.connector_id,
+            UserCompany.user_id == user.id,
+            UserCompany.role.in_([CompanyRole.owner, CompanyRole.admin]),
+        ).first()
+    if connector is None or authorized is None:
         from app.core.exceptions import Forbidden
         raise Forbidden("Connector is not authorized for this company.")
     audit = _user_audit_emitter(request, db, user, company=company)

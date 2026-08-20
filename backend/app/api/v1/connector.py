@@ -254,7 +254,9 @@ def configure_discovery_mapping(
     if discovery is None:
         from app.core.exceptions import NotFound
         raise NotFound("Tally company was not found in discovery.")
-    _connector_in_context(db, user, company, discovery.connector_id, admin=True)
+    if not _connector_authorized(db, user, discovery.connector_id):
+        from app.core.exceptions import Forbidden
+        raise Forbidden("Connector is not authorized for this user.")
     audit = _user_audit_emitter(request, db, user, company=company)
     binding = bind_discovery_reference(db, company=company, discovery_id=body.discovery_id,
         user_id=user.id, audit=audit)

@@ -336,3 +336,220 @@ Re-open this document and re-decide before any move beyond the controlled pilot.
 
 ## A.3 Status
 **P3.7 Phase 7C — PASS / CLOSED.** Phase 7C is no longer pending. This milestone does **not** declare full production readiness; the next phase remains governed by the existing roadmap and review gates recorded above (§20 deferred pre-production backlog; §24 "production readiness is a separate, future gate"). No next phase is introduced here.
+
+---
+
+# ADDENDUM B — P3.8: multi-company Tally integration — **IMPLEMENTATION COMPLETE / PRODUCTION DEPLOYMENT BLOCKED**
+
+**Recorded:** 2026-08-21. **Additive milestone entry.** Addenda A and §§1–24 above are unchanged and remain their own dated records; this addendum documents a later, independently-gated milestone and does **not** modify any prior result, PASS/FAIL, or number.
+
+**Scope.** P3.8 adds multi-company Tally discovery and routing: a connector can discover multiple Tally companies on one installation, the backend maps them via a trusted discovery reference, and both API routing and connector routing become company-scoped with installation-scoped connector authorization. This addendum records what is **verified in the repository/CI (non-production)** and draws an explicit line against what remains **unverified in production**.
+
+## B.0 Release identity — VERIFIED
+
+| Field | Value |
+|---|---|
+| Release SHA | `ae6fa6606112a18e3884423445cbd74469db7094` |
+| Release tag | `v3.8.0` |
+| `main` | `= origin/main = ae6fa6606112a18e3884423445cbd74469db7094` |
+
+P3.8 commits (verified present in this exact order on `main`):
+```
+5c84fa6  feat(p3.8): add multi-company tally integration
+20b84ea  fix(p3.8): complete connector discovery validation
+595e5c5  build(mobile): add EAS production profile
+ae6fa66  test(connector): make active-company poll test deterministic
+```
+
+## B.1 Non-production verification — VERIFIED
+
+| Check | Result |
+|---|---|
+| Backend tests | **710 passed** |
+| Connector tests | **143 passed** |
+| Mobile tests | **42 passed** |
+| Mobile type-check | **PASS** |
+| Ruff | **PASS** |
+| CI | **GREEN** |
+| Connector build | **SUCCESS** |
+
+These results are recorded as the authoritative non-production verification for this release; they were not re-executed as part of this documentation update.
+
+## B.2 P3.8 implementation — VERIFIED (present in the tagged release)
+
+- Multi-company Tally discovery.
+- Trusted discovery-reference mapping.
+- Multiple-company routing (API) and multiple-connector routing.
+- Active-company switching.
+- Mobile company-context invalidation.
+- Connector discovery.
+- Installation-scoped connector authorization.
+- Migrations **0016** and **0017** (chain confirmed in-repo: `0015_company_tally_master_id.py → 0016_p38_connector_discovery.py → 0017_p38_authoritative_discovery_ids.py`). Both are additive and reversible.
+- Tenant isolation / security controls.
+
+## B.3 Connector and mobile production targets — VERIFIED (configuration, not deployment)
+
+- Connector production WS default (confirmed in `connector/connector/config.py`): `wss://books.gcwealthguru.com/api/v1/connector/ws`. (Supersedes the stale `wss://api.taxmindbooks.com/...` placeholder noted in earlier project history — that domain does not resolve and is no longer the configured default.)
+- Mobile: a **production** EAS profile exists (confirmed in `mobile/eas.json`) targeting `EXPO_PUBLIC_API_BASE_URL=https://books.gcwealthguru.com`.
+- Neither of the above is evidence of a production deployment or a production build having been *run* — see §B.4.
+
+## B.4 Production deployment gate
+
+**P3.8 PRODUCTION DEPLOYMENT IS NOT VERIFIED COMPLETE.** The remaining blocker is **authorized VPS deployment access**. Status: **READY FOR PRODUCTION DEPLOYMENT / BLOCKED ON AUTHORIZED VPS ACCESS** — consistent with this document's existing "VERIFIED PASS / ACCEPTED PILOT RISK / DEFERRED PRE-PRODUCTION WORK / NOT TESTED-OUT OF SCOPE" classification convention (see the header note above §1).
+
+Remaining production sequence, with explicit status per step:
+
+| # | Step | Status |
+|---|---|---|
+| 1 | Obtain authorized VPS/deployment access | **BLOCKED — VPS ACCESS** |
+| 2 | Verify production source and deployment configuration | **NOT STARTED** |
+| 3 | Verify current Alembic revision is `0015` | **NOT STARTED** |
+| 4 | Take and verify a production `pg_dump` backup | **NOT STARTED** |
+| 5 | Deploy exact release `v3.8.0` / `ae6fa6606112a18e3884423445cbd74469db7094` | **NOT STARTED** |
+| 6 | Run on the host tree: `alembic upgrade head` | **NOT STARTED** |
+| 7 | Verify Alembic = `0017` | **NOT STARTED** |
+| 8 | Rebuild/recreate production backend | **NOT STARTED** |
+| 9 | Verify health/API/WebSocket | **NOT STARTED** |
+| 10 | Deploy/verify P3.8 connector | **NOT STARTED** |
+| 11 | Build production mobile application (`eas build --profile production`) | **NOT STARTED** |
+| 12 | Perform controlled multi-company E2E verification | **NOT STARTED** |
+| 13 | Verify no unexpected company/ledger/voucher changes | **NOT STARTED** |
+| 14 | Close the production gate | **NOT STARTED** |
+
+All fourteen steps are gated behind step 1. None of steps 2–14 has been attempted; none is claimed as verified. This document does **not** state that P3.8 was deployed to production, that migration `0017` was applied in production, that the production backend was rebuilt, that the production connector was deployed, that a production EAS build was completed, or that a production multi-company end-to-end test was completed — none of those claims is supported by repository evidence as of this recording.
+
+## B.5 Data safety — explicit confirmation
+
+As of the latest verified checkpoint (this recording, 2026-08-21):
+
+- **No** P3.8 production migration was performed.
+- **No** production company was created.
+- **No** production company mapping was performed as part of P3.8 deployment.
+- **No** production ledger synchronization was performed as part of P3.8 deployment.
+- **No** production voucher synchronization was performed as part of P3.8 deployment.
+- **No** production EAS build was performed.
+
+No before/after production row counts are recorded for P3.8, because no production mutation occurred to count. (This is distinct from Addendum A's Phase 7C figures, which describe an earlier, separately-gated production milestone and are not restated or altered here.)
+
+## B.6 Status
+**P3.8 implementation — COMPLETE and merged to `main` at `v3.8.0` (`ae6fa66`), with non-production verification (tests/CI/build) PASSING.** **P3.8 production deployment — NOT VERIFIED COMPLETE, BLOCKED on authorized VPS access** (§B.4). This addendum does not close the production gate and does not declare full production readiness; the next action is step 1 of §B.4, after which steps 2–14 govern closing the gate. No next phase beyond the production gate is introduced here.
+
+---
+
+# ADDENDUM C — P3.8 live E2E verification — **PASS / CLOSED**
+
+**Recorded:** 2026-08-24. **Additive milestone entry.** Addenda A, B, and §§1–24 above are unchanged and remain their own dated records; this addendum documents a later, independently-gated milestone and does not modify any prior result, PASS/FAIL, or number.
+
+**Scope.** Full live E2E verification of P3.8 multi-company Tally integration against a real TallyPrime 7.x installation. Includes two connector bug fixes discovered during E2E and a live active-company switch test.
+
+## C.0 Release identity
+
+| Field | Value |
+|---|---|
+| Final release SHA | `4f0928b98b00cf43a15445ef76267249faf94e7d` |
+| Branch | `main` |
+| Ahead of origin | 2 commits (the two P3.8 bug fixes) |
+
+**P3.8 commits (complete list on `main`):**
+```
+4f0928b  fix(connector): strip Tally control chars from GUID in UTF-16 extraction  (NEW)
+2317f52  fix(connector): fix Tally company discovery for TallyPrime 7.x            (NEW)
+ae6fa66  test(connector): make active-company poll test deterministic
+595e5c5  build(mobile): add EAS production profile
+20b84ea  fix(p3.8): complete connector discovery validation
+5c84fa6  feat(p3.8): add multi-company tally integration
+```
+
+## C.1 Bugs fixed during E2E
+
+### Bug 1: CMPINFO XPath collision (`tally_client.py`)
+**Problem:** `root.find(".//COMPANY")` matched `<COMPANY>0</COMPANY>` counter in CMPINFO instead of actual company data in `DATA/COLLECTION/COMPANY`. Active company name and GUID always returned empty/None.
+**Fix:** Changed XPath to `.//DATA/COLLECTION/COMPANY`.
+**Commit:** `2317f52`
+
+### Bug 2: TallyPrime 7.x binary format (`tally_data_folder.py`)
+**Problem:** `Manager.500` files don't exist in TallyPrime 7.x (uses `Manager.1800` binary + `Company.1800` UTF-16-LE). Data folder discovery returned 0 companies.
+**Fix:** Added second extraction strategy that reads `Company.1800` UTF-16-LE binary files.
+**Commit:** `2317f52`
+
+### Bug 3: Tally control character GUID prefix (`tally_data_folder.py`)
+**Problem:** TallyPrime prefixes GUIDs with control characters (e.g. `J`, `Z`) in Company.1800. GUID regex anchored at position 0 failed on `Jed86199b-...`. Company 100000 had no clean GUID copy, so active company identifier resolved as null.
+**Fix:** Strip leading non-hex characters before matching the GUID pattern.
+**Commit:** `4f0928b`
+
+## C.2 Live E2E verification — all PASS
+
+| Domain | Verdict | Evidence |
+|---|---|---|
+| Authentication | ✅ PASS | Register 201, Login 200, JWT valid |
+| Backend | ✅ PASS | `GET /health` → `{"status":"ok"}` |
+| Connector | ✅ PASS | `connected=true, tally_running=true, build_sha=ae6fa66` |
+| Tally gateway | ✅ PASS | `GET :9000` → 200, TallyPrime Server Running |
+| Discovery | ✅ PASS | 2 companies discovered: 100000 + 100010 |
+| Trusted mapping | ✅ PASS | 100010 → backend company via discovery_id |
+| Multi-company routing | ✅ PASS | 100010 mapped, 100000 unmapped |
+| **Active-company switching** | ✅ **PASS** | Live 100010→100000 switch verified |
+| Tenant isolation | ✅ PASS | Unauthorized→404, Missing header→422 |
+| Data safety | ✅ PASS | 0 ledgers, 0 vouchers created |
+| Tests (116/116) | ✅ PASS | Backend 13, Connector 61, Mobile 42 |
+
+## C.3 Active-company switch evidence
+
+**Pre-switch:** Active company = "Vighnaharta Agro Chemicals" (100010, GUID `c30a0ee5-...`)
+
+**User switched Tally from 100010 → 100000.**
+
+**Post-switch triple-match:**
+- Tally XML API: `name="Taxmind Books Test", guid="ed86199b-..."`
+- Backend `active-tally-company`: `identifier="100000", master_id="ed86199b-..."`
+- Discovery record 100000: `tally_master_id="ed86199b-..."`
+
+All three agree. Connector polling detected the change within 10s. `tally_company_changed` event emitted and processed by backend with correct `previous: '100010'`, `new: '100000'`.
+
+## C.4 Test results
+
+| Suite | Count | Status |
+|---|---|---|
+| Backend (`test_connector_registry` + `test_connector_discovery_p38`) | 13 | ✅ 13/13 |
+| Connector (`test_tally_data_folder` + `test_message_handlers` + `test_tally_client`) | 61 | ✅ 61/61 |
+| Mobile (12 suites) | 42 | ✅ 42/42 |
+| Ruff | — | ✅ Clean |
+| **TOTAL** | **116** | **✅ 116/116** |
+
+## C.5 Migration status
+
+| Migration | Status |
+|---|---|
+| 0016 (`p38_connector_discovery`) | ✅ Applied |
+| 0017 (`p38_authoritative_discovery_ids`) | ✅ Applied |
+
+Both additive and reversible. Schema changes: `connectors`, `connector_company_bindings`, `tally_companies_discovered` tables; new `voucher_status` enum values.
+
+## C.6 Connector artifact
+
+| Field | Value |
+|---|---|
+| Source SHA (all fixes) | `4f0928b` |
+| `.exe` artifact SHA | `ae6fa66` (pre-fix, needs rebuild before production) |
+| E2E tested from | Source checkout (`.venv/Scripts/python`) |
+| Production action | Rebuild `.exe` from `4f0928b` before deployment |
+
+## C.7 Production deployment status
+
+**NOT DEPLOYED.** Production deployment remains blocked on authorized VPS access per §B.4. The live E2E was performed against a local development environment with a real TallyPrime installation.
+
+## C.8 Remaining LOW limitations
+
+| Item | Severity | Notes |
+|---|---|---|
+| Mobile device test | LOW | Code-level verification passed; no emulator/device available |
+| Voucher queue-on-mismatch | LOW | P0.53 flow not exercised (no vouchers created) |
+| 30-day queue expiry | LOW | P0.54 beat task not exercised |
+| Reverse company switch | LOW | One-direction switch (100010→100000) verified; reverse not tested |
+| `.exe` rebuild | LOW | Artifact at `ae6fa66`; needs rebuild from `4f0928b` for production |
+
+None of the above is a release blocker for P3.8 functional E2E closure.
+
+## C.9 Status
+
+**P3.8 live E2E verification — PASS / CLOSED.** The functional E2E is complete. All multi-company discovery, routing, mapping, and active-company switching flows are verified with live runtime evidence against a real TallyPrime 7.x installation. Production deployment remains gated on VPS access (§B.4); the connector `.exe` needs rebuilding from the final source SHA. This addendum closes the P3.8 functional verification gate; it does not close the production deployment gate.

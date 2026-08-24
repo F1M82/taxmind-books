@@ -90,11 +90,14 @@ def _extract_company_from_utf16(data: bytes) -> dict[str, str | None]:
             result.setdefault("name", cleaned)
             break
 
-    # GUID: looks like a UUID
+    # GUID: looks like a UUID. TallyPrime may prefix the GUID with a
+    # single control character (e.g. 'J', 'Z', '\x04') in the binary
+    # file.  Strip leading non-hex characters before matching.
     for s in readable:
-        m = re.match(r"[a-f0-9-]{20,}", s, re.I)
-        if m and "-" in s:
-            result.setdefault("guid", s.strip())
+        stripped = re.sub(r"^[^a-fA-F0-9]+", "", s)
+        m = re.match(r"[a-f0-9-]{20,}", stripped, re.I)
+        if m and "-" in stripped:
+            result.setdefault("guid", stripped.strip())
             break
 
     # GSTIN: 15-char alphanumeric matching Indian GSTIN format

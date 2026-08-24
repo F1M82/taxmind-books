@@ -799,7 +799,10 @@ class TallyClient:
         except ET.ParseError as exc:
             raise TallyParseError(str(exc)) from exc
 
-        company = root.find(".//COMPANY")
+        # TallyPrime CMPINFO includes <COMPANY>0</COMPANY> as a counter
+        # element, which .//COMPANY matches first.  We must target the
+        # actual company data inside DATA/COLLECTION/COMPANY.
+        company = root.find(".//DATA/COLLECTION/COMPANY")
         if company is None:
             raise TallyParseError("no <COMPANY> element in Tally response")
         name = _strip_tally_ctrl(company.get("NAME", ""))

@@ -678,3 +678,58 @@ This addendum does **not** claim Claude independently verified the production ru
 ## E.6 Status
 
 **Addendum E closes the P3.8 production deployment gate for backend + connector scope.** Mobile production build and a fresh production-environment multi-company switch test remain open items, explicitly not claimed as done. Production readiness beyond the controlled pilot remains a separate, future gate per §1/§24.
+
+---
+
+# ADDENDUM F — P3.9: production multi-company E2E — **ITEM 12 OPEN / NOT VERIFIED (operational blocker recorded)**
+
+**Recorded:** 2026-09-03. **Additive milestone entry.** Addenda A–E and §§1–24 above are unchanged and remain their own dated records; nothing above is edited, deleted, or renumbered. This addendum is a **documentation-only record of an operational blocker** — no application/source code was modified, no authentication/authorization change was made, no production system was modified, and no evidence was fabricated.
+
+## F.0 Recording basis and evidence classes
+
+Same evidence classification as Addendum E §E.0:
+
+| Class | How it's marked below |
+|---|---|
+| **(i) Repo-checked, this session** | Claude independently ran a read-only check against the repository during this documentation session. | "**Repo-verified**" |
+| **(ii) Founder/prior-session reported** | Production/runtime facts supplied in conversation; Claude did not independently re-execute them. | "**Reported**" |
+| **(iii) Historical record** | Already recorded with its own evidence in Addenda A–E or §§1–24. | "**Per [addendum/section]**" |
+
+## F.1 P3.9 scope
+
+P3.9 is the separately-scoped follow-up to the two items Addendum E explicitly left open (Addendum E §E.4/§E.5): (1) the mobile production build (§B.4 step 11) and (2) a fresh multi-company switch E2E against the production environment (§B.4 step 12). This addendum records the outcome of the P3.9 attempt to close those items.
+
+## F.2 Verified items
+
+| Item | Status | Basis |
+|---|---|---|
+| Connector prerequisite — P3.9 connector process running, bound to Vighnaharta's connector identity, targeting the production WS | **VERIFIED** | **Reported** (prior session), consistent with the prerequisite documented in the E2E script header (`validation/p39_prod_multicompany_e2e.ps1`). The recorded `.p39_e2e_result.json` stops at step `me` and never reached the `connector_status` step, so no fresh connector-status number is claimed here. |
+| Genuine EAS production build (§B.4 step 11 / Addendum E open item 1) | **VERIFIED** | **Reported** via genuine EAS build artifacts on expo.dev (external to the repo). **Repo-verified** partial: `mobile/eas.json` contains a `production` profile (android `app-bundle`, `EXPO_PUBLIC_API_BASE_URL=https://books.gcwealthguru.com`). Note: the in-repo `validation/eas_build_*.log` files (2026-07-28) are **development-profile** runs and are not evidence of the production build. |
+| Membership implementation — investigated | **VERIFIED CORRECT** | **Repo-verified** this session: `backend/app/services/company_service.py` `add_member` raises `InsufficientRole` unless the acting member's role is `owner`; membership is tenant-scoped via the `UserCompany` junction (`backend/app/models/company.py`); auth routes expose only `register`/`login`/`refresh`/`me`/`change_password`; `create_company` creates a **new** company with the caller as owner. There is **no self-service "join existing company" / cross-tenant membership path** and no admin/superuser/bootstrap bypass. |
+| Application defect | **NONE IDENTIFIED** | Repo-verified behavior is consistent with the intended owner-granted, tenant-scoped membership model; no application defect was identified. |
+
+## F.3 Item 12 — production multi-company E2E — **OPEN / NOT VERIFIED**
+
+**Reason:** Production multi-company E2E cannot proceed because the required E2E account cannot be legitimately granted membership in the existing GURUDEV ENGINEERS company. The existing company's owner identity is not documented in project evidence, and the application provides no cross-tenant self-service membership path.
+
+Repo evidence supporting this record:
+- `validation/.p39_membership_diag_result.json` (2026-09-03T15:09:55+05:30): login user `dc640ebc-ae11-42c4-98ab-24e0121e78e2` / `cmagauravchandaliya@gmail.com`; `/auth/me` returns exactly one company — Vighnaharta Agro Chemicals (`32a51be2-13f5-4b75-a67e-0f1d77b3121f`), role `owner`; `companyCount=1`; **no GURUDEV ENGINEERS membership**; login user id matches the recorded `.user_id`.
+- `validation/.p39_e2e_result.json` (2026-09-03T15:51:36+05:30): step `login` OK; step `me` **FAIL** — `vighnaharta=32a51be2-…/owner gurudev=/`.
+
+Item 12 is therefore **NOT VERIFIED** and **remains OPEN**. It is not closed, not bypassed, and not re-run.
+
+## F.4 What was NOT done (explicit)
+
+Per the recording instruction, none of the following was performed:
+- The production multi-company E2E was **not** re-run, and no E2E evidence was fabricated.
+- No production system, database, or configuration was modified.
+- No authentication/authorization code or data was changed; no admin/superuser/bootstrap bypass was introduced or used.
+- No duplicate GURUDEV ENGINEERS company was created, and no membership was fabricated.
+
+## F.5 Required operational action
+
+Completion of Item 12 requires an **operational action by the existing GURUDEV ENGINEERS owner** (whose identity is not documented in project evidence): that owner must grant the E2E account (`dc640ebc-ae11-42c4-98ab-24e0121e78e2` / `cmagauravchandaliya@gmail.com`) membership in GURUDEV ENGINEERS through the application's owner-granted membership path (`POST /api/v1/companies/{company_id}/members`). Until then, the controlled multi-company switch E2E against production cannot legitimately proceed.
+
+## F.6 Status
+
+**P3.9 Item 12 (production multi-company switch E2E) — OPEN / NOT VERIFIED**, operationally blocked on the unknown existing-company owner identity (§F.3, §F.5). The connector prerequisite and the genuine EAS production build are verified (§F.2); the membership implementation was investigated and found correct, with no application defect identified. P3.8 production deployment status per Addendum E is unchanged; production readiness beyond the controlled pilot remains a separate, future gate per §1/§24.

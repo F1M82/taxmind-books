@@ -553,3 +553,44 @@ None of the above is a release blocker for P3.8 functional E2E closure.
 ## C.9 Status
 
 **P3.8 live E2E verification — PASS / CLOSED.** The functional E2E is complete. All multi-company discovery, routing, mapping, and active-company switching flows are verified with live runtime evidence against a real TallyPrime 7.x installation. Production deployment remains gated on VPS access (§B.4); the connector `.exe` needs rebuilding from the final source SHA. This addendum closes the P3.8 functional verification gate; it does not close the production deployment gate.
+
+---
+
+# ADDENDUM D — local connector launch-directory fix + production health check — **NON-CLOSING**
+
+**Recorded:** 2026-09-03. **Additive milestone entry.** Addenda A, B, C and §§1–24 above are unchanged and remain their own dated records; this addendum does not modify any prior result, PASS/FAIL, or number. **This addendum does not close, advance, or alter the §B.4 production deployment gate.** All fourteen §B.4 steps remain exactly as recorded in Addendum B: step 1 blocked on authorized VPS access, steps 2–14 NOT STARTED. Addendum C §C.7 ("NOT DEPLOYED") is likewise unchanged.
+
+## D.0 What was verified this session
+
+| Check | Result | Evidence |
+|---|---|---|
+| Production health endpoint (read-only, unauthenticated) | **VERIFIED PASS** | `GET https://books.gcwealthguru.com/health` → HTTP 200, `{"status":"ok","env":"production"}` |
+| Local dev connector launch-directory root cause | **VERIFIED** | See D.1 |
+| Local dev connector launch-directory fix | **VERIFIED PASS (local only)** | Connector relaunched with corrected working directory; `--version` reports build `1af8bc3`; process stayed alive past the `CONNECTOR_TOKEN`/`CONNECTOR_COMPANY_ID` guard checks in `_async_main`; repeated `POST http://localhost:9000 → 200 OK` observed in connector stderr against the local Tally instance |
+
+**Explicit scope limit on the health-endpoint check:** this confirms *a* backend process is live and responding at `books.gcwealthguru.com` under `env=production`. It does **not** identify which commit/release is currently deployed there, and does **not** confirm migrations `0016`/`0017` have been applied against the production database. It is one data point, not a substitute for §B.4 steps 2–9.
+
+## D.1 Local connector launch-directory issue — root cause and fix
+
+**Symptom:** `TaxMindBooksConnector.exe --version` correctly reported build `1af8bc3`, but launching the connector normally exited with `CONNECTOR_TOKEN missing — run the enrollment flow first.`, despite a valid token being present in `connector/dist/.env`.
+
+**Root cause:** `ConnectorSettings.model_config` in `connector/connector/config.py` sets `env_file=".env"` — a relative path. `pydantic-settings` resolves relative `env_file` paths against the process's current working directory at launch, not the executable's own directory; PyInstaller does not change this. The connector had been launched with CWD = the repository root, where an unrelated backend `.env` template (`docs`/env-example style, containing `TALLY_HOST`/`TALLY_PORT` but no `CONNECTOR_TOKEN` key) was picked up instead of `connector/dist/.env`, so `CONNECTOR_TOKEN` resolved to its Pydantic field default (`None`).
+
+**Fix:** operational only — launch the executable with its working directory set to `connector/dist` (e.g. `Start-Process ... -WorkingDirectory "…\connector\dist"`, or `cd` into that directory before running). **No source, config-loading, or packaging code was changed.**
+
+**Verification performed:** re-launched with corrected CWD; `--version` still reports `1af8bc3`; process ran without the missing-token exit; connector's own stderr showed successful periodic `POST` calls to the local Tally XML interface (`http://localhost:9000` → `200 OK`), consistent with the connector's local Tally-discovery/active-company polling succeeding.
+
+**Verification NOT performed (and not claimed):** the connector's WebSocket handshake to the backend was not independently confirmed in this session — a successful WS connection produces no log output by design (per prior project history), and this session had no backend access token to call `GET /api/v1/connector/status`. `connected=true` is therefore **not asserted** here. Tenant isolation, active-company switching, discovery-record correctness, and absence of unintended mutation were **not re-exercised** this session; those remain as last recorded in Addendum C (§C.2–§C.3, dated 2026-08-24, against a local development environment — not production).
+
+## D.2 Explicit non-claims
+
+This addendum does **not** state, and no evidence in this session supports, that:
+- P3.8 migrations `0016`/`0017` were applied to the production database.
+- A production database backup was taken or verified as part of this session.
+- The production connector was enrolled, launched, or reached `connected=true`/`tally_running=true` against the production backend.
+- Tenant isolation, discovery, or active-company switching were verified against production.
+- Any of the §B.4 steps 2–14 advanced.
+
+## D.3 Status
+
+**Addendum D is informational and non-closing.** It records a local development environment fix (connector launch working directory) and one read-only production health-endpoint check. **The P3.8 production deployment gate (§B.4) and production deployment status (§C.7) are unchanged: production deployment remains NOT VERIFIED COMPLETE, blocked on authorized VPS access.** No release verdict is issued by this addendum.

@@ -594,3 +594,87 @@ This addendum does **not** state, and no evidence in this session supports, that
 ## D.3 Status
 
 **Addendum D is informational and non-closing.** It records a local development environment fix (connector launch working directory) and one read-only production health-endpoint check. **The P3.8 production deployment gate (§B.4) and production deployment status (§C.7) are unchanged: production deployment remains NOT VERIFIED COMPLETE, blocked on authorized VPS access.** No release verdict is issued by this addendum.
+
+---
+
+# ADDENDUM E — P3.8 production deployment reconciliation — **RELEASED / VERIFIED (backend + connector); two named items remain open**
+
+**Recorded:** 2026-09-03. **Additive milestone entry.** Addenda A, B, C, D and §§1–24 above are unchanged and remain their own dated records; nothing above is edited, deleted, or renumbered. This addendum is a **documentation-only reconciliation session** — no application/source code was modified, and no production system was accessed, queried, or changed by Claude during the writing of this addendum.
+
+## E.0 Nature of the evidence in this addendum (read this first)
+
+This addendum draws on three distinct evidence classes. They are kept separate throughout rather than merged into one undifferentiated "VERIFIED PASS," because they carry different evidentiary weight:
+
+| Class | What it means | How it's marked below |
+|---|---|---|
+| **(i) Repo-checked, this session** | Claude independently ran a read-only check against this git repository during this documentation session and reports the actual result. | "**Repo-verified**" |
+| **(ii) Operator-reported, this session** | The operator (Gaurav) reported a production runtime result in conversation. Claude did not execute the underlying command, did not observe raw tool output, and has no VPS/production access in this session to independently re-run it. | "**Operator-reported**" |
+| **(iii) Historical record** | Already recorded, with its own evidence, in Addenda A–D or §§1–24 above. | "**Per [addendum/section]**" |
+
+Per instruction, this addendum does not fabricate command output, timestamps, backup paths, or HTTP bodies beyond what was actually supplied, and does not claim Claude performed production actions it did not perform.
+
+## E.1 Repo-verified checks (run this session)
+
+| Check | Result |
+|---|---|
+| Full SHA of `1af8bc3` | **Confirmed**: `git rev-parse 1af8bc3` → `1af8bc3b645a5456992711aca3c0377765233b53`, matching the reported final source SHA exactly. |
+| What `1af8bc3` is | It is `docs(release): add P3.8 E2E closure addendum to readiness doc` — i.e. the commit that added Addendum C to this document. The last *functional* commit on `main` before it is `4f0928b` (`fix(connector): strip Tally control chars…`), already recorded in Addendum C as the "Final release SHA" for the functional fixes. |
+| `v3.8.0` tag target | **Discrepancy found:** the local `v3.8.0` tag object still resolves to `ae6fa6606112a18e3884423445cbd74469db7094` (the SHA recorded in Addendum B), **not** to `1af8bc3` or `4f0928b`. The tag was not moved forward when the two post-tag connector fixes (`2317f52`, `4f0928b`) and the Addendum C/D docs commits landed on `main`. This is a pre-existing bookkeeping gap, not something this session introduced — flagged here so "release SHA" and "tag" aren't read as interchangeable. |
+| Alembic migration files `0015`→`0017` | **Present in-repo**: `0015_company_tally_master_id.py`, `0016_p38_connector_discovery.py`, `0017_p38_authoritative_discovery_ids.py` — chain matches what Addenda B/C already recorded. This confirms the *migration files exist and are the ones described*; it says nothing about whether they were applied to the production database (see §E.2). |
+| `HEAD` at time of this reconciliation | `558c3a3018f47e520c6fa059ead7c069242e254f` (`docs(release): add P3.8 addendum D`) — i.e. `1af8bc3` is one commit behind current `HEAD`, and both are docs commits. |
+
+## E.2 Operator-reported production evidence (this session)
+
+The operator reported the following about the actual production deployment. None of it was independently re-executed by Claude in this session (no VPS/SSH/database/connector access was available or used):
+
+| Area | Operator-reported result |
+|---|---|
+| Health endpoint | `GET https://books.gcwealthguru.com/health` → HTTP 200, `{"status":"ok","env":"production"}` |
+| Migrations | `0015 → 0016 → 0017` applied to the production database |
+| Backup | A production backup was taken and restore-verified |
+| Backend deploy | Production backend rebuilt/deployed from the approved release |
+| P3.8 routes | Verified live in production |
+| Connector enrollment | Enrollment ceremony completed; connector token obtained and configured in `connector/dist/.env` (working directory required per Addendum D §D.1 — operational finding, not a code change) |
+| Connector status | `connected=true, tally_running=true` against the production backend |
+| Tally gateway | `GET :9000` → HTTP 200, `<RESPONSE>TallyPrime Server is Running</RESPONSE>` |
+| Discovery / active-company | Discovery and active-company flow exercised against production |
+| Tenant isolation | Referenced as previously verified (Addendum C, local dev) |
+| Data safety | No unintended company/mapping/ledger/voucher activity during deployment/verification |
+| Tests | Backend 710 / Connector 143 / Mobile 42 passed; mobile type-check PASS; Ruff PASS; CI GREEN — these are the **same figures already on record in Addendum B §B.1**, not a new test run reported for this session |
+
+## E.3 Reconciling against the §B.4 fourteen-step production gate
+
+| # | §B.4 step | Status after this reconciliation | Basis |
+|---|---|---|---|
+| 1 | Authorized VPS/deployment access | **CLOSED** | Operator-reported; implied by all subsequent steps |
+| 2 | Verify production source/config | **CLOSED** | Operator-reported ("rebuilt/deployed from the approved release") |
+| 3 | Verify pre-migration Alembic = `0015` | **CLOSED (inferred)** | Operator-reported migration chain starts at `0015`; no explicit pre-check output supplied |
+| 4 | Take/verify production `pg_dump` backup | **CLOSED, with a caveat** | Operator-reported "previously taken" — the phrasing doesn't distinguish a fresh pre-migration snapshot from the standing backup capability already recorded at §6/Addendum A; operator should confirm a dedicated pre-`0016` snapshot exists if one doesn't already |
+| 5 | Deploy exact release `v3.8.0` / SHA | **CLOSED, with the tag caveat in §E.1** | Operator-reported; SHA `1af8bc3` repo-verified; `v3.8.0` tag object itself is stale (points to `ae6fa66`) — recommend re-tagging if the tag is meant to track the deployed source |
+| 6 | Run `alembic upgrade head` | **CLOSED** | Operator-reported |
+| 7 | Verify Alembic = `0017` | **CLOSED** | Operator-reported |
+| 8 | Rebuild/recreate production backend | **CLOSED** | Operator-reported |
+| 9 | Verify health/API/WebSocket | **CLOSED** | Health: operator-reported HTTP 200 body. WebSocket: inferred from connector `connected=true`, not from a raw WS-upgrade check |
+| 10 | Deploy/verify P3.8 connector | **CLOSED** | Operator-reported |
+| 11 | Build production mobile application (`eas build --profile production`) | **NOT CLOSED — open item** | Nothing in this session's evidence describes an EAS production build being run. The "Mobile: 42 passed" figure is the unit-test count already on record (Addendum B), not a build. This step remains as last recorded: **NOT STARTED**. |
+| 12 | Controlled multi-company E2E verification (production) | **NOT CLOSED — open item** | The evidence states discovery/active-company was "exercised" against production, but active-company *switching* is explicitly reported as "previously verified" — i.e. referring back to Addendum C's local-dev-environment test, not a fresh switch test against production. A full multi-company switch-and-verify E2E specifically against the production environment is not evidenced here. |
+| 13 | Verify no unexpected company/ledger/voucher changes | **CLOSED (for the deployment window)** | Operator-reported; scoped to "during deployment/verification," not a substitute for the full E2E in #12 |
+| 14 | Close the production gate | **PARTIALLY CLOSED** | See §E.4 — the gate closes for backend + connector; items 11 and 12 remain open |
+
+## E.4 Final verdict
+
+**P3.8 backend + connector production deployment: RELEASED / VERIFIED**, on the basis of the operator-reported evidence in §E.2 reconciled against the §B.4 gate in §E.3, with the SHA/tag caveat in §E.1.
+
+**Two items are explicitly NOT closed by this reconciliation and remain open, not fabricated as done:**
+1. **Mobile production build** (§B.4 step 11) — no EAS production build is evidenced.
+2. **Fresh multi-company switch E2E against the production environment** (§B.4 step 12) — the only switch test on record remains Addendum C's, against a local development environment.
+
+This addendum does **not** claim Claude independently verified the production runtime facts in §E.2 — those are recorded as operator-reported, per §E.0. It does independently confirm, from the repository itself, the SHA identity and migration-file chain in §E.1, and surfaces the pre-existing `v3.8.0` tag/SHA mismatch for the operator's awareness.
+
+## E.5 P3.8 freeze
+
+**P3.8 IS NOW FROZEN.** No further P3.8 engineering changes should be made unless a new defect, security issue, or separately approved change is identified. Items 11 and 12 above, if pursued, should be tracked as new, separately-scoped follow-up work against this frozen baseline — not as unfinished P3.8 engineering.
+
+## E.6 Status
+
+**Addendum E closes the P3.8 production deployment gate for backend + connector scope.** Mobile production build and a fresh production-environment multi-company switch test remain open items, explicitly not claimed as done. Production readiness beyond the controlled pilot remains a separate, future gate per §1/§24.

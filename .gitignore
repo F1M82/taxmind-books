@@ -102,6 +102,9 @@ $RECYCLE.BIN/
 .env.staging
 .env.test
 secrets/
+validation/.access_token
+validation/.user_id
+validation/.last_voucher_id
 *.secret
 
 # ---------- Logs / temp ----------

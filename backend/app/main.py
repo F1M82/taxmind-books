@@ -84,11 +84,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(settings.LOG_LEVEL)
     configure_decimal_context()
 
+    # Hide the interactive API docs + OpenAPI schema in production. Setting
+    # openapi_url=None also disables /docs and /redoc; we pass all three
+    # explicitly so the intent is obvious. Non-prod envs keep them on.
+    is_prod = settings.APP_ENV.strip().lower() == "production"
+
     app = FastAPI(
         title="TaxMind Books API",
         version="0.1.0",
         description="Backend API for TaxMind Books — Phase 0 skeleton",
         lifespan=_build_lifespan(settings),
+        docs_url=None if is_prod else "/docs",
+        redoc_url=None if is_prod else "/redoc",
+        openapi_url=None if is_prod else "/openapi.json",
     )
     install_error_handlers(app)
     app.include_router(api_v1)

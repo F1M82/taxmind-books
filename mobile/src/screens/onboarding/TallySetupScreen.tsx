@@ -74,22 +74,25 @@ export default function TallySetupScreen({
       {companies?.map((company) => {
         const isMapped = company.mapped_to_backend_company_id === activeCompanyId;
         const mappedElsewhere = company.mapped_to_backend_company_id !== null && !isMapped;
+        const isSelected = selected?.discovery_id === company.discovery_id;
         return (
-           <Pressable key={company.discovery_id} accessibilityRole="button" accessibilityLabel={`tally-company-${company.discovery_id}`} onPress={() => selectCompany(company)} style={[styles.card, selected?.discovery_id === company.discovery_id && styles.selected]}>
-            <Text style={styles.name}>{company.tally_company_name}</Text>
-            <Text style={styles.meta}>{company.gstin ?? "No GSTIN"}</Text>
-            <Text style={isMapped ? styles.mapped : mappedElsewhere ? styles.unavailable : styles.unmapped}>
-              {isMapped ? "Mapped to this company" : mappedElsewhere ? "Mapped to another company" : "Unmapped"}
-            </Text>
-          </Pressable>
+          <React.Fragment key={company.discovery_id}>
+            <Pressable accessibilityRole="button" accessibilityLabel={`tally-company-${company.discovery_id}`} onPress={() => selectCompany(company)} style={[styles.card, isSelected && styles.selected]}>
+              <Text style={styles.name}>{company.tally_company_name}</Text>
+              <Text style={styles.meta}>{company.gstin ?? "No GSTIN"}</Text>
+              <Text style={isMapped ? styles.mapped : mappedElsewhere ? styles.unavailable : styles.unmapped}>
+                {isMapped ? "Mapped to this company" : mappedElsewhere ? "Mapped to another company" : "Unmapped"}
+              </Text>
+            </Pressable>
+            {isSelected && selected && <View style={styles.confirmBox}>
+              <Text>Review mapping for {selected.tally_company_name}</Text>
+              <Text style={styles.subtitle}>Choose an authorized company before mapping. This will not map the current company automatically.</Text>
+              {onReviewExistingCompany && <Pressable accessibilityRole="button" accessibilityLabel="review-existing-company" onPress={() => onReviewExistingCompany(selected.discovery_id)} style={styles.button}><Text style={styles.buttonText}>Choose an existing company</Text></Pressable>}
+              {onCreateCompany && <Pressable accessibilityRole="button" accessibilityLabel="create-company-for-tally" onPress={() => onCreateCompany(selected.discovery_id)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Create a new company</Text></Pressable>}
+            </View>}
+          </React.Fragment>
         );
       })}
-       {selected && <View style={styles.confirmBox}>
-         <Text>Review mapping for {selected.tally_company_name}</Text>
-         <Text style={styles.subtitle}>Choose an authorized company before mapping. This will not map the current company automatically.</Text>
-         {onReviewExistingCompany && <Pressable accessibilityRole="button" accessibilityLabel="review-existing-company" onPress={() => onReviewExistingCompany(selected.discovery_id)} style={styles.button}><Text style={styles.buttonText}>Choose an existing company</Text></Pressable>}
-         {onCreateCompany && <Pressable accessibilityRole="button" accessibilityLabel="create-company-for-tally" onPress={() => onCreateCompany(selected.discovery_id)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Create a new company</Text></Pressable>}
-       </View>}
     </ScrollView>
   );
 }

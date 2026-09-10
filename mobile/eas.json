@@ -7,6 +7,7 @@
     "development": {
       "distribution": "internal",
       "environment": "development",
+      "autoIncrement": true,
       "android": {
         "buildType": "apk"
       },
@@ -15,6 +16,7 @@
       }
     },
     "production": {
+      "autoIncrement": true,
       "android": {
         "buildType": "app-bundle"
       },

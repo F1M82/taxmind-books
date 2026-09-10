@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "com.taxmindbooks.app",
-      "versionCode": 2
+      "versionCode": 3
     },
     "web": {
       "bundler": "metro"

@@ -16,10 +16,12 @@ import { useActiveCompany } from "../../context/CompanyContext";
 export default function CompanyListScreen({
   onCreate,
   onPick,
+  onOpenTallySetup,
   pendingDiscoveryId,
 }: {
   onCreate: () => void;
   onPick: () => void;
+  onOpenTallySetup?: () => void;
   pendingDiscoveryId?: string;
 }): React.ReactElement {
   const { activeCompanyId, setActive } = useActiveCompany();
@@ -116,6 +118,19 @@ export default function CompanyListScreen({
       >
         <Text style={styles.createButtonText}>+ Create a new company</Text>
       </Pressable>
+      {onOpenTallySetup && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="open-tally-setup"
+          onPress={onOpenTallySetup}
+          style={({ pressed }) => [
+            styles.tallyButton,
+            pressed && { opacity: 0.85 },
+          ]}
+        >
+          <Text style={styles.tallyButtonText}>Connect a Tally company</Text>
+        </Pressable>
+      )}
     </ScrollView>
   );
 }
@@ -158,4 +173,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   createButtonText: { color: "#2c3e50", fontWeight: "600" },
+  tallyButton: {
+    marginTop: 4,
+    padding: 14,
+    borderRadius: 8,
+    alignItems: "center",
+    backgroundColor: "#2c3e50",
+  },
+  tallyButtonText: { color: "#fff", fontWeight: "600" },
 });

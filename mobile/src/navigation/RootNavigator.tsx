@@ -104,6 +104,7 @@ function AppFlow(): React.ReactElement {
           <CompanyListScreen
             onCreate={() => props.navigation.navigate("CreateCompany")}
             onPick={() => props.navigation.navigate("Dashboard")}
+            onOpenTallySetup={() => props.navigation.navigate("TallySetup")}
             pendingDiscoveryId={props.route.params?.pendingDiscoveryId}
           />
         )}

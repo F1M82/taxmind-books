@@ -150,6 +150,26 @@ test("CompanyCreateScreen submits and switches active company", async () => {
   expect(onCreated).toHaveBeenCalled();
 });
 
+test("CompanyListScreen surfaces a persistent Tally-setup entry point", async () => {
+  mockListCompanies.mockResolvedValueOnce({
+    items: [
+      { id: "c1", name: "Acme", gstin: null, status: "active", your_role: "owner" },
+    ],
+    meta: { next_cursor: null, total: 1 },
+  });
+  const onOpenTallySetup = jest.fn();
+  const { findByLabelText } = render(
+    <CompanyListScreen
+      onCreate={jest.fn()}
+      onPick={jest.fn()}
+      onOpenTallySetup={onOpenTallySetup}
+    />,
+  );
+  const button = await findByLabelText("open-tally-setup");
+  fireEvent.press(button);
+  expect(onOpenTallySetup).toHaveBeenCalled();
+});
+
 test("CompanyListScreen maps a reviewed discovery to the selected company", async () => {
   mockListCompanies.mockResolvedValueOnce({
     items: [{ id: "c2", name: "Beta", gstin: null, status: "active", your_role: "owner" }],

@@ -73,8 +73,9 @@ differently:
   actual environment when launching the `.exe`, not just in `.env`.
 
 For local dev, set `BACKEND_WS_URL=ws://localhost:8000/api/v1/connector/ws`
-(the default points to the production
-`wss://api.taxmindbooks.com/...`).
+(the packaged default points to the real production backend,
+`wss://books.gcwealthguru.com/api/v1/connector/ws` — see
+`connector/connector/config.py`).
 
 **One-line local launch (PowerShell):**
 

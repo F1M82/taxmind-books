@@ -2,6 +2,15 @@
 
 _Snapshot for handing the project to another developer/AI. Written 2026-07-28._
 
+**Superseded-since note (added 2026-09-10, non-editing):** this snapshot predates
+P3.8 (multi-Tally-company support) and the production VPS deployment. §7's
+"take it online" next-action is **done** — the backend is live at
+`https://books.gcwealthguru.com` — and §6 item 8's connector-default claim is
+now stale (see the inline correction there). For current status, read
+`release/TAXMIND-PILOT-READINESS-2026-08-12.md` (and its addenda) over this
+file. This document is kept as-is below for its still-accurate day-to-day
+mechanics (local run commands, enrollment ceremony, repo layout).
+
 ---
 
 ## 1. What this is
@@ -175,9 +184,12 @@ login**; access is by role.
 6. **EAS free tier**: 15 Android builds/month, **low-priority queue** (can sit
    >1h before starting). Build config in `mobile/eas.json`.
 7. Local-dev test user password (in tests/conftest + validation): `Hunter2-Validation!`.
-8. Domains owned on Hostinger: **gcwealthguru.com / .in / .xyz**. NOTE the
-   connector's hardcoded default `wss://api.taxmindbooks.com/...` is a placeholder
-   — that domain is **not** owned; override `BACKEND_WS_URL` to a real subdomain.
+8. Domains owned on Hostinger: **gcwealthguru.com / .in / .xyz**. As of this
+   snapshot the connector's hardcoded default pointed at a placeholder
+   (`wss://api.taxmindbooks.com/...`) on a domain that isn't owned — **this
+   has since been fixed**; the connector now defaults to the real production
+   backend, `wss://books.gcwealthguru.com/api/v1/connector/ws` (see
+   `connector/connector/config.py`).
 
 ---
 

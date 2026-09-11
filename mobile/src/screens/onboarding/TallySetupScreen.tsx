@@ -7,6 +7,7 @@ import {
   getConnectorStatus,
   getTallyCompanies,
 } from "../../api/connector";
+import { useAuth } from "../../context/AuthContext";
 import { useActiveCompany } from "../../context/CompanyContext";
 
 export default function TallySetupScreen({
@@ -17,6 +18,7 @@ export default function TallySetupScreen({
   onReviewExistingCompany?: (discoveryId: string) => void;
 }): React.ReactElement {
   const { activeCompanyId, activeCompanyVersion, setActive } = useActiveCompany();
+  const { user } = useAuth();
   const [connector, setConnector] = useState<ConnectorStatus | null>(null);
   const [companies, setCompanies] = useState<TallyCompanyDiscovery[] | null>(null);
   const [selected, setSelected] = useState<TallyCompanyDiscovery | null>(null);
@@ -64,6 +66,20 @@ export default function TallySetupScreen({
     setSelected(company);
   };
 
+  // A company already bound to a DIFFERENT discovered Tally company can
+  // never accept this one (backend enforces a 1:1 Tally<->company binding
+  // and rejects with tally_mapping_collision) -- so "Choose an existing
+  // company" is only worth offering when at least one of the user's own
+  // companies isn't already spoken for.
+  const mappedElsewhereIds = new Set(
+    (companies ?? [])
+      .map((c) => c.mapped_to_backend_company_id)
+      .filter((id): id is string => id !== null),
+  );
+  const hasAvailableExistingCompany = (user?.companies ?? []).some(
+    (c) => !mappedElsewhereIds.has(c.id),
+  );
+
   return (
     <ScrollView contentContainerStyle={styles.container} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} />}>
       <Text style={styles.title}>Connect Tally</Text>
@@ -87,7 +103,8 @@ export default function TallySetupScreen({
             {isSelected && selected && <View style={styles.confirmBox}>
               <Text>Review mapping for {selected.tally_company_name}</Text>
               <Text style={styles.subtitle}>Choose an authorized company before mapping. This will not map the current company automatically.</Text>
-              {onReviewExistingCompany && <Pressable accessibilityRole="button" accessibilityLabel="review-existing-company" onPress={() => onReviewExistingCompany(selected.discovery_id)} style={styles.button}><Text style={styles.buttonText}>Choose an existing company</Text></Pressable>}
+              {onReviewExistingCompany && hasAvailableExistingCompany && <Pressable accessibilityRole="button" accessibilityLabel="review-existing-company" onPress={() => onReviewExistingCompany(selected.discovery_id)} style={styles.button}><Text style={styles.buttonText}>Choose an existing company</Text></Pressable>}
+              {onReviewExistingCompany && !hasAvailableExistingCompany && <Text accessibilityLabel="no-available-company" style={styles.noCandidates}>All of your companies are already linked to a different Tally company — create a new one instead.</Text>}
               {onCreateCompany && <Pressable accessibilityRole="button" accessibilityLabel="create-company-for-tally" onPress={() => onCreateCompany(selected.discovery_id)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Create a new company</Text></Pressable>}
             </View>}
           </React.Fragment>
@@ -98,5 +115,5 @@ export default function TallySetupScreen({
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 16, gap: 12 }, title: { fontSize: 22, fontWeight: "700" }, subtitle: { color: "#555" }, status: { fontWeight: "600" }, error: { color: "#c0392b" }, card: { padding: 14, borderWidth: 1, borderColor: "#ddd", borderRadius: 8, gap: 4 }, selected: { borderColor: "#2c3e50", backgroundColor: "#f3f6f8" }, name: { fontSize: 16, fontWeight: "600" }, meta: { color: "#666" }, mapped: { color: "#1e7e34", fontWeight: "600" }, unmapped: { color: "#8a6d3b" }, unavailable: { color: "#777" }, confirmBox: { padding: 14, gap: 10, borderRadius: 8, backgroundColor: "#f6f8fa" }, button: { padding: 14, borderRadius: 8, alignItems: "center", backgroundColor: "#2c3e50" }, buttonText: { color: "#fff", fontWeight: "600" }, secondaryButton: { padding: 14, borderRadius: 8, alignItems: "center", borderWidth: 1, borderColor: "#2c3e50" }, secondaryButtonText: { color: "#2c3e50", fontWeight: "600" },
+  container: { padding: 16, gap: 12 }, title: { fontSize: 22, fontWeight: "700" }, subtitle: { color: "#555" }, status: { fontWeight: "600" }, error: { color: "#c0392b" }, card: { padding: 14, borderWidth: 1, borderColor: "#ddd", borderRadius: 8, gap: 4 }, selected: { borderColor: "#2c3e50", backgroundColor: "#f3f6f8" }, name: { fontSize: 16, fontWeight: "600" }, meta: { color: "#666" }, mapped: { color: "#1e7e34", fontWeight: "600" }, unmapped: { color: "#8a6d3b" }, unavailable: { color: "#777" }, confirmBox: { padding: 14, gap: 10, borderRadius: 8, backgroundColor: "#f6f8fa" }, button: { padding: 14, borderRadius: 8, alignItems: "center", backgroundColor: "#2c3e50" }, buttonText: { color: "#fff", fontWeight: "600" }, secondaryButton: { padding: 14, borderRadius: 8, alignItems: "center", borderWidth: 1, borderColor: "#2c3e50" }, secondaryButtonText: { color: "#2c3e50", fontWeight: "600" }, noCandidates: { color: "#777", fontStyle: "italic" },
 });

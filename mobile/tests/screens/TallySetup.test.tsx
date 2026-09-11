@@ -18,6 +18,14 @@ jest.mock("../../src/context/CompanyContext", () => ({
   useActiveCompany: () => ({ activeCompanyId: "backend-1", activeCompanyVersion: 0, setActive: mockSetActive }),
 }));
 
+let mockUserCompanies: { id: string; name: string; role: string }[] = [
+  { id: "backend-1", name: "Mine", role: "owner" },
+];
+
+jest.mock("../../src/context/AuthContext", () => ({
+  useAuth: () => ({ user: { companies: mockUserCompanies } }),
+}));
+
 const status = { company_id: "backend-1", connector_id: "connector-1", connected: true };
 const discovery = {
   connector_id: "connector-1",
@@ -37,6 +45,7 @@ beforeEach(() => {
   mockGetStatus.mockResolvedValue(status);
   mockGetCompanies.mockResolvedValue(discovery);
   mockMapCompany.mockResolvedValue({});
+  mockUserCompanies = [{ id: "backend-1", name: "Mine", role: "owner" }];
 });
 
 test("renders discovered mapped and unmapped states without credential inputs", async () => {
@@ -72,4 +81,27 @@ test("offers company creation while preserving the company switcher path", async
    fireEvent.press(await findByLabelText("tally-company-discovery-1"));
    fireEvent.press(await findByLabelText("create-company-for-tally"));
    expect(onCreateCompany).toHaveBeenCalledWith("discovery-1");
+});
+
+test("hides 'Choose an existing company' when every owned company is already mapped to a different Tally company", async () => {
+  // Regression test: backend-1 is the user's only company, and discovery-2
+  // (a DIFFERENT Tally company) is already mapped to it -- so there is no
+  // valid target left for discovery-1, and offering the button would only
+  // lead to a guaranteed tally_mapping_collision.
+  mockUserCompanies = [{ id: "backend-1", name: "Mine", role: "owner" }];
+  const discoveryWithOwnCompanyTaken = {
+    ...discovery,
+    companies: [
+      discovery.companies[0],
+      { ...discovery.companies[1], mapped_to_backend_company_id: "backend-1" },
+    ],
+  };
+  mockGetCompanies.mockResolvedValue(discoveryWithOwnCompanyTaken);
+  const onReviewExistingCompany = jest.fn();
+  const { findByLabelText, queryByLabelText } = render(
+    <TallySetupScreen onReviewExistingCompany={onReviewExistingCompany} />,
+  );
+  fireEvent.press(await findByLabelText("tally-company-discovery-1"));
+  await findByLabelText("no-available-company");
+  expect(queryByLabelText("review-existing-company")).toBeNull();
 });

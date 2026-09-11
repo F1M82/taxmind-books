@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react-native";
 import React from "react";
 
+import { ApiError } from "../../src/api/client";
 import CompanyCreateScreen from "../../src/screens/companies/CompanyCreateScreen";
 import CompanyListScreen from "../../src/screens/companies/CompanyListScreen";
 
@@ -179,6 +180,37 @@ test("CompanyListScreen maps a reviewed discovery to the selected company", asyn
     <CompanyListScreen onCreate={jest.fn()} onPick={jest.fn()} pendingDiscoveryId="discovery-1" />,
   );
   await act(async () => fireEvent.press(await findByLabelText("select-c2")));
-  await waitFor(() => expect(mockMapTallyCompany).toHaveBeenCalledWith("discovery-1"));
+  await waitFor(() => expect(mockMapTallyCompany).toHaveBeenCalledWith("discovery-1", "c2"));
   expect(mockSetActive).toHaveBeenCalledWith("c2");
+});
+
+test("CompanyListScreen attempts the mapping before switching active company, and shows the collision error if it fails", async () => {
+  mockListCompanies.mockResolvedValueOnce({
+    items: [{ id: "c2", name: "Beta", gstin: null, status: "active", your_role: "owner" }],
+    meta: { next_cursor: null, total: 1 },
+  });
+  // Regression test for a real bug: switching active company BEFORE the
+  // mapping call succeeded remounted the whole app stack mid-request
+  // (CompanyContext bumps activeCompanyVersion, used as the stack
+  // navigator's key), so a failure landed on a screen instance the user
+  // could no longer see -- it silently looked like nothing happened.
+  const order: string[] = [];
+  mockSetActive.mockImplementation(async () => {
+    order.push("setActive");
+  });
+  mockMapTallyCompany.mockImplementation(async () => {
+    order.push("mapTallyCompany");
+    const err = new ApiError(409, {
+      error: { code: "tally_mapping_collision", message: "Company is already mapped to another Tally company." },
+      request_id: "req-1",
+    });
+    throw err;
+  });
+  const { findByLabelText, findByText } = render(
+    <CompanyListScreen onCreate={jest.fn()} onPick={jest.fn()} pendingDiscoveryId="discovery-1" />,
+  );
+  await act(async () => fireEvent.press(await findByLabelText("select-c2")));
+  await findByText(/already linked/);
+  expect(order).toEqual(["mapTallyCompany"]);
+  expect(mockSetActive).not.toHaveBeenCalled();
 });

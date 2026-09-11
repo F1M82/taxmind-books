@@ -10,6 +10,7 @@ import {
 } from "react-native";
 
 import { CompanyListItem, listCompanies } from "../../api/companies";
+import { ApiError } from "../../api/client";
 import { mapTallyCompany } from "../../api/connector";
 import { useActiveCompany } from "../../context/CompanyContext";
 
@@ -79,13 +80,25 @@ export default function CompanyListScreen({
                  setError(null);
                  setMapping(pendingDiscoveryId !== undefined);
                  try {
-                   await setActive(c.id);
                    if (pendingDiscoveryId !== undefined) {
-                     await mapTallyCompany(pendingDiscoveryId);
+                     // Attempt the mapping against this CANDIDATE company
+                     // (explicit companyId override) before switching it
+                     // active. Switching active first would bump
+                     // CompanyContext's activeCompanyVersion, which is used
+                     // as the app stack navigator's key -- remounting the
+                     // whole stack (and this screen instance) while the
+                     // mapping request is still in flight, so a failure
+                     // would land on a component nobody can see anymore.
+                     await mapTallyCompany(pendingDiscoveryId, c.id);
                    }
+                   await setActive(c.id);
                    onPick();
-                 } catch {
-                   setError("Could not complete the Tally company mapping. Try again.");
+                 } catch (exc) {
+                   setError(
+                     exc instanceof ApiError && exc.code === "tally_mapping_collision"
+                       ? "This Tally company is already linked to a different company, or this company is already linked elsewhere."
+                       : "Could not complete the Tally company mapping. Try again.",
+                   );
                  } finally {
                    setMapping(false);
                  }

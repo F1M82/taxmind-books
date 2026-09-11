@@ -94,6 +94,16 @@ interface RequestInit {
    * server.
    */
   withCompany?: boolean;
+  /**
+   * Explicit `X-Company-ID` override, for a call that must target a
+   * specific company before that company becomes the globally active
+   * one (e.g. attempting a Tally mapping against a candidate company
+   * — switching "active" first would remount the whole app stack via
+   * CompanyContext's activeCompanyVersion key, tearing down the
+   * screen mid-request before the result is known). Takes precedence
+   * over `withCompany`'s storage lookup.
+   */
+  companyId?: string;
   /** Internal: set when we're already retrying after a 401 refresh. */
   _isRetry?: boolean;
 }
@@ -112,7 +122,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (access) {
     headers["Authorization"] = `Bearer ${access}`;
   }
-  if (init.withCompany) {
+  if (init.companyId) {
+    headers["X-Company-ID"] = init.companyId;
+  } else if (init.withCompany) {
     const companyId = await getActiveCompanyId();
     if (!companyId) {
       throw new Error("active company is required but not set");

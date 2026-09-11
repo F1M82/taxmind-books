@@ -41,13 +41,22 @@ export default function CompanyCreateScreen({
         gstin: gstin.trim() === "" ? null : gstin.trim().toUpperCase(),
         state_code: state.trim() === "" ? null : state.trim(),
       });
+      // Attempt the Tally mapping against the just-created company
+      // (explicit companyId, from the creation response) BEFORE
+      // switching it active. Switching active first would bump
+      // CompanyContext's activeCompanyVersion, which is used as the
+      // app stack navigator's key -- remounting the whole stack (and
+      // this screen instance) while the mapping request is still in
+      // flight, so a failure would land on a component nobody can see
+      // anymore. The company itself is created either way; only the
+      // mapping step is retriable if this fails.
+      if (pendingDiscoveryId !== undefined) {
+        await mapTallyCompany(pendingDiscoveryId, created.id);
+      }
       // Refresh /me so the membership shows up in the user.companies
       // list, then make the new company active.
       await refreshMe();
       await setActive(created.id);
-      if (pendingDiscoveryId !== undefined) {
-        await mapTallyCompany(pendingDiscoveryId);
-      }
       onCreated();
     } catch (exc) {
       if (
@@ -57,6 +66,10 @@ export default function CompanyCreateScreen({
         setError("That GSTIN is already registered to another company.");
       } else if (exc instanceof ApiError && exc.code === "validation_error") {
         setError("Please check the GSTIN / state code format.");
+      } else if (exc instanceof ApiError && exc.code === "tally_mapping_collision") {
+        setError(
+          "Company created, but this Tally company is already linked elsewhere. Open it from \"Your companies\" to retry the mapping.",
+        );
       } else {
         setError("Could not create the company. Try again.");
       }

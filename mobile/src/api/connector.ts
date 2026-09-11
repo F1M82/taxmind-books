@@ -65,11 +65,22 @@ export async function getTallyCompanies(
 
 export async function mapTallyCompany(
   discoveryId: string,
+  /**
+   * The company to map into. Defaults to the currently-active company
+   * (existing behavior). Pass this explicitly when attempting a mapping
+   * against a company that ISN'T active yet — e.g. a candidate picked
+   * from "Choose an existing company" — so the request targets it
+   * without first flipping global active-company state (which would
+   * remount the app stack via CompanyContext's activeCompanyVersion key
+   * before this call's result is known, and any error would land on a
+   * screen instance the user can no longer see).
+   */
+  companyId?: string,
 ): Promise<TallyMappingResponse> {
   return api.post<TallyMappingResponse>(
     "/api/v1/connector/tally-mapping",
     { discovery_id: discoveryId },
-    { withCompany: true },
+    companyId ? { companyId } : { withCompany: true },
   );
 }
 

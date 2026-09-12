@@ -91,3 +91,48 @@ $env:TALLY_HOST="localhost"; $env:TALLY_PORT="9000"; `
 within a few seconds to `connected=true, tally_running=true,
 connector_version=0.1.0`. If `connected=false` persists, check the
 connector's stdout for missing-env errors or WS handshake failures.
+
+## Production deployment (manual, no CI/CD)
+
+There is no auto-deploy pipeline. The backend on the VPS
+(`/opt/taxmind/app/backend/`) is a **plain file copy, not a git
+clone** — there's no `.git` there, so `git pull` does nothing. To ship
+a backend change:
+
+1. `scp` the changed file(s) into the matching path under
+   `/opt/taxmind/app/backend/` on the VPS.
+2. `docker compose -f docker-compose.prod.yml build taxmind-api`
+3. `docker compose -f docker-compose.prod.yml up -d --no-deps taxmind-api`
+   (recreates only the API container — `postgres`/`redis` are
+   untouched, `--no-deps` is required or compose will try to touch
+   them too).
+4. Verify `docker logs --tail 20 taxmind-prod-taxmind-api-1` (clean
+   startup, WS clients reconnecting) and `GET /health` returns
+   `{"status":"ok","env":"production"}`.
+
+VPS host/port/SSH-key details are already recorded in this machine's
+Claude memory (`vps_cohosting_recon.md`) — not duplicated here since
+this file is checked into the repo.
+
+## Tally company mapping: two representations that can drift
+
+A company's "is this Tally-mapped" status is tracked in **two
+places** that are not automatically kept in sync:
+
+- `Company.tally_master_id` — the field
+  `discovery_service.bind_discovery_reference`'s own collision check
+  actually guards (raises `tally_mapping_collision` if it's already
+  set to a different GUID).
+- `ConnectorCompanyBinding` rows — what
+  `GET /connector/{id}/tally-companies` uses to compute each
+  discovery's `mapped_to_backend_company_id` (the "Unmapped" /
+  "Mapped to..." badge in the mobile Tally Setup screen).
+
+A company mapped via an older path (e.g. historical master-sync
+reconciliation) can have `tally_master_id` set with **zero**
+`ConnectorCompanyBinding` rows — confirmed live in production
+2026-09-12 (Vighnaharta Agro Chemicals). `backend/app/api/v1/connector.py`
+now folds `Company.tally_master_id` into the mapped-lookup too, so
+don't reintroduce a binding-table-only lookup — it will silently
+report an already-mapped company as "Unmapped" and invite a doomed
+second mapping attempt.

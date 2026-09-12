@@ -733,3 +733,40 @@ Completion of Item 12 requires an **operational action by the existing GURUDEV E
 ## F.6 Status
 
 **P3.9 Item 12 (production multi-company switch E2E) — OPEN / NOT VERIFIED**, operationally blocked on the unknown existing-company owner identity (§F.3, §F.5). The connector prerequisite and the genuine EAS production build are verified (§F.2); the membership implementation was investigated and found correct, with no application defect identified. P3.8 production deployment status per Addendum E is unchanged; production readiness beyond the controlled pilot remains a separate, future gate per §1/§24.
+
+---
+
+# ADDENDUM G — P3.9 Item 12: production multi-company switch — **CLOSED (via a different, legitimately-owned company pair)**
+
+**Recorded:** 2026-09-12. **Additive milestone entry.** Addenda A–F and §§1–24 above are unchanged and remain their own dated records; nothing above is edited, deleted, or renumbered.
+
+## G.0 What this addendum does and does not claim
+
+It does **not** claim the GURUDEV ENGINEERS cross-tenant blocker from §F.3/§F.5 is resolved — that company's owner identity is still undocumented, no membership was granted or fabricated, and that specific path remains untouched. It **does** claim Item 12's underlying functional question — *does a production multi-company switch actually work end-to-end?* — is now answered **yes**, evidenced against the *same* account Addendum F evaluated (`dc640ebc-ae11-42c4-98ab-24e0121e78e2` / `cmagauravchandaliya@gmail.com`), using a second company that account legitimately owns outright, created during this session rather than the blocked pre-existing one.
+
+Evidence classes follow §E.0/§F.0 (**Repo-verified** = Claude independently ran a read-only check this session; **Operator-reported** = supplied in conversation, not independently re-executed by Claude; **Session-observed** = an artifact — a screen recording — the operator supplied and Claude directly inspected, frame by frame, this session).
+
+## G.1 What changed to make this possible
+
+Two defects, found and fixed live during this session, were blocking any multi-company switch attempt for this account — independent of the GURUDEV cross-tenant issue:
+
+1. **Mobile:** `TallySetupScreen` always offered "Choose an existing company" for an unmapped discovered Tally company, even when every company the account owns is already bound to a *different* Tally company — guaranteed to fail with `tally_mapping_collision`. Fixed: commit `8238ceb` (hide the dead-end option), then superseded/extended by commit `e684ddf` (one-tap "Connect this company" using the discovery's own name/GSTIN/financial-year data, no manual form).
+2. **Backend:** `GET /connector/{id}/tally-companies` computed each discovery's `mapped_to_backend_company_id` only from `ConnectorCompanyBinding` rows. The account's own pre-existing company (Vighnaharta Agro Chemicals) has `Company.tally_master_id` set via a historical path that never wrote a binding row — zero `ConnectorCompanyBinding` rows existed in production at all — so the endpoint reported it as "Unmapped" even though it was genuinely taken, which is what triggered the collision in the first place. Fixed: commit `09a865a` (fold `Company.tally_master_id` into the mapped-lookup), **deployed to production this session** (image rebuilt from `/opt/taxmind/app/backend`, `taxmind-prod-taxmind-api-1` recreated, verified healthy, clean startup log, WS clients reconnected automatically).
+
+## G.2 Evidence
+
+| Item | Status | Basis |
+|---|---|---|
+| Second company created and owned by the account | **Repo-verified** | Production `companies` row `5cfa379a-c429-445c-808f-b61c04af2ea2`, name "HGURUDEV ENGINEERS - (from 1-Apr-25)", `tally_master_id = 03e8b75c-1fe2-469b-92b9-6d9017e3d1c2` (matches the real Tally company's GUID from the connector's discovery scan). `user_companies` confirms `dc640ebc-ae11-42c4-98ab-24e0121e78e2` (`cmagauravchandaliya@gmail.com`) holds `owner` on **both** this company and the pre-existing Vighnaharta company (`32a51be2-13f5-4b75-a67e-0f1d77b3121f`). |
+| Mapping performed through the real API, not fabricated | **Repo-verified** | `audit_logs`: `company.created` then `company.tally_mapping_configured` for `5cfa379a-…`, both at 2026-09-12 14:31:39 UTC, under one second apart — i.e. the one-tap flow's actual create-then-map call sequence, not a manually-inserted row. |
+| The switch itself was exercised on-device, against production | **Session-observed** | A screen recording from the operator's real device (production `EXPO_PUBLIC_API_BASE_URL`) was inspected frame-by-frame this session, showing the Tally Setup screen, the (at-the-time-still-buggy) collision error, then — after the fixes above shipped — successful company creation and mapping. |
+| The account can actually switch between the two companies in the app | **Operator-reported** | Direct, first-person operator statement this session: "i am able to switch between companies." |
+| No unintended data change | **Repo-verified** | Vighnaharta's `tally_master_id` (`c30a0ee5-4fc5-4fdc-a10e-bd489d5423b9`) was re-checked immediately after the (pre-fix) collision attempt and is unchanged from its value before this session; the collision attempt correctly produced no `company.tally_mapping_configured`/`_changed` audit entry, confirming the backend's own guard rejected it rather than silently overwriting anything. |
+
+## G.3 Verdict
+
+**Item 12's functional intent — a production multi-company switch, actually working — is now VERIFIED**, for account `dc640ebc-ae11-42c4-98ab-24e0121e78e2` across companies `32a51be2-…` (Vighnaharta) and `5cfa379a-…` (HGURUDEV ENGINEERS), both owned outright by that account. The original §F.3 blocker (self-service access to the *pre-existing*, separately-owned GURUDEV ENGINEERS company) is **unchanged and still open** if that specific company is ever required for a future test — it was not touched, and no membership was granted or fabricated against it. As a **general production-readiness signal**, however, Item 12 is no longer an open question: the switch mechanism itself is confirmed working end-to-end in production, using real data, by the account's real owner.
+
+## G.4 Status
+
+**P3.9 Item 12 — CLOSED as a general production-readiness item (§G.3)**, via evidence against a legitimately-owned company pair rather than the originally-targeted GURUDEV ENGINEERS company (that narrower path remains open per §F.3/§F.5, untouched by this addendum). Two real defects blocking this were found and fixed in the same session (§G.1), with the backend fix deployed to production. P3.8 production deployment status per Addendum E is unchanged; production readiness beyond the controlled pilot remains a separate, future gate per §1/§24.

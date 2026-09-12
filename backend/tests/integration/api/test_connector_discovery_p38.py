@@ -47,6 +47,32 @@ def test_discovery_is_persisted_and_reference_mapping_is_authorized(client, db_s
     assert binding.tally_master_id == "GUID-10000"
 
 
+def test_discovery_list_reports_mapping_set_without_a_binding_row(client, db_session):  # type: ignore[no-untyped-def]
+    """Regression: Company.tally_master_id can be set by a path other than
+    bind_discovery_reference (e.g. historical master-sync reconciliation)
+    without ever creating a ConnectorCompanyBinding row. The discovery list
+    must still report that company as mapped -- not "Unmapped" -- otherwise
+    a client is invited to attempt a second mapping guaranteed to collide."""
+    user = make_user(db_session)
+    company = make_company(db_session)
+    make_membership(db_session, user, company, role=CompanyRole.owner)
+    connector = Connector(enrolled_company_id=company.id)
+    db_session.add(connector)
+    company.tally_master_id = "GUID-existing"
+    db_session.commit()
+    db_session.refresh(connector)
+    audit = AuditEmitter(db_session, AuditContext(company=company, user=user, ip_address=None,
+        user_agent="test", request_id=uuid4(), source="api"))
+    ingest_discovery(db_session, connector_id=connector.id, data_folder_path="C:/Tally/Data",
+        companies=[{"tally_company_identifier": "10000", "tally_master_id": "GUID-existing", "tally_company_name": "Acme Traders"}], audit=audit)
+    db_session.commit()
+
+    listed = client.get(f"/api/v1/connector/{connector.id}/tally-companies", headers=_headers(user, company))
+    assert listed.status_code == 200, listed.json()
+    assert db_session.query(ConnectorCompanyBinding).count() == 0
+    assert listed.json()["companies"][0]["mapped_to_backend_company_id"] == str(company.id)
+
+
 def test_mapping_rejects_untrusted_discovery_reference(client, db_session):  # type: ignore[no-untyped-def]
     user = make_user(db_session)
     company = make_company(db_session)

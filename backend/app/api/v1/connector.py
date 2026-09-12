@@ -233,6 +233,23 @@ async def tally_companies(
             ConnectorCompanyBinding.company_id.in_(member_company_ids),
         ).all()
     }
+    # Company.tally_master_id is the field bind_discovery_reference's
+    # collision check actually guards (see discovery_service.py) -- but
+    # it can be set by other paths (e.g. historical master-sync
+    # reconciliation) that never wrote a ConnectorCompanyBinding row. Fold
+    # those in too, so a company already bound via that other path isn't
+    # reported "Unmapped" here, which would invite a client to attempt a
+    # second mapping that's guaranteed to collide.
+    company_tally_ids = {
+        c.tally_master_id: c.id
+        for c in db.query(Company.id, Company.tally_master_id).filter(
+            Company.id.in_(member_company_ids),
+            Company.tally_master_id.isnot(None),
+        ).all()
+    }
+    for r in rows:
+        if r.tally_company_identifier not in mapped and r.tally_master_id in company_tally_ids:
+            mapped[r.tally_company_identifier] = company_tally_ids[r.tally_master_id]
     return TallyCompaniesOut(connector_id=connector_id,
         tally_data_folder_path=connector.data_folder_path if show_diagnostics else None,
         scanned_at=max((r.scanned_at for r in rows), default=None), companies=[TallyCompanyDiscoveryOut(

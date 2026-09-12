@@ -220,6 +220,12 @@ function AppFlow(): React.ReactElement {
                   pendingDiscoveryId: discoveryId,
                 })
               }
+              onConnected={() =>
+                props.navigation.reset({
+                  index: 0,
+                  routes: [{ name: "Dashboard" }],
+                })
+              }
             />
           )}
         </AppStack.Screen>

@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 
+import { createCompany } from "../../api/companies";
+import { ApiError } from "../../api/client";
 import {
   ConnectorStatus,
   TallyCompanyDiscovery,
   getConnectorStatus,
   getTallyCompanies,
+  mapTallyCompany,
 } from "../../api/connector";
 import { useAuth } from "../../context/AuthContext";
 import { useActiveCompany } from "../../context/CompanyContext";
@@ -13,17 +16,21 @@ import { useActiveCompany } from "../../context/CompanyContext";
 export default function TallySetupScreen({
   onCreateCompany,
   onReviewExistingCompany,
+  onConnected,
 }: {
   onCreateCompany?: (discoveryId: string) => void;
   onReviewExistingCompany?: (discoveryId: string) => void;
+  onConnected?: () => void;
 }): React.ReactElement {
   const { activeCompanyId, activeCompanyVersion, setActive } = useActiveCompany();
-  const { user } = useAuth();
+  const { user, refreshMe } = useAuth();
   const [connector, setConnector] = useState<ConnectorStatus | null>(null);
   const [companies, setCompanies] = useState<TallyCompanyDiscovery[] | null>(null);
   const [selected, setSelected] = useState<TallyCompanyDiscovery | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
 
   const load = useCallback(async (refresh = false) => {
     const requestedCompanyId = activeCompanyId;
@@ -63,7 +70,42 @@ export default function TallySetupScreen({
       void setActive(company.mapped_to_backend_company_id);
       return;
     }
+    setConnectError(null);
     setSelected(company);
+  };
+
+  // One-tap path: Tally already has this company's name/GSTIN/financial
+  // year, so there's no need to make the user re-type them into a
+  // separate create-company form. Create the TaxMind Books company from
+  // that discovered data, map it to THIS discovery (via the create
+  // response's own id, before it's active -- same explicit companyId
+  // override pattern as CompanyCreateScreen, so a failed mapping can't
+  // land on a torn-down screen), then switch into it.
+  const connectAsNewCompany = async (company: TallyCompanyDiscovery): Promise<void> => {
+    setConnectError(null);
+    setConnecting(true);
+    try {
+      const created = await createCompany({
+        name: company.tally_company_name,
+        gstin: company.gstin,
+        state_code: company.gstin ? company.gstin.slice(0, 2) : null,
+        financial_year_start: company.financial_year_start,
+      });
+      await mapTallyCompany(company.discovery_id, created.id);
+      await refreshMe();
+      await setActive(created.id);
+      onConnected?.();
+    } catch (exc) {
+      if (exc instanceof ApiError && exc.code === "gstin_already_registered") {
+        setConnectError("That GSTIN is already registered to another company. Use \"Enter details manually\" below.");
+      } else if (exc instanceof ApiError && exc.code === "tally_mapping_collision") {
+        setConnectError("This Tally company is already linked elsewhere.");
+      } else {
+        setConnectError("Could not connect this company. Try again, or use \"Enter details manually\" below.");
+      }
+    } finally {
+      setConnecting(false);
+    }
   };
 
   // A company already bound to a DIFFERENT discovered Tally company can
@@ -101,11 +143,21 @@ export default function TallySetupScreen({
               </Text>
             </Pressable>
             {isSelected && selected && <View style={styles.confirmBox}>
-              <Text>Review mapping for {selected.tally_company_name}</Text>
-              <Text style={styles.subtitle}>Choose an authorized company before mapping. This will not map the current company automatically.</Text>
-              {onReviewExistingCompany && hasAvailableExistingCompany && <Pressable accessibilityRole="button" accessibilityLabel="review-existing-company" onPress={() => onReviewExistingCompany(selected.discovery_id)} style={styles.button}><Text style={styles.buttonText}>Choose an existing company</Text></Pressable>}
-              {onReviewExistingCompany && !hasAvailableExistingCompany && <Text accessibilityLabel="no-available-company" style={styles.noCandidates}>All of your companies are already linked to a different Tally company — create a new one instead.</Text>}
-              {onCreateCompany && <Pressable accessibilityRole="button" accessibilityLabel="create-company-for-tally" onPress={() => onCreateCompany(selected.discovery_id)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Create a new company</Text></Pressable>}
+              <Text>Connect {selected.tally_company_name}</Text>
+              {connectError && <Text style={styles.error}>{connectError}</Text>}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="connect-tally-company"
+                disabled={connecting}
+                onPress={() => void connectAsNewCompany(selected)}
+                style={[styles.button, connecting && styles.buttonDisabled]}
+              >
+                {connecting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Connect this company</Text>}
+              </Pressable>
+              <Text style={styles.subtitle}>Uses the name, GSTIN and financial year Tally already has for it. Or, if you'd rather map it onto a company you already have, or enter details manually:</Text>
+              {onReviewExistingCompany && hasAvailableExistingCompany && <Pressable accessibilityRole="button" accessibilityLabel="review-existing-company" disabled={connecting} onPress={() => onReviewExistingCompany(selected.discovery_id)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Choose an existing company</Text></Pressable>}
+              {onReviewExistingCompany && !hasAvailableExistingCompany && <Text accessibilityLabel="no-available-company" style={styles.noCandidates}>All of your companies are already linked to a different Tally company.</Text>}
+              {onCreateCompany && <Pressable accessibilityRole="button" accessibilityLabel="create-company-for-tally" disabled={connecting} onPress={() => onCreateCompany(selected.discovery_id)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Enter details manually</Text></Pressable>}
             </View>}
           </React.Fragment>
         );
@@ -115,5 +167,5 @@ export default function TallySetupScreen({
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 16, gap: 12 }, title: { fontSize: 22, fontWeight: "700" }, subtitle: { color: "#555" }, status: { fontWeight: "600" }, error: { color: "#c0392b" }, card: { padding: 14, borderWidth: 1, borderColor: "#ddd", borderRadius: 8, gap: 4 }, selected: { borderColor: "#2c3e50", backgroundColor: "#f3f6f8" }, name: { fontSize: 16, fontWeight: "600" }, meta: { color: "#666" }, mapped: { color: "#1e7e34", fontWeight: "600" }, unmapped: { color: "#8a6d3b" }, unavailable: { color: "#777" }, confirmBox: { padding: 14, gap: 10, borderRadius: 8, backgroundColor: "#f6f8fa" }, button: { padding: 14, borderRadius: 8, alignItems: "center", backgroundColor: "#2c3e50" }, buttonText: { color: "#fff", fontWeight: "600" }, secondaryButton: { padding: 14, borderRadius: 8, alignItems: "center", borderWidth: 1, borderColor: "#2c3e50" }, secondaryButtonText: { color: "#2c3e50", fontWeight: "600" }, noCandidates: { color: "#777", fontStyle: "italic" },
+  container: { padding: 16, gap: 12 }, title: { fontSize: 22, fontWeight: "700" }, subtitle: { color: "#555" }, status: { fontWeight: "600" }, error: { color: "#c0392b" }, card: { padding: 14, borderWidth: 1, borderColor: "#ddd", borderRadius: 8, gap: 4 }, selected: { borderColor: "#2c3e50", backgroundColor: "#f3f6f8" }, name: { fontSize: 16, fontWeight: "600" }, meta: { color: "#666" }, mapped: { color: "#1e7e34", fontWeight: "600" }, unmapped: { color: "#8a6d3b" }, unavailable: { color: "#777" }, confirmBox: { padding: 14, gap: 10, borderRadius: 8, backgroundColor: "#f6f8fa" }, button: { padding: 14, borderRadius: 8, alignItems: "center", backgroundColor: "#2c3e50" }, buttonText: { color: "#fff", fontWeight: "600" }, buttonDisabled: { opacity: 0.6 }, secondaryButton: { padding: 14, borderRadius: 8, alignItems: "center", borderWidth: 1, borderColor: "#2c3e50" }, secondaryButtonText: { color: "#2c3e50", fontWeight: "600" }, noCandidates: { color: "#777", fontStyle: "italic" },
 });

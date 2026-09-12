@@ -1,17 +1,24 @@
 import { act, fireEvent, render, waitFor } from "@testing-library/react-native";
 import React from "react";
 
+import { ApiError } from "../../src/api/client";
 import TallySetupScreen from "../../src/screens/onboarding/TallySetupScreen";
 
 const mockGetStatus = jest.fn();
 const mockGetCompanies = jest.fn();
 const mockMapCompany = jest.fn();
 const mockSetActive = jest.fn();
+const mockCreateCompany = jest.fn();
+const mockRefreshMe = jest.fn();
 
 jest.mock("../../src/api/connector", () => ({
   getConnectorStatus: (...args: unknown[]) => mockGetStatus(...args),
   getTallyCompanies: (...args: unknown[]) => mockGetCompanies(...args),
   mapTallyCompany: (...args: unknown[]) => mockMapCompany(...args),
+}));
+
+jest.mock("../../src/api/companies", () => ({
+  createCompany: (...args: unknown[]) => mockCreateCompany(...args),
 }));
 
 jest.mock("../../src/context/CompanyContext", () => ({
@@ -23,7 +30,7 @@ let mockUserCompanies: { id: string; name: string; role: string }[] = [
 ];
 
 jest.mock("../../src/context/AuthContext", () => ({
-  useAuth: () => ({ user: { companies: mockUserCompanies } }),
+  useAuth: () => ({ user: { companies: mockUserCompanies }, refreshMe: mockRefreshMe }),
 }));
 
 const status = { company_id: "backend-1", connector_id: "connector-1", connected: true };
@@ -42,9 +49,12 @@ beforeEach(() => {
   mockGetCompanies.mockReset();
   mockMapCompany.mockReset();
   mockSetActive.mockReset();
+  mockCreateCompany.mockReset();
+  mockRefreshMe.mockReset();
   mockGetStatus.mockResolvedValue(status);
   mockGetCompanies.mockResolvedValue(discovery);
   mockMapCompany.mockResolvedValue({});
+  mockRefreshMe.mockResolvedValue(undefined);
   mockUserCompanies = [{ id: "backend-1", name: "Mine", role: "owner" }];
 });
 
@@ -81,6 +91,61 @@ test("offers company creation while preserving the company switcher path", async
    fireEvent.press(await findByLabelText("tally-company-discovery-1"));
    fireEvent.press(await findByLabelText("create-company-for-tally"));
    expect(onCreateCompany).toHaveBeenCalledWith("discovery-1");
+});
+
+test("connects a discovered company in one tap using Tally's own data", async () => {
+  mockCreateCompany.mockResolvedValueOnce({
+    id: "backend-new",
+    name: "Acme Tally",
+    gstin: null,
+    pan: null,
+    financial_year_start: "2026-04-01",
+    status: "active",
+    address: null,
+    city: null,
+    state_code: null,
+    pincode: null,
+    accounting_source: "standalone",
+    created_at: "now",
+    your_role: "owner",
+  });
+  const onConnected = jest.fn();
+  const { findByLabelText } = render(<TallySetupScreen onConnected={onConnected} />);
+  fireEvent.press(await findByLabelText("tally-company-discovery-1"));
+  await act(async () => fireEvent.press(await findByLabelText("connect-tally-company")));
+  expect(mockCreateCompany).toHaveBeenCalledWith(
+    expect.objectContaining({ name: "Acme Tally", gstin: null }),
+  );
+  expect(mockMapCompany).toHaveBeenCalledWith("discovery-1", "backend-new");
+  expect(mockRefreshMe).toHaveBeenCalled();
+  expect(mockSetActive).toHaveBeenCalledWith("backend-new");
+  expect(onConnected).toHaveBeenCalled();
+});
+
+test("surfaces the collision error from the one-tap connect path without switching company", async () => {
+  mockCreateCompany.mockResolvedValueOnce({
+    id: "backend-new",
+    name: "Acme Tally",
+    gstin: null,
+    pan: null,
+    financial_year_start: null,
+    status: "active",
+    address: null,
+    city: null,
+    state_code: null,
+    pincode: null,
+    accounting_source: "standalone",
+    created_at: "now",
+    your_role: "owner",
+  });
+  mockMapCompany.mockRejectedValueOnce(
+    new ApiError(409, { error: { code: "tally_mapping_collision", message: "collision" }, request_id: "r1" }),
+  );
+  const { findByLabelText, findByText } = render(<TallySetupScreen />);
+  fireEvent.press(await findByLabelText("tally-company-discovery-1"));
+  await act(async () => fireEvent.press(await findByLabelText("connect-tally-company")));
+  await findByText("This Tally company is already linked elsewhere.");
+  expect(mockSetActive).not.toHaveBeenCalled();
 });
 
 test("hides 'Choose an existing company' when every owned company is already mapped to a different Tally company", async () => {

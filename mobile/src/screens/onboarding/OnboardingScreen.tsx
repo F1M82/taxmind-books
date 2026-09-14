@@ -19,9 +19,9 @@ import {
 /**
  * Onboarding checklist screen (P0.43).
  *
- * Renders all five items from /onboarding/checklist with their
- * current completion state. Tapping an incomplete item navigates to
- * the relevant flow; completed and out-of-scope items are inert.
+ * Renders all items from /onboarding/checklist with their current
+ * completion state. Tapping an incomplete item navigates to the
+ * relevant flow; completed items are inert.
  *
  * Per-item navigation (Phase 0 + P3.7 Phase 7C):
  *   - company_created           → inert, always done.
@@ -34,7 +34,6 @@ import {
  *                                 sync button lives there once it
  *                                 lands).
  *   - first_voucher_posted      → NewVoucher.
- *   - first_invoice_extracted   → inert; Phase 1+.
  */
 export default function OnboardingScreen({
   onOpenLedgers,
@@ -170,8 +169,6 @@ function subtitleFor(key: OnboardingItemKey): string | undefined {
   switch (key) {
     case "connector_installed":
       return "Connect your Tally company in Tally Setup";
-    case "first_invoice_extracted":
-      return "Coming in Phase 1";
     case "ledgers_synced":
       return "Pull ledgers from TallyPrime";
     case "first_voucher_posted":

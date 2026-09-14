@@ -18,7 +18,6 @@ OnboardingItemKey = Literal[
     "connector_installed",
     "ledgers_synced",
     "first_voucher_posted",
-    "first_invoice_extracted",
 ]
 
 

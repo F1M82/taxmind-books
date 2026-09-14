@@ -95,7 +95,7 @@ def test_fresh_company_has_only_company_created_complete(
     body = r.json()
 
     assert body["company_id"] == str(company.id)
-    assert body["total_count"] == 5
+    assert body["total_count"] == 4
     assert body["completed_count"] == 1
 
     by_key = {i["key"]: i for i in body["items"]}
@@ -104,7 +104,6 @@ def test_fresh_company_has_only_company_created_complete(
         "connector_installed",
         "ledgers_synced",
         "first_voucher_posted",
-        "first_invoice_extracted",
     }
 
     # Only company_created carries completed_at; the rest must omit it
@@ -115,7 +114,6 @@ def test_fresh_company_has_only_company_created_complete(
         "connector_installed",
         "ledgers_synced",
         "first_voucher_posted",
-        "first_invoice_extracted",
     ):
         assert by_key[key]["completed"] is False
         assert "completed_at" not in by_key[key]
@@ -242,16 +240,24 @@ def test_posted_voucher_ticks_first_voucher_posted(
     assert "completed_at" in by_key["first_voucher_posted"]
 
 
-def test_first_invoice_extracted_is_never_complete_in_phase_0(
+def test_tally_master_id_ticks_connector_installed_without_enrollment(
     client: TestClient, db_session: Session
 ) -> None:
+    # Regression: a company can become Tally-connected via the
+    # discovery/mapping flow (Company.tally_master_id) without ever
+    # running the enrollment-code ceremony -- e.g. TallySetupScreen's
+    # one-tap "Connect this company". The checklist must recognize
+    # that path too, not just consumed enrollment codes.
     user, company = _seed(db_session)
+    company.tally_master_id = "GUID-mapped-directly"
+    db_session.commit()
+
     body = client.get(
         "/api/v1/onboarding/checklist", headers=_h(user, company)
     ).json()
     by_key = {i["key"]: i for i in body["items"]}
-    assert by_key["first_invoice_extracted"]["completed"] is False
-    assert "completed_at" not in by_key["first_invoice_extracted"]
+    assert by_key["connector_installed"]["completed"] is True
+    assert body["completed_count"] == 2
 
 
 def test_checklist_is_scoped_to_active_company(

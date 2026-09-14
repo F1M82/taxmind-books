@@ -1295,15 +1295,14 @@ Returns the onboarding state for the active company.
     { "key": "company_created", "label": "Create your company", "completed": true, "completed_at": "..." },
     { "key": "connector_installed", "label": "Install Tally Connector", "completed": false },
     { "key": "ledgers_synced", "label": "Sync ledgers from Tally", "completed": false },
-    { "key": "first_voucher_posted", "label": "Post your first voucher", "completed": false },
-    { "key": "first_invoice_extracted", "label": "Try invoice scan (Phase 1+)", "completed": false }
+    { "key": "first_voucher_posted", "label": "Post your first voucher", "completed": false }
   ],
   "completed_count": 1,
-  "total_count": 5
+  "total_count": 4
 }
 ```
 
-The list is computed from existing data — no separate "checklist" table. Each item maps to a query against the relevant table.
+The list is computed from existing data — no separate "checklist" table. Each item maps to a query against the relevant table. `connector_installed` is completed by either of two independent paths: the enrollment-code ceremony was consumed for the company, or `Company.tally_master_id` is set (e.g. via the Tally-company discovery/mapping flow) — see `backend/app/services/onboarding_service.py`.
 
 ---
 

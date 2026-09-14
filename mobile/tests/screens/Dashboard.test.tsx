@@ -55,14 +55,14 @@ const HANDLERS = {
 beforeEach(() => {
   mockGetDashboardHome.mockReset();
   mockGetOnboardingChecklist.mockReset();
-  // Default: onboarding past the hide threshold (4 of 5), so the
-  // tile stays out of the way and existing tile-presence assertions
-  // continue to pass. Tests that care about the tile override.
+  // Default: onboarding fully complete (4 of 4), so the tile stays
+  // out of the way and existing tile-presence assertions continue to
+  // pass. Tests that care about the tile override.
   mockGetOnboardingChecklist.mockResolvedValue({
     company_id: "c-1",
     items: [],
     completed_count: 4,
-    total_count: 5,
+    total_count: 4,
   });
   Object.values(HANDLERS).forEach((h) => h.mockReset());
 });

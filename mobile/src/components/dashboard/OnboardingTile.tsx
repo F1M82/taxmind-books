@@ -5,12 +5,9 @@ import { OnboardingChecklistResponse } from "../../api/onboarding";
 import Tile from "./Tile";
 
 /**
- * Compact dashboard tile that surfaces onboarding progress.
- *
- * The Phase-0 `first_invoice_extracted` item is permanently
- * incomplete (the feature lands in Phase 1+), so a healthy
- * Phase-0 account caps at 4 of 5. We pass the raw counts through
- * and let the user open the full screen for the per-item view.
+ * Compact dashboard tile that surfaces onboarding progress. We pass
+ * the raw counts through and let the user open the full screen for
+ * the per-item view.
  */
 export default function OnboardingTile({
   data,
@@ -19,8 +16,7 @@ export default function OnboardingTile({
   data: OnboardingChecklistResponse;
   onPress: () => void;
 }): React.ReactElement {
-  const tone =
-    data.completed_count >= data.total_count - 1 ? "good" : "warn";
+  const tone = data.completed_count >= data.total_count ? "good" : "warn";
 
   return (
     <Tile

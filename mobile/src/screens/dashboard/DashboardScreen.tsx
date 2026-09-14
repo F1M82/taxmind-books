@@ -153,7 +153,7 @@ export default function DashboardScreen({
           />
 
           {onboarding !== null &&
-            onboarding.completed_count < onboarding.total_count - 1 && (
+            onboarding.completed_count < onboarding.total_count && (
               <View style={styles.tileRow}>
                 <OnboardingTile
                   data={onboarding}

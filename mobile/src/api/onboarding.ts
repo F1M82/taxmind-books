@@ -11,8 +11,7 @@ export type OnboardingItemKey =
   | "company_created"
   | "connector_installed"
   | "ledgers_synced"
-  | "first_voucher_posted"
-  | "first_invoice_extracted";
+  | "first_voucher_posted";
 
 export interface OnboardingItem {
   key: OnboardingItemKey;

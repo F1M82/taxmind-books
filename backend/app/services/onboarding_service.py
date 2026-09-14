@@ -1,17 +1,24 @@
 """Onboarding checklist composition (P0.42).
 
 Each item is derived from existing tables — there is deliberately no
-`onboarding_state` table per docs/API.md §"Onboarding". The five
+`onboarding_state` table per docs/API.md §"Onboarding". The four
 items map to one small query each:
 
   company_created          ← `companies.created_at` (always set for
                              the active company; the dependency
                              already provides it)
-  connector_installed      ← any `connector_enrollment_codes` row
-                             for the company with `consumed_at IS
-                             NOT NULL` — the connector has paired
-                             at least once. We use MIN(consumed_at)
-                             so re-pairings don't reset the
+  connector_installed      ← either of two independent ways a
+                             company becomes Tally-connected:
+                             (a) any `connector_enrollment_codes`
+                             row for the company with `consumed_at
+                             IS NOT NULL` (the enrollment ceremony
+                             was run for it), or (b) `Company.
+                             tally_master_id IS NOT NULL` (it was
+                             connected via the discovery/mapping
+                             flow instead — see CLAUDE.md "Tally
+                             company mapping: two representations
+                             that can drift"). We use MIN(consumed_at)
+                             for (a) so re-pairings don't reset the
                              timestamp.
   ledgers_synced           ← any `ledgers` row with `tally_synced_at
                              IS NOT NULL`. Manually-created ledgers
@@ -25,11 +32,6 @@ items map to one small query each:
                              item label "Post your first voucher"
                              (the user's action, not the round-trip
                              outcome).
-  first_invoice_extracted  ← always False in Phase 0. The
-                             `ingestions` table is Phase-1+ and not
-                             migrated yet; the item stays in the
-                             checklist as a visible "coming soon"
-                             marker.
 
 `build_checklist` returns plain dataclasses; the API layer wraps
 them in the Pydantic response schema. The service is read-only and
@@ -45,6 +47,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.company import Company
+from app.models.connector import ConnectorCompanyBinding
 from app.models.connector_enrollment import ConnectorEnrollmentCode
 from app.models.ledger import Ledger
 from app.models.voucher import Voucher, VoucherStatus
@@ -93,12 +96,19 @@ def build_checklist(  # audit-exempt: read-only aggregation
             ConnectorEnrollmentCode.consumed_at.isnot(None),
         )
     )
+    mapped_at = None
+    if company.tally_master_id is not None:
+        mapped_at = db.scalar(
+            select(func.min(ConnectorCompanyBinding.configured_at)).where(
+                ConnectorCompanyBinding.company_id == company.id,
+            )
+        )
     items.append(
         ChecklistItem(
             key="connector_installed",
             label="Install Tally Connector",
-            completed=enrolled_at is not None,
-            completed_at=enrolled_at,
+            completed=enrolled_at is not None or company.tally_master_id is not None,
+            completed_at=enrolled_at or mapped_at,
         )
     )
 
@@ -134,15 +144,6 @@ def build_checklist(  # audit-exempt: read-only aggregation
             label="Post your first voucher",
             completed=first_voucher is not None,
             completed_at=first_voucher,
-        )
-    )
-
-    items.append(
-        ChecklistItem(
-            key="first_invoice_extracted",
-            label="Try invoice scan (Phase 1+)",
-            completed=False,
-            completed_at=None,
         )
     )
 

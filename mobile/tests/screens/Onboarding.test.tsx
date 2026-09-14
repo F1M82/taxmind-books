@@ -45,18 +45,13 @@ const baseChecklist = {
       label: "Post your first voucher",
       completed: false,
     },
-    {
-      key: "first_invoice_extracted",
-      label: "Try invoice scan (Phase 1+)",
-      completed: false,
-    },
   ],
   completed_count: 1,
-  total_count: 5,
+  total_count: 4,
 };
 
 
-test("renders all five items with the right completion state", async () => {
+test("renders all items with the right completion state", async () => {
   mockGetOnboardingChecklist.mockResolvedValue(baseChecklist);
 
   const { getByLabelText, findByText } = render(
@@ -66,13 +61,12 @@ test("renders all five items with the right completion state", async () => {
   await waitFor(() =>
     expect(mockGetOnboardingChecklist).toHaveBeenCalled(),
   );
-  await findByText("1 of 5 complete");
+  await findByText("1 of 4 complete");
 
   expect(getByLabelText("item-company_created")).toBeTruthy();
   expect(getByLabelText("item-connector_installed")).toBeTruthy();
   expect(getByLabelText("item-ledgers_synced")).toBeTruthy();
   expect(getByLabelText("item-first_voucher_posted")).toBeTruthy();
-  expect(getByLabelText("item-first_invoice_extracted")).toBeTruthy();
 });
 
 
@@ -130,17 +124,6 @@ test("completed items are not pressable", async () => {
   // wrapper should be emitted for it (open-company_created absent).
   await findByLabelText("item-company_created");
   expect(queryByLabelText("open-company_created")).toBeNull();
-});
-
-
-test("first_invoice_extracted has no tap target even when not completed", async () => {
-  mockGetOnboardingChecklist.mockResolvedValue(baseChecklist);
-
-  const { findByLabelText, queryByLabelText } = render(
-    <OnboardingScreen {...HANDLERS} />,
-  );
-  await findByLabelText("item-first_invoice_extracted");
-  expect(queryByLabelText("open-first_invoice_extracted")).toBeNull();
 });
 
 

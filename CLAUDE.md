@@ -86,6 +86,24 @@ $env:TALLY_HOST="localhost"; $env:TALLY_PORT="9000"; `
 & "H:\Accounting Project\connector\dist\TaxMindBooksConnector.exe"
 ```
 
+**Launching from an agent session (no interactive desktop):** `Start-Process
+-WindowStyle Minimized` can crash the PowerShell host itself when the
+session has no interactive desktop (observed 2026-09-14) — the whole
+`powershell.exe` call returns exit 1 with zero output, for *any*
+`-WindowStyle Minimized` process, not just the connector. Symptom is
+easy to misdiagnose as the connector crashing, since the .exe's own
+logs never even get created (it dies before its logging setup runs).
+Workaround: launch via the Bash tool in the background instead,
+`CONNECTOR_COMPANY_ID=... run_in_background`, e.g.:
+
+```bash
+cd "H:\Accounting Project\connector\dist" && CONNECTOR_COMPANY_ID="<company-uuid>" ./TaxMindBooksConnector.exe
+```
+(with `run_in_background: true`). Verify with `tasklist | grep
+TaxMindBooksConnector` (two processes = normal, PyInstaller bootstrap
++ real process) and `Get-NetTCPConnection -OwningProcess <pid>` to
+confirm the established connection to the backend.
+
 **Verification.** From any user that has membership in the company,
 `GET /api/v1/connector/status` (auth + `X-Company-ID`) should flip
 within a few seconds to `connected=true, tally_running=true,

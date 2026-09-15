@@ -32,6 +32,7 @@ State-changing endpoints (POST, PUT, PATCH, DELETE on financial entities) accept
 - `POST /api/v1/ingestions/`
 - `POST /api/v1/reconciliations/upload`
 - `POST /api/v1/connector/sync/{company_id}`
+- `POST /api/v1/connector/opening-balance-seed/{company_id}`
 
 It is **optional but supported** on all other state-changing endpoints. Where required, the request returns 400 if the header is missing.
 
@@ -693,6 +694,47 @@ is never inferred from the name, and no company is ever auto-selected.
 **Errors:**
 - `409 company_mapping_conflict` — the company is already mapped to a different GUID, or the GUID is already bound to another local company.
 - `422 company_mapping_conflict` (via the fail-closed gate when no GUID is supplied).
+
+#### `POST /api/v1/connector/opening-balance-seed/{company_id}`
+
+Seed each ledger's anchor opening balance from a Tally Trial Balance (P3.2,
+`docs/PHASE_3_OPENING_BALANCE_ARCHITECTURE.md`). Requires auth, `X-Company-ID`,
+role `owner`, and Idempotency-Key.
+
+`anchor_date` is the start of the earliest imported financial year. It is
+locked in on the company's first successful seed run
+(`Company.opening_balance_anchor_date`); a later call naming a different
+anchor is refused rather than silently re-anchoring, because re-anchoring
+would corrupt every other FY's reports.
+
+Per ledger the write happens **once**: a ledger already seeded
+(`opening_balance_seeded_at` set) is a no-op on re-run, and a ledger whose
+`opening_balance` is already non-zero for any other reason (e.g. a Phase A
+direct-entry value) is left untouched and reported back for review, never
+overwritten.
+
+**Request:**
+```json
+{ "anchor_date": "2023-04-01" }
+```
+
+**Response 202:**
+```json
+{
+  "task_id": "uuid",
+  "status": "seed_triggered",
+  "anchor_date": "2023-04-01"
+}
+```
+
+**Side effects:** audit row `ledger.opening_balance_seeded` per ledger actually
+written; `Company.opening_balance_anchor_date` / `opening_balance_seeded_at`
+updated.
+
+**Errors:**
+- `409 opening_balance_anchor_mismatch` — company already has a different anchor date locked in.
+- `409 company_mapping_conflict` (via the fail-closed gate, same as `sync_masters`) — company not mapped, or mapped to a different Tally company than the reply's GUID.
+- `503 connector_offline` — connector is not connected.
 
 ---
 
@@ -1357,6 +1399,7 @@ The following `error.code` values are stable v1 contracts. Clients depend on the
 | `ownership_transfer_required` | 409 | (v1.2) Account deletion blocked; user is sole owner |
 | `extraction_quota_exceeded` | 429 | (v1.2) Daily AI extraction limit reached |
 | `rate_limit_exceeded` | 429 | Too many requests |
+| `opening_balance_anchor_mismatch` | 409 | (P3.2) Opening-balance seed called with an anchor date different from the company's already-locked `opening_balance_anchor_date` |
 
 New error codes added in later phases extend this table; existing codes are not renamed.
 

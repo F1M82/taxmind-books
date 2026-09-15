@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from app.schemas.common import TaxMindBooksBase
@@ -84,3 +84,23 @@ class CompanyMappingStatusOut(TaxMindBooksBase):
     company_id: UUID
     tally_master_id: str | None = None
     mapped: bool
+
+
+class OpeningBalanceSeedRequest(TaxMindBooksBase):
+    """Request body for ``POST /connector/opening-balance-seed/{company_id}``.
+
+    ``anchor_date`` is the start of the earliest imported financial year
+    (see ``docs/PHASE_3_OPENING_BALANCE_ARCHITECTURE.md``). It is locked in
+    on the company's first successful seed run; a later call naming a
+    different anchor is refused.
+    """
+
+    anchor_date: date
+
+
+class OpeningBalanceSeedTriggerResponse(TaxMindBooksBase):
+    """``POST /connector/opening-balance-seed/{company_id}`` 202 response."""
+
+    task_id: UUID
+    status: str
+    anchor_date: date

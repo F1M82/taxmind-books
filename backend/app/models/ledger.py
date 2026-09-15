@@ -96,6 +96,17 @@ class Ledger(Base, TenantScopedMixin):
         nullable=True,
     )
 
+    # P3.2 opening-balance seed (docs/PHASE_3_OPENING_BALANCE_ARCHITECTURE.md).
+    # Set the one time the seed operation writes this ledger's anchor
+    # opening balance from Tally. NULL means "never seeded" -- either a
+    # fresh Tally-synced ledger (opening_balance still 0) or a Phase A
+    # direct-entry ledger whose opening balance was set manually; the seed
+    # operation never overwrites a non-NULL opening_balance it didn't set.
+    opening_balance_seeded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = created_at_col()
     updated_at: Mapped[datetime] = updated_at_col()
 

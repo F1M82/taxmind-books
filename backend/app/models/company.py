@@ -14,6 +14,7 @@ from uuid import UUID
 from sqlalchemy import (
     CheckConstraint,
     Date,
+    DateTime,
     Enum,
     ForeignKey,
     Index,
@@ -107,6 +108,22 @@ class Company(Base):
     # the *only* key the ledger persistence gate trusts for automatic
     # attachment — name equality alone is never sufficient.
     tally_master_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # P3.2 opening-balance seed (docs/PHASE_3_OPENING_BALANCE_ARCHITECTURE.md).
+    # `opening_balance_anchor_date` is the start of the earliest imported
+    # financial year -- set once by the first successful seed run and never
+    # changed afterwards; a later seed attempt with a different anchor is
+    # refused rather than silently re-anchoring. Distinct from
+    # `financial_year_start` above, which tracks the *current* live Tally FY
+    # and can be refreshed on remapping. `opening_balance_seeded_at` is
+    # informational: the timestamp of the most recent seed attempt,
+    # including no-op re-runs.
+    opening_balance_anchor_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True
+    )
+    opening_balance_seeded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_by: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

@@ -211,3 +211,7 @@ class ConnectorOffline(Unavailable):
 
 class OwnershipTransferRequired(Conflict):
     code = "ownership_transfer_required"
+
+
+class OpeningBalanceAnchorMismatch(Conflict):
+    code = "opening_balance_anchor_mismatch"

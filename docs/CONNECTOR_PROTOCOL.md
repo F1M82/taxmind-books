@@ -143,6 +143,8 @@ Sent immediately after WebSocket open. Identifies the connector and reports the 
   "ts": "2026-05-08T10:00:00Z",
   "payload": {
     "connector_version": "1.0.0",
+    "connector_build_sha": "a1b2c3d",
+    "connector_built_at": "2026-06-14T10:00:00+00:00",
     "protocol_version": 1,
     "tally_running": true,
     "tally_version": "3.0",
@@ -157,6 +159,8 @@ Sent immediately after WebSocket open. Identifies the connector and reports the 
   }
 }
 ```
+
+`connector_build_sha` (git short-SHA of the source the connector binary was built from) and `connector_built_at` (ISO-8601 UTC build time) identify the build. Both are null for source / `dev` runs (no `_build_info.py` bundled). Surfaced on `GET /api/v1/connector/status` as the same-named fields. Additive under the protocol's extension rules — no version bump.
 
 The `tally_data_folder_path` (v1.3) is the connector's configured Tally data root. Backend stores this alongside the connector enrollment so the mobile UI knows which folder the connector reads.
 

@@ -154,3 +154,45 @@ now folds `Company.tally_master_id` into the mapped-lookup too, so
 don't reintroduce a binding-table-only lookup — it will silently
 report an already-mapped company as "Unmapped" and invite a doomed
 second mapping attempt.
+
+## Opening-balance seed (P3.2)
+
+Implements `docs/PHASE_3_OPENING_BALANCE_ARCHITECTURE.md` (the
+historical-Tally-mirror opening-balance design, APPROVED 2026-08-14).
+Built + tested 2026-09-15 (migration `0019`,
+`backend/app/services/tally/opening_balance_seed.py`,
+`POST /api/v1/connector/opening-balance-seed/{company_id}`) — **not yet
+run against any real company.** Migration `0019` has not been applied
+anywhere outside the test DB; no production `opening_balance` has been
+touched by this feature yet.
+
+**What it does.** Pulls a Tally Trial Balance (as-of `anchor_date - 1
+day`) via the connector's `get_trial_balance` command and writes each
+matched ledger's `opening_balance`/`balance_type` **once**. Owner-only,
+Idempotency-Key required, 202 + background persist — same shape as
+`sync_masters`/`trigger_sync`.
+
+**Idempotency/safety invariants worth knowing before touching this
+code again:**
+- `Company.opening_balance_anchor_date` locks on the first successful
+  run; a later call with a *different* anchor raises `409
+  opening_balance_anchor_mismatch` rather than silently re-anchoring
+  (re-anchoring would double-count in every FY's trial balance — see
+  the architecture doc's "why a single field is correct").
+- `Ledger.opening_balance_seeded_at` is the per-ledger idempotency
+  marker: non-NULL means "the seed already wrote this one," and a
+  same-anchor re-run is a no-op for it (protects against a later Tally
+  reply reporting a different number).
+- A ledger whose `opening_balance` is already non-zero but
+  `opening_balance_seeded_at` is still NULL (e.g. a Phase A
+  direct-entry value) is **never overwritten** — it's reported back as
+  a conflict for operator review instead.
+- Fails closed on company identity through the same
+  `require_safe_company_mapping` gate `sync_masters` uses — the Trial
+  Balance reply's Tally company GUID must match `Company.tally_master_id`,
+  or nothing is written.
+
+Vighnaharta Agro Chemicals' 621 already-synced ledgers are all
+currently at `opening_balance=0` (master sync never carried opening
+balances — see `[[pilot_phase_a_direct_entry]]` memory) and would be
+the first real candidate for this operation, whenever that's approved.

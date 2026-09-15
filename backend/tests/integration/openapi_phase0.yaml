@@ -103,6 +103,8 @@ endpoints:
     methods: [GET]
   - path: /api/v1/connector/company-mapping/confirm
     methods: [POST]
+  - path: /api/v1/connector/opening-balance-seed/{company_id}
+    methods: [POST]
   - path: /api/v1/connector/tally-mapping
     methods: [POST]
   - path: /api/v1/connector/{connector_id}/tally-companies

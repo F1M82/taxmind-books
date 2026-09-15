@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -36,6 +36,8 @@ from app.schemas.connector import (
     EnrollmentCodeOut,
     EnrollRequest,
     EnrollResponse,
+    OpeningBalanceSeedRequest,
+    OpeningBalanceSeedTriggerResponse,
     SyncTriggerResponse,
 )
 from app.schemas.tally_mapping import (
@@ -64,6 +66,7 @@ from app.services.tally.company_mapping import (
     require_safe_company_mapping,
 )
 from app.services.tally.discovery_service import bind_discovery_reference, ingest_discovery
+from app.services.tally.opening_balance_seed import seed_opening_balances
 
 logger = logging.getLogger("app.api.v1.connector")
 
@@ -541,6 +544,174 @@ def company_mapping_confirm(
         tally_master_id=confirmed.tally_master_id or "",
         tally_company_name=body.tally_company_name,
     )
+
+
+# ---------------------------------------------------------------------
+# Opening-balance seed (P3.2)
+# ---------------------------------------------------------------------
+
+# A date safely before any conceivable company's books-start, used as
+# SVFROMDATE on the Trial Balance pull. Tally's CLOSINGBALANCE for a
+# Trial Balance report is cumulative-since-book-start as of SVTODATE
+# regardless of SVFROMDATE -- this only needs to precede `to_date`.
+_TRIAL_BALANCE_EPOCH = date(2000, 4, 1)
+
+
+@router.post(
+    "/opening-balance-seed/{company_id}",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=OpeningBalanceSeedTriggerResponse,
+)
+async def trigger_opening_balance_seed(
+    company_id: UUID,
+    body: OpeningBalanceSeedRequest,
+    request: Request,
+    company: Company = Depends(require_role(CompanyRole.owner)),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_scoped_session),
+    idem: IdempotencyHandler = Depends(get_idempotency_handler),
+) -> Response | OpeningBalanceSeedTriggerResponse:
+    """Fire a `get_trial_balance` command and seed anchor opening balances.
+
+    Per docs/PHASE_3_OPENING_BALANCE_ARCHITECTURE.md: owner-only (this
+    establishes real accounting openings), requires X-Company-ID +
+    Idempotency-Key. Returns 202 immediately; the connector reply is
+    persisted in a background task through the same fail-closed
+    company-mapping gate sync_masters uses, and is idempotent per ledger
+    (`ledger.opening_balance_seeded_at`) and per company anchor
+    (`Company.opening_balance_anchor_date` locks on first run).
+    """
+    if company_id != company.id:
+        raise ConnectorOfflineHTTP(
+            "Path company_id does not match X-Company-ID header.",
+        )
+
+    replay = await idem.check(required=True)
+    if replay is not None:
+        return replay
+
+    registry = _connector_registry_mod.get_registry()
+    if not registry.is_online(company.id):
+        raise ConnectorOfflineHTTP("Connector is not connected.")
+
+    task_id = uuid4()
+    actor_company_id = company.id
+    actor_user_id = user.id
+    anchor_date = body.anchor_date
+    to_date = anchor_date - timedelta(days=1)
+
+    async def _drive() -> None:
+        try:
+            result = await registry.send_command(
+                company_id=actor_company_id,
+                command="get_trial_balance",
+                args={
+                    "from_date": _TRIAL_BALANCE_EPOCH.isoformat(),
+                    "to_date": to_date.isoformat(),
+                },
+                timeout_seconds=120,
+                idempotency_key=str(task_id),
+            )
+            status_str = result.get("status")
+            logger.info(
+                "opening_balance_seed %s for %s returned status=%s",
+                task_id,
+                actor_company_id,
+                status_str,
+            )
+            if status_str != "success":
+                return
+            payload = result.get("result") or {}
+            company_info = payload.get("company") or {}
+            rows = payload.get("rows") or []
+            try:
+                counts = persist_opening_balance_seed_payload(
+                    company_id=actor_company_id,
+                    user_id=actor_user_id,
+                    request_id=task_id,
+                    anchor_date=anchor_date,
+                    rows=rows,
+                    tally_company_guid=company_info.get("guid"),
+                )
+                logger.info(
+                    "opening_balance_seed %s persisted for %s: %s",
+                    task_id,
+                    actor_company_id,
+                    counts,
+                )
+            except Exception:
+                logger.exception(
+                    "opening_balance_seed %s persist failed for %s",
+                    task_id,
+                    actor_company_id,
+                )
+                raise
+        except Exception:
+            logger.exception(
+                "opening_balance_seed %s failed for %s", task_id, actor_company_id
+            )
+
+    asyncio.create_task(_drive())
+
+    body_out = OpeningBalanceSeedTriggerResponse(
+        task_id=task_id,
+        status="seed_triggered",
+        anchor_date=anchor_date,
+    )
+    idem.store_response(
+        status_code=202, body=body_out.model_dump(mode="json")
+    )
+    db.commit()
+    return body_out
+
+
+def persist_opening_balance_seed_payload(
+    *,
+    company_id: UUID,
+    user_id: UUID | None,
+    request_id: UUID,
+    anchor_date: date,
+    rows: list[dict[str, Any]],
+    tally_company_guid: str | None,
+) -> dict[str, Any]:
+    """Persist a successful `get_trial_balance` reply as an opening-balance
+    seed run. Opens its own session (the API request session has already
+    closed by the time the background task fires) and commits atomically.
+    """
+    db = SessionLocal()
+    try:
+        company = db.query(Company).filter(Company.id == company_id).first()
+        user = (
+            db.query(User).filter(User.id == user_id).first()
+            if user_id is not None
+            else None
+        )
+        audit = AuditEmitter(
+            db,
+            AuditContext(
+                company=company,
+                user=user,
+                ip_address=None,
+                user_agent="connector-opening-balance-seed/1.0",
+                request_id=request_id,
+                source="connector",
+            ),
+        )
+        result = seed_opening_balances(
+            db,
+            audit,
+            company_id=company_id,
+            anchor_date=anchor_date,
+            tally_company_guid=tally_company_guid,
+            rows=rows,
+        )
+        db.commit()
+        return result.as_dict()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------

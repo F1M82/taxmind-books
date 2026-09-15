@@ -81,6 +81,7 @@ Actions follow a strict `entity.verb` naming convention. The full v1 vocabulary:
 | `ledger.created` | Ledger master created |
 | `ledger.updated` | Ledger master fields modified |
 | `ledger.sync_failed` | (v1.3) `sync_masters` reply received but ingest persistence failed (P0.46b) |
+| `ledger.opening_balance_seeded` | (P3.2) Opening-balance seed operation wrote this ledger's anchor `opening_balance`/`balance_type` from a Tally trial balance, first time only — `old_value`/`new_value` carry the balance, `new_value.anchor_date` records the seed's anchor date |
 | `recon.session_created` | Reconciliation session started |
 | `recon.session_completed` | Recon engine finished matching |
 | `recon.match_confirmed` | User confirmed a match |
@@ -221,6 +222,7 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "ledger.created", "ledger.updated",
     "ledger.sync_failed",                                           # v1.3 (P0.46b)
     "ledger.confirmed_in_tally",                                    # v1.3
+    "ledger.opening_balance_seeded",                                # P3.2
     "recon.session_created", "recon.session_completed",
     "recon.match_confirmed", "recon.match_rejected",
     "company.created", "company.settings_updated", "company.suspended",

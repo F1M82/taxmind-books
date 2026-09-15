@@ -32,6 +32,8 @@ def test_company_has_expected_columns() -> None:
         "state_code",
         "pincode",
         "tally_master_id",
+        "opening_balance_anchor_date",
+        "opening_balance_seeded_at",
         "created_by",
         "created_at",
         "updated_at",

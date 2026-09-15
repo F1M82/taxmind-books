@@ -30,6 +30,7 @@ def test_ledger_has_expected_columns() -> None:
         "is_active",
         "tally_master_id",
         "tally_synced_at",
+        "opening_balance_seeded_at",
         "created_at",
         "updated_at",
     }

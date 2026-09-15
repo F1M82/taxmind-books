@@ -159,15 +159,24 @@ async def _handle_post_voucher(
 async def _handle_get_trial_balance(
     tally: TallyClient, args: dict[str, Any]
 ) -> dict[str, Any]:
+    """Read-only Trial Balance pull.
+
+    Includes the current Tally company identity (name + GUID) alongside
+    the rows, mirroring `_handle_sync_masters` — callers that persist
+    Trial Balance data (e.g. the P3.2 opening-balance seed) run it through
+    the same fail-closed company-mapping gate as ledger master sync.
+    """
+    company = await tally.get_company_info()
     rows = await tally.get_trial_balance(
         from_date=args.get("from_date"),
         to_date=args.get("to_date"),
     )
     return {
+        "company": {"name": company.name, "guid": company.guid},
         "rows": [
             {"name": r.name, "closing_balance": str(r.closing_balance)}
             for r in rows
-        ]
+        ],
     }
 
 

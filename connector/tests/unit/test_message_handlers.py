@@ -318,6 +318,31 @@ async def test_post_voucher_tally_error_subclass_not_retryable(
     assert result["retryable"] is False
 
 
+# ---------------- get_trial_balance ----------------
+
+
+@pytest.mark.asyncio
+async def test_get_trial_balance_includes_company_identity(
+    fake_tally: TallyClient,
+) -> None:
+    # P3.2: callers that persist Trial Balance data run it through the same
+    # fail-closed company-mapping gate as sync_masters, so the handler must
+    # carry the Tally company identity alongside the rows.
+    result = await dispatch_command(
+        tally=fake_tally,
+        payload={"command": "get_trial_balance", "args": {}, "company_id": "C"},
+        registered_company_id="C",
+    )
+    assert result["status"] == "success"
+    assert result["result"]["company"]["name"] == "ACME"
+    assert (
+        result["result"]["company"]["guid"]
+        == "c30a0ee5-0000-0000-0000-000000000000"
+    )
+    assert result["result"]["rows"][0]["name"] == "Cash"
+    assert result["result"]["rows"][0]["closing_balance"] == "100.00"
+
+
 # ---------------- unknown command ----------------
 
 

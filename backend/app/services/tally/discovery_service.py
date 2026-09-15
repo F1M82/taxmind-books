@@ -88,6 +88,7 @@ def bind_discovery_reference(
     discovery_id: UUID,
     user_id: UUID,
     audit: AuditEmitter,
+    financial_year_start: date | None = None,
 ) -> ConnectorCompanyBinding:
     discovery = db.query(TallyCompanyDiscovery).filter(TallyCompanyDiscovery.id == discovery_id).first()
     if discovery is None:
@@ -119,6 +120,12 @@ def bind_discovery_reference(
         raise DiscoveryMappingConflict("Company is already mapped to another Tally company.")
     old = None if existing is None else {"tally_master_id": company.tally_master_id}
     company.tally_master_id = tally_master_id
+    # Tally is the source of truth for its own financial-year start
+    # (STARTINGFROM) whenever a live read of it was possible at mapping
+    # time (see connector.py's tally-mapping handler) -- prefer it over
+    # whatever placeholder the company was created with.
+    if financial_year_start is not None:
+        company.financial_year_start = financial_year_start
     if existing is None:
         existing = ConnectorCompanyBinding(
             connector_id=connector_id, company_id=company.id,

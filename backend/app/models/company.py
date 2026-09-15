@@ -60,6 +60,21 @@ company_role_enum = Enum(
 )
 
 
+def _default_financial_year_start() -> date:
+    """First day of the Indian FY containing today. April 1 cut-over.
+
+    Mirrors ``reporting/profit_loss.fiscal_year_start`` (duplicated
+    rather than imported, to avoid a models->services layering
+    violation). Used only when a company is created without a known
+    real FY-start (see CLAUDE.md "Tally company mapping" section for
+    how the connector supplies the real one when available) -- a
+    "probably close, definitely correctable" guess, never a frozen
+    date that silently goes stale.
+    """
+    today = date.today()
+    return date(today.year if today.month >= 4 else today.year - 1, 4, 1)
+
+
 class Company(Base):
     __tablename__ = "companies"
 
@@ -70,7 +85,7 @@ class Company(Base):
     financial_year_start: Mapped[date] = mapped_column(
         Date,
         nullable=False,
-        server_default=text("'2026-04-01'::date"),
+        default=_default_financial_year_start,
     )
     accounting_source: Mapped[str] = mapped_column(
         String(50),

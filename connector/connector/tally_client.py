@@ -176,10 +176,17 @@ class CompanyInfo:
     ``guid`` is the Tally company GUID read from the Company collection
     export — the durable external identity. ``name`` is the display name,
     captured separately; the GUID is never inferred from the name.
+    ``financial_year_start`` is Tally's own ``STARTINGFROM`` (== the
+    anchor date opening balances are computed against — verified live
+    2026-09-15 that ``STARTINGFROM`` and ``BOOKSFROM`` agree for a
+    company whose books were started from scratch). ``None`` when
+    absent/unparseable -- never guessed, per the same reasoning that
+    keeps a missing GUID as ``None`` rather than inferring identity.
     """
 
     name: str
     guid: str | None = None
+    financial_year_start: date | None = None
 
 
 @dataclass(frozen=True)
@@ -339,6 +346,21 @@ def _parse_tally_date(tally_date: str) -> date:
         except ValueError:
             pass
     return date.today()
+
+
+def _parse_optional_tally_date(tally_date: str | None) -> date | None:
+    """Tally's YYYYMMDD → Python date, or ``None`` if absent/unparseable.
+
+    Unlike ``_parse_tally_date``, never falls back to today — a wrong
+    guess here is exactly the bug this exists to avoid (a stale/guessed
+    financial_year_start silently corrupts every FY-scoped report).
+    """
+    if tally_date and len(tally_date) == 8:
+        try:
+            return datetime.strptime(tally_date, "%Y%m%d").date()
+        except ValueError:
+            pass
+    return None
 
 
 def _decimal(text: str | None) -> Decimal:
@@ -744,7 +766,7 @@ class TallyClient:
                 "<TDLMESSAGE>"
                   '<COLLECTION NAME="TaxMindCompany" ISMODIFY="No">'
                     "<TYPE>Company</TYPE>"
-                    "<FETCH>Name,GUID</FETCH>"
+                    "<FETCH>Name,GUID,StartingFrom</FETCH>"
                   "</COLLECTION>"
                 "</TDLMESSAGE>"
               "</TDL>"
@@ -791,6 +813,11 @@ class TallyClient:
             "active_company_name": company.name,
             "tally_company_identifier": identifier,
             "tally_company_name": company.name,
+            "financial_year_start": (
+                company.financial_year_start.isoformat()
+                if company.financial_year_start
+                else None
+            ),
         }
 
     def _parse_company_info(self, xml_string: str) -> CompanyInfo:
@@ -807,7 +834,10 @@ class TallyClient:
             raise TallyParseError("no <COMPANY> element in Tally response")
         name = _strip_tally_ctrl(company.get("NAME", ""))
         guid = _get_text(company, "GUID", "").strip() or None
-        return CompanyInfo(name=name, guid=guid)
+        fy_start = _parse_optional_tally_date(
+            _get_text(company, "STARTINGFROM", "").strip() or None
+        )
+        return CompanyInfo(name=name, guid=guid, financial_year_start=fy_start)
 
     # ------------------------------------------------------------------
     # get_vouchers  (P3.1 — read-only historical export)

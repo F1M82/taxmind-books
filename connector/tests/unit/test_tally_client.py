@@ -408,6 +408,63 @@ async def test_get_company_info_parses_name_and_guid(
     info = await client.get_company_info()
     assert info.name == "Vighnaharta Agro Chemicals - FROM 1-APR-2025"
     assert info.guid == "c30a0ee5-4fc5-4fdc-a10e-bd489d5423b9"
+    # No STARTINGFROM in this (older) fixture -- must stay None, never a
+    # guessed/today's-date fallback (see _parse_optional_tally_date).
+    assert info.financial_year_start is None
+
+
+# Live-captured 2026-09-15 against a real, freshly-loaded TallyPrime
+# company, after discovering that Company.financial_year_start was
+# silently defaulting to a stale hardcoded DB value (2026-04-01) for
+# every company connected via the discovery/mapping flow, because
+# nothing ever asked Tally for its real STARTINGFROM. STARTINGFROM and
+# BOOKSFROM agreed exactly (20250401) for this company, confirming
+# STARTINGFROM is safe to use as the anchor date.
+_COMPANY_XML_WITH_STARTINGFROM = """<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <STATUS>1</STATUS>
+  </HEADER>
+  <BODY>
+    <DATA>
+      <COLLECTION>
+        <COMPANY NAME="Vighnaharta Agro Chemicals - FROM 1-APR-2025" RESERVEDNAME="">
+          <STARTINGFROM TYPE="Date">20250401</STARTINGFROM>
+          <BOOKSFROM TYPE="Date">20250401</BOOKSFROM>
+          <NAME TYPE="String">Vighnaharta Agro Chemicals - FROM 1-APR-2025</NAME>
+          <GUID TYPE="String">c30a0ee5-4fc5-4fdc-a10e-bd489d5423b9</GUID>
+        </COMPANY>
+      </COLLECTION>
+    </DATA>
+  </BODY>
+</ENVELOPE>
+"""
+
+
+@pytest.mark.asyncio
+async def test_get_company_info_parses_starting_from(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(
+        url="http://localhost:9000",
+        status_code=200,
+        text=_COMPANY_XML_WITH_STARTINGFROM,
+    )
+    info = await client.get_company_info()
+    assert info.financial_year_start == date(2025, 4, 1)
+
+
+@pytest.mark.asyncio
+async def test_get_active_tally_company_surfaces_financial_year_start(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(
+        url="http://localhost:9000",
+        status_code=200,
+        text=_COMPANY_XML_WITH_STARTINGFROM,
+    )
+    result = await client.get_active_tally_company()
+    assert result["financial_year_start"] == "2025-04-01"
 
 
 # ---------------- get_trial_balance ----------------

@@ -94,9 +94,14 @@ def _seed_company_and_log(engine_url: str) -> tuple[str, str]:
     """Insert a company + an audit_logs row; return (company_id, audit_id)."""
     engine = create_engine(engine_url)
     with engine.begin() as conn:
+        # financial_year_start has no DB-level default (removed in 0018 --
+        # the ORM always supplies a real value at insert time, see
+        # app.models.company._default_financial_year_start); this raw
+        # SQL bypasses the ORM, so it must supply one explicitly.
         company_id = conn.execute(
             text(
-                "INSERT INTO companies (name) VALUES ('Acme Co') "
+                "INSERT INTO companies (name, financial_year_start) "
+                "VALUES ('Acme Co', '2026-04-01') "
                 "RETURNING id::text"
             )
         ).scalar_one()

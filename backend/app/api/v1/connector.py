@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import date
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -259,8 +260,55 @@ async def tally_companies(
             mapped_to_backend_company_id=mapped.get(r.tally_company_identifier)) for r in rows])
 
 
+async def _live_financial_year_start_if_matching(
+    discovery: TallyCompanyDiscovery,
+    company_id: UUID,
+) -> date | None:
+    """Best-effort: ask Tally for its real STARTINGFROM, if reachable.
+
+    Only trusted when the connector's *currently open* company actually
+    matches this discovery (by GUID first, falling back to identifier) --
+    otherwise we'd risk stamping one company's FY-start onto a different
+    one just because it happened to be open. Any failure (offline,
+    timeout, mismatch, malformed reply) yields None; this must never
+    block or fail the mapping request it supports.
+    """
+    registry = _connector_registry_mod.get_registry()
+    if not registry.is_online(connector_id=discovery.connector_id):
+        return None
+    try:
+        result = await registry.send_command(
+            connector_id=discovery.connector_id,
+            company_id=company_id,
+            command="get_active_tally_company",
+            args={},
+            timeout_seconds=8,
+        )
+        active = result.get("result")
+        if not isinstance(active, dict):
+            active = result if isinstance(active, dict) else {}
+        guid = active.get("tally_company_guid")
+        identifier = active.get("active_company_identifier") or active.get("tally_company_identifier")
+        matches = (
+            (guid is not None and guid == discovery.tally_master_id)
+            or (identifier is not None and identifier == discovery.tally_company_identifier)
+        )
+        if not matches:
+            return None
+        fy_raw = active.get("financial_year_start")
+        if not isinstance(fy_raw, str):
+            return None
+        return date.fromisoformat(fy_raw)
+    except Exception:
+        logger.warning(
+            "live financial_year_start lookup failed for discovery %s (non-fatal)",
+            discovery.id, exc_info=True,
+        )
+        return None
+
+
 @router.post("/tally-mapping", response_model=TallyMappingOut)
-def configure_discovery_mapping(
+async def configure_discovery_mapping(
     body: TallyMappingRequest,
     request: Request,
     company: Company = Depends(require_role(CompanyRole.owner, CompanyRole.admin)),
@@ -275,8 +323,9 @@ def configure_discovery_mapping(
         from app.core.exceptions import Forbidden
         raise Forbidden("Connector is not authorized for this user.")
     audit = _user_audit_emitter(request, db, user, company=company)
+    financial_year_start = await _live_financial_year_start_if_matching(discovery, company.id)
     binding = bind_discovery_reference(db, company=company, discovery_id=body.discovery_id,
-        user_id=user.id, audit=audit)
+        user_id=user.id, audit=audit, financial_year_start=financial_year_start)
     db.commit()
     db.refresh(binding)
     return TallyMappingOut(company_id=company.id, connector_id=binding.connector_id,

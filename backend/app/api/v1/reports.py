@@ -25,6 +25,7 @@ from app.api.deps import (
     get_current_user,
     get_scoped_session,
 )
+from app.core.company_time import company_today
 from app.core.exceptions import DomainException
 from app.models.company import Company
 from app.models.user import User
@@ -76,7 +77,7 @@ def trial_balance(
     db: Session = Depends(get_scoped_session),
     as_of_date: _date | None = Query(default=None),
 ) -> TrialBalanceResponse:
-    target = as_of_date or _date.today()
+    target = as_of_date or company_today(company)
     result = compute_trial_balance(
         db, company_id=company.id, as_of_date=target
     )
@@ -122,7 +123,7 @@ def profit_loss(
     from_date: _date | None = Query(default=None),
     to_date: _date | None = Query(default=None),
 ) -> ProfitLossResponse:
-    end = to_date or _date.today()
+    end = to_date or company_today(company)
     start = from_date or fiscal_year_start(end)
     result = compute_profit_loss(
         db, company_id=company.id, from_date=start, to_date=end
@@ -168,7 +169,7 @@ def balance_sheet(
     db: Session = Depends(get_scoped_session),
     as_of_date: _date | None = Query(default=None),
 ) -> BalanceSheetResponse:
-    target = as_of_date or _date.today()
+    target = as_of_date or company_today(company)
     result = compute_balance_sheet(
         db, company_id=company.id, as_of_date=target
     )
@@ -236,7 +237,7 @@ def outstanding(
     db: Session = Depends(get_scoped_session),
     as_of_date: _date | None = Query(default=None),
 ) -> OutstandingResponse:
-    target = as_of_date or _date.today()
+    target = as_of_date or company_today(company)
     result = compute_outstanding(
         db, company_id=company.id, as_of_date=target, type_=type
     )

@@ -93,6 +93,16 @@ class Company(Base):
         nullable=False,
         server_default=text("'standalone'"),
     )
+    # IANA timezone name. Day-boundary computations (dashboard "today",
+    # report defaults) must anchor to this, not to UTC or the server's
+    # local clock -- see app.core.company_time. Defaults to India's only
+    # timezone since TaxMind Books is India-only; a future multi-region
+    # product would make this operator-settable, not just a fixed default.
+    timezone: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        server_default=text("'Asia/Kolkata'"),
+    )
     status: Mapped[CompanyStatus] = mapped_column(
         company_status_enum,
         nullable=False,

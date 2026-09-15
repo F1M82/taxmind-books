@@ -196,3 +196,22 @@ Vighnaharta Agro Chemicals' 621 already-synced ledgers are all
 currently at `opening_balance=0` (master sync never carried opening
 balances — see `[[pilot_phase_a_direct_entry]]` memory) and would be
 the first real candidate for this operation, whenever that's approved.
+
+## Company-timezone-aware "today" (dashboard/reports)
+
+Fixed 2026-09-15 (migration `0020`, `companies.timezone`,
+`app/core/company_time.py::company_today`). Every day-boundary default
+— dashboard's `today`/`this_month`, `GET /reports/*`'s `as_of_date`/
+`from_date`/`to_date` defaults — now goes through `company_today(company)`
+instead of `datetime.now(UTC).date()` or the server-local `date.today()`.
+Previously, for ~5.5h every night (00:00–05:29 IST), both of those UTC-
+anchored calls labeled the *prior* IST day's data as "today" — wrong for
+every India user (see `release/TAXMIND-PILOT-READINESS-2026-08-12.md`
+§18/§20).
+
+`companies.timezone` defaults to `'Asia/Kolkata'` for every company
+(TaxMind Books is India-only; not yet exposed as an operator-settable
+field — add that only if a non-India customer ever needs it). **If you
+add a new endpoint that defaults a date to "today" for a company, call
+`company_today(company)` — never `date.today()` or
+`datetime.now(UTC).date()` directly, or you'll reintroduce this bug.**

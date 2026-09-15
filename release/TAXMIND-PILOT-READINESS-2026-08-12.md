@@ -770,3 +770,22 @@ Two defects, found and fixed live during this session, were blocking any multi-c
 ## G.4 Status
 
 **P3.9 Item 12 — CLOSED as a general production-readiness item (§G.3)**, via evidence against a legitimately-owned company pair rather than the originally-targeted GURUDEV ENGINEERS company (that narrower path remains open per §F.3/§F.5, untouched by this addendum). Two real defects blocking this were found and fixed in the same session (§G.1), with the backend fix deployed to production. P3.8 production deployment status per Addendum E is unchanged; production readiness beyond the controlled pilot remains a separate, future gate per §1/§24.
+
+---
+
+# ADDENDUM H — §18 UTC/IST dashboard day-boundary item — **FIXED (code), NOT DEPLOYED**
+
+**Recorded:** 2026-09-15. **Additive milestone entry.** Addenda A–G and §§1–24 above are unchanged and remain their own dated records; nothing above is edited, deleted, or renumbered.
+
+**Scope.** Closes the code side of the §18 known limitation "Dashboard 'today' computed in UTC, not IST (P0.31 follow-up)" and the corresponding §20 backlog line ("Timezone-aware date boundaries"). **Repo-verified this session** (Claude ran the tests and read the diff directly; nothing here is operator-reported):
+
+- Migration `0020`: additive `companies.timezone` (IANA name, `NOT NULL DEFAULT 'Asia/Kolkata'` — correct for every existing company, since TaxMind Books is India-only).
+- `app/core/company_time.py::company_today(company, now=...)` — the one place "today" is computed for a company, converting through the company's timezone rather than using UTC or the server's local clock.
+- Wired into every place §18 named: `dashboard_service.build_dashboard` (`today`/`this_month`), `GET /reports/trial-balance`, `/profit-loss`, `/balance-sheet`, `/outstanding` (`as_of_date`/`from_date`/`to_date` defaults), and `GET /dashboard/financials`. All previously called `datetime.now(UTC).date()` or the server-local `date.today()` — exactly the "reports endpoints use a different clock" gap §18 flagged.
+- Tests: 7 new unit tests on `company_today` (the exact 00:00–05:29 IST boundary case from §18, naive-`now` handling, a non-IST company, an invalid-timezone fallback) + 2 new integration tests proving `build_dashboard` counts a voucher correctly across the boundary. Full backend suite 723/723 passing (up from 713 after Addendum-adjacent P3.2 work the same session), ruff clean, mypy clean on all touched files.
+
+**Not done by this addendum:** migration `0020` has not been applied to the production database, and this fix has not been deployed. Per §B.4/§E's convention, code being correct in the repository is not evidence of a production state change. Until deployed, production dashboards and reports still compute "today" the old (UTC) way.
+
+## H.1 Status
+
+**§18/§20 timezone item — FIXED IN CODE, NOT YET DEPLOYED.** Follows the same deploy sequence as any other backend change (`CLAUDE.md` §"Production deployment"): `scp` the changed files, rebuild the `taxmind-api` image, `alembic upgrade head` to apply `0020`, recreate the container, verify `/health`. Production readiness beyond the controlled pilot remains a separate, future gate per §1/§24; this addendum closes one named §20 backlog line, not the gate itself.

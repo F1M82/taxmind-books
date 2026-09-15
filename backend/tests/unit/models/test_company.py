@@ -34,6 +34,7 @@ def test_company_has_expected_columns() -> None:
         "tally_master_id",
         "opening_balance_anchor_date",
         "opening_balance_seeded_at",
+        "timezone",
         "created_by",
         "created_at",
         "updated_at",
@@ -95,6 +96,14 @@ def test_company_tally_master_id_nullable_string() -> None:
     assert isinstance(col.type, String)
     assert col.type.length == 100
     assert col.nullable is True
+
+
+def test_company_timezone_required_string_defaults_to_kolkata() -> None:
+    col = Company.__table__.columns["timezone"]
+    assert isinstance(col.type, String)
+    assert col.type.length == 64
+    assert col.nullable is False
+    assert col.server_default is not None
 
 
 def test_company_status_enum_values() -> None:

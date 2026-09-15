@@ -12,6 +12,7 @@ from app.api.deps import (
     get_current_user,
     get_scoped_session,
 )
+from app.core.company_time import company_today
 from app.models.company import Company
 from app.models.user import User
 from app.schemas.dashboard import (
@@ -91,7 +92,7 @@ def dashboard_financials(
     """Headline financials (Sales / Purchase / Expenses / Net Profit) over
     a selectable period. Defaults to the current Indian financial year
     (April 1 → today) when no dates are supplied."""
-    end = to_date or _date.today()
+    end = to_date or company_today(company)
     start = from_date or fiscal_year_start(end)
     result = compute_dashboard_financials(
         db, company_id=company.id, from_date=start, to_date=end

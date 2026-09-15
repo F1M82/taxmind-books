@@ -28,6 +28,7 @@ from uuid import UUID
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
+from app.core.company_time import company_today
 from app.models.company import Company
 from app.models.ledger import Ledger
 from app.models.voucher import (
@@ -140,7 +141,7 @@ def build_dashboard(  # audit-exempt: read-only aggregation
     production singletons.
     """
     now = now or datetime.now(UTC)
-    today_local: date = now.date()
+    today_local: date = company_today(company, now=now)
     month_start = today_local.replace(day=1)
 
     connector = _connector_snapshot(

@@ -124,3 +124,30 @@ export async function confirmCompanyMapping(
     { withCompany: true },
   );
 }
+
+// ---------------------------------------------------------------------
+// Enrollment (owner-only — "Add a device")
+// ---------------------------------------------------------------------
+
+export interface EnrollmentCode {
+  /** Raw one-time code. Shown once — the backend only stores its hash. */
+  code: string;
+  /** ISO-8601. 15 minutes from issue. */
+  expires_at: string;
+  company_id: string;
+}
+
+/**
+ * Issue a one-time connector enrollment code for the active company.
+ * Owner-only (backend returns 403 `insufficient_role` otherwise). The
+ * teammate pastes the raw `code` into the connector `.exe`'s first-run
+ * prompt (connector/connector/enrollment.py) — this call only produces
+ * the code, it never talks to the connector itself.
+ */
+export async function issueEnrollmentCode(): Promise<EnrollmentCode> {
+  return api.post<EnrollmentCode>(
+    "/api/v1/connector/enrollment-codes",
+    {},
+    { withCompany: true },
+  );
+}

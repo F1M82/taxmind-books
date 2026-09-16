@@ -8,6 +8,7 @@ import { ActivityIndicator, View } from "react-native";
 
 import { useAuth } from "../context/AuthContext";
 import { useActiveCompany } from "../context/CompanyContext";
+import AddDeviceScreen from "../screens/admin/AddDeviceScreen";
 import AuditLogScreen from "../screens/admin/AuditLogScreen";
 import MembersScreen from "../screens/admin/MembersScreen";
 import LoginScreen from "../screens/auth/LoginScreen";
@@ -45,6 +46,7 @@ type AppStackParamList = {
   TallySetup: undefined;
   Members: undefined;
   AuditLog: undefined;
+  AddDevice: undefined;
 };
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -96,6 +98,7 @@ function AppFlow(): React.ReactElement {
             onOpenOnboarding={() => props.navigation.navigate("Onboarding")}
             onOpenMembers={() => props.navigation.navigate("Members")}
             onOpenAuditLog={() => props.navigation.navigate("AuditLog")}
+            onOpenAddDevice={() => props.navigation.navigate("AddDevice")}
           />
         )}
       </AppStack.Screen>
@@ -184,6 +187,11 @@ function AppFlow(): React.ReactElement {
         name="AuditLog"
         component={AuditLogScreen}
         options={{ title: "Activity Log" }}
+      />
+      <AppStack.Screen
+        name="AddDevice"
+        component={AddDeviceScreen}
+        options={{ title: "Add a device" }}
       />
       <AppStack.Screen name="Onboarding" options={{ title: "Onboarding" }}>
         {(props: NativeStackScreenProps<AppStackParamList, "Onboarding">) => (

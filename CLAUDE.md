@@ -58,11 +58,12 @@ between sessions — if the `.env` is missing, you must re-enroll.
    Response contains `connector_id`, `company_id`, `connector_token`
    (JWT), and `expires_in_days` (365 by default).
 
-**Step 2 no longer requires curl/PowerShell (2026-09-16).** Step 1
-(issuing the code) is still owner-gated, API-only — there's no
-mobile/web UI for it yet (see `[[connector_self_service_enrollment_gap]]`
-memory). But once you have a raw code, just double-click the `.exe`
-with no `.env` present — it detects the missing token, prompts
+**Neither step requires curl/PowerShell anymore (2026-09-16).** Step 1:
+an `owner` opens the mobile app → Dashboard → ADMIN → "Add a device" →
+taps "Generate a code" (`AddDeviceScreen`, calls the same
+`POST /connector/enrollment-codes`, no backend change needed since the
+endpoint already existed). Step 2: on the new PC, just double-click the
+`.exe` with no `.env` present — it detects the missing token, prompts
 `Enrollment code:` right in the console window (3 attempts before
 giving up), and writes `connector/dist/.env` itself on success,
 merging with whatever's already there rather than overwriting it. Only
@@ -70,7 +71,10 @@ works when stdin is a real terminal (a double-clicked `.exe`, or run
 directly in a visible PowerShell window) — a `-WindowStyle Minimized`
 or otherwise non-interactive launch skips the prompt and fails exactly
 as before, since there's nothing to answer it. See
-`connector/connector/enrollment.py`.
+`connector/connector/enrollment.py` (step 2) and
+`mobile/src/screens/admin/AddDeviceScreen.tsx` (step 1). The mobile
+piece needs a fresh EAS build to actually reach a device — not yet
+verified on-device, only via TypeScript + Jest.
 
 **Connector config.**
 

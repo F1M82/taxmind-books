@@ -35,6 +35,7 @@ export default function DashboardScreen({
   onOpenOnboarding,
   onOpenMembers,
   onOpenAuditLog,
+  onOpenAddDevice,
 }: {
   onOpenCompanies: () => void;
   onOpenLedgers: () => void;
@@ -46,6 +47,7 @@ export default function DashboardScreen({
   onOpenOnboarding: () => void;
   onOpenMembers: () => void;
   onOpenAuditLog: () => void;
+  onOpenAddDevice: () => void;
 }): React.ReactElement {
   const { user, signOut } = useAuth();
   const { activeCompanyId, loading: companyLoading } = useActiveCompany();
@@ -104,6 +106,9 @@ export default function DashboardScreen({
   const isAdmin =
     activeCompany !== null &&
     (activeCompany.role === "owner" || activeCompany.role === "admin");
+  // Enrollment-code issuance is owner-only on the backend (not admin) --
+  // see POST /connector/enrollment-codes.
+  const isOwner = activeCompany !== null && activeCompany.role === "owner";
 
   return (
     <ScrollView
@@ -287,6 +292,22 @@ export default function DashboardScreen({
                   <Text style={styles.shortcutTitle}>Activity Log</Text>
                   <Text style={styles.shortcutSubtitle}>Who did what</Text>
                 </Pressable>
+                {isOwner && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="open-add-device"
+                    onPress={onOpenAddDevice}
+                    style={({ pressed }) => [
+                      styles.shortcut,
+                      pressed && { opacity: 0.85 },
+                    ]}
+                  >
+                    <Text style={styles.shortcutTitle}>Add a device</Text>
+                    <Text style={styles.shortcutSubtitle}>
+                      Connect a teammate's Tally
+                    </Text>
+                  </Pressable>
+                )}
               </View>
             </>
           )}

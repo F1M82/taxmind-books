@@ -50,6 +50,7 @@ const HANDLERS = {
   onOpenOnboarding: jest.fn(),
   onOpenMembers: jest.fn(),
   onOpenAuditLog: jest.fn(),
+  onOpenAddDevice: jest.fn(),
 };
 
 beforeEach(() => {

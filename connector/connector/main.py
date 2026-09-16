@@ -10,9 +10,11 @@ import asyncio
 import contextlib
 import logging
 import sys
+from pathlib import Path
 
 from connector.build_info import format_version
 from connector.config import get_settings
+from connector.enrollment import run_interactive_enrollment
 from connector.idempotency_cache import IdempotencyCache
 from connector.tally_client import TallyClient
 from connector.ws_client import ConnectorWSClient
@@ -39,9 +41,20 @@ async def _async_main() -> None:
     cfg = get_settings()
     logging.basicConfig(level=cfg.LOG_LEVEL)
     if cfg.CONNECTOR_TOKEN is None:
-        raise SystemExit(
-            "CONNECTOR_TOKEN missing — run the enrollment flow first."
+        # Interactive first run (double-clicked .exe, real console): prompt
+        # for a one-time enrollment code instead of failing outright. A
+        # non-interactive launch (service, script, no visible console)
+        # can't answer a prompt, so this is a same-behavior no-op there --
+        # see connector/enrollment.py.
+        enrolled = await run_interactive_enrollment(
+            ws_url=cfg.BACKEND_WS_URL, env_path=Path.cwd() / ".env"
         )
+        if enrolled:
+            cfg = get_settings()  # reload -- picks up the freshly-written .env
+        if cfg.CONNECTOR_TOKEN is None:
+            raise SystemExit(
+                "CONNECTOR_TOKEN missing — run the enrollment flow first."
+            )
 
     # The token JWT carries `company_id`; for now the runtime callers
     # also pass it explicitly via ConnectorSettings (env or `.env`

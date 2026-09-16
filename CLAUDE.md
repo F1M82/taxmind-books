@@ -58,19 +58,35 @@ between sessions — if the `.env` is missing, you must re-enroll.
    Response contains `connector_id`, `company_id`, `connector_token`
    (JWT), and `expires_in_days` (365 by default).
 
+**Step 2 no longer requires curl/PowerShell (2026-09-16).** Step 1
+(issuing the code) is still owner-gated, API-only — there's no
+mobile/web UI for it yet (see `[[connector_self_service_enrollment_gap]]`
+memory). But once you have a raw code, just double-click the `.exe`
+with no `.env` present — it detects the missing token, prompts
+`Enrollment code:` right in the console window (3 attempts before
+giving up), and writes `connector/dist/.env` itself on success,
+merging with whatever's already there rather than overwriting it. Only
+works when stdin is a real terminal (a double-clicked `.exe`, or run
+directly in a visible PowerShell window) — a `-WindowStyle Minimized`
+or otherwise non-interactive launch skips the prompt and fails exactly
+as before, since there's nothing to answer it. See
+`connector/connector/enrollment.py`.
+
 **Connector config.**
 
-Two configuration paths matter because the connector reads them
-differently:
-
-- Pydantic-loaded (`connector/connector/config.py`,
-  `ConnectorSettings`): `CONNECTOR_TOKEN`, `BACKEND_WS_URL`,
-  `TALLY_HOST`, `TALLY_PORT`, etc. These can live in
-  `connector/dist/.env` next to the `.exe`.
-- Direct `os.environ.get` lookup (`connector/connector/main.py:30`):
-  **`CONNECTOR_COMPANY_ID`**. pydantic-settings does not propagate
-  `.env` values into the process env, so this **must** be set in the
-  actual environment when launching the `.exe`, not just in `.env`.
+All connector settings — `CONNECTOR_TOKEN`, `CONNECTOR_COMPANY_ID`,
+`BACKEND_WS_URL`, `TALLY_HOST`, `TALLY_PORT`, etc. — are Pydantic-loaded
+(`connector/connector/config.py`, `ConnectorSettings`) and can live in
+`connector/dist/.env` next to the `.exe`; a process env var of the same
+name overrides it, but isn't required. **Historical note:**
+`CONNECTOR_COMPANY_ID` used to be read via a direct `os.environ.get` in
+`main.py`, bypassing `.env` entirely — commit `aea1f10` ("route
+operational config through Settings, not raw os.environ") fixed that.
+If you're on a build older than that commit, the old caveat still
+applies; verified fixed live 2026-09-16 against current `main`
+(`.env`-only `CONNECTOR_COMPANY_ID`, no process env var, connector
+loaded it and attempted a WS connection rather than exiting with
+"CONNECTOR_COMPANY_ID missing").
 
 For local dev, set `BACKEND_WS_URL=ws://localhost:8000/api/v1/connector/ws`
 (the packaged default points to the real production backend,

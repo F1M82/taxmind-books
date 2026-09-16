@@ -166,6 +166,8 @@ The `tally_data_folder_path` (v1.3) is the connector's configured Tally data roo
 
 The backend responds with a `register_ack` (see below). If the registration is rejected (token problem, etc.), the backend sends an `error` and closes the WS with the appropriate close code.
 
+If `tally_running` is true, the backend also fires auto-sync-on-connect in the background (see `tally_company_changed` §"Auto-sync-on-connect" below) — every connector connect/reconnect brings ledger masters current with no manual sync call.
+
 #### `heartbeat`
 
 Every 30 seconds. Empty payload acceptable; optional fields update connector state.
@@ -657,6 +659,8 @@ The backend reacts:
 4. Writes audit row `voucher.tally_post_queued` → cleared, replaced by `voucher.posted_to_tally` (or `tally_post_failed`).
 
 This is the mechanism by which queued vouchers automatically post when the user switches Tally to the right company. No manual "retry" button is needed in the common case.
+
+**Auto-sync-on-connect (2026-09-15).** The backend also fires `sync_masters` for whichever authorized company matches the newly-active Tally company (by GUID), persisting through the same fail-closed mapping gate `sync_masters` always uses. This runs fire-and-forget, in the background — it never blocks the event ack. The same trigger also fires on every `register` (connector connect/reconnect), so "launch the connector" alone is enough to bring ledger masters current with no manual `POST /connector/sync/{company_id}` call. See `app/api/v1/connector_ws.py::_drive_auto_sync`.
 
 If the connector observes Tally being closed (active_company → null with tally_running=false), no `tally_company_changed` is fired. The state simply reverts to "no company active" and queued vouchers stay queued.
 

@@ -22,13 +22,14 @@ import contextlib
 import json
 import logging
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
 from app.core.database import SessionLocal
 from app.core.security import TokenExpired, TokenInvalid, decode_connector_token
+from app.models.company import Company
 from app.models.connector import Connector, ConnectorCompanyBinding
 from app.services.tally import connector_registry as _connector_registry_mod
 from app.services.tally.connector_registry import ConnectorConnection
@@ -195,6 +196,9 @@ async def _run_message_loop(conn: ConnectorConnection) -> None:
                 conn.connector_id,
                 payload,
             )
+            # The operator just switched Tally companies — pull the newly
+            # active company's masters immediately, same trigger as register.
+            _schedule_auto_sync_on_connector_up(conn)
         elif type_ == "error":
             logger.warning(
                 "connector-side error %s: %s", conn.company_id, payload
@@ -242,6 +246,10 @@ async def _handle_register(
     # the dispatch can actually reach the connector.
     if conn.tally_running:
         _schedule_reenqueue_on_connector_up(conn.company_id)
+        # "Launch the connector, the app has current data" — no manual
+        # sync trigger required. Pulls masters for whichever authorized
+        # company matches the Tally company currently open on this PC.
+        _schedule_auto_sync_on_connector_up(conn)
 
 
 def _schedule_reenqueue_on_connector_up(company_id: UUID) -> None:
@@ -274,6 +282,112 @@ def _schedule_reenqueue_on_connector_up(company_id: UUID) -> None:
             db.close()
 
     asyncio.get_running_loop().create_task(_drive())
+
+
+def _schedule_auto_sync_on_connector_up(conn: ConnectorConnection) -> None:
+    """Fire-and-forget: sync_masters for whichever authorized company
+    matches the Tally company currently open on this connector's PC.
+
+    Must run as a background task, never awaited inline from the
+    register/tally_company_changed handler that calls this — those run
+    inside `_run_message_loop`, the same loop that will receive this
+    command's `command_result` reply. Awaiting inline would deadlock the
+    connection (mirrors `_schedule_reenqueue_on_connector_up`).
+
+    Reuses `TAXMIND_SKIP_TALLY_DISPATCH` even though this path is a read
+    (not a dispatch) — it's the existing "don't reach out to a connector
+    during tests" switch, and `tests/conftest.py` already sets it, so
+    reusing it keeps the test suite deterministic without a second flag.
+    """
+    from app.config import get_settings
+
+    if get_settings().TAXMIND_SKIP_TALLY_DISPATCH:
+        return
+
+    import asyncio
+
+    asyncio.get_running_loop().create_task(_drive_auto_sync(conn))
+
+
+async def _drive_auto_sync(conn: ConnectorConnection) -> None:
+    from app.api.v1.connector import persist_sync_masters_payload
+
+    try:
+        active_result = await conn.send_command(
+            command="get_active_tally_company", args={}, timeout_seconds=15
+        )
+    except Exception:
+        logger.exception(
+            "auto-sync: get_active_tally_company failed for connector %s",
+            conn.connector_id,
+        )
+        return
+    if active_result.get("status") != "success":
+        return
+    guid = (active_result.get("result") or {}).get("tally_company_guid")
+    if not guid:
+        return
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(Company.id)
+            .filter(
+                Company.tally_master_id == guid,
+                Company.id.in_(conn.authorized_company_ids),
+            )
+            .first()
+        )
+    finally:
+        db.close()
+    if row is None:
+        return
+    target_company_id = row[0]
+
+    task_id = uuid4()
+    try:
+        sync_result = await conn.send_command(
+            command="sync_masters",
+            args={},
+            company_id=target_company_id,
+            timeout_seconds=120,
+            idempotency_key=str(task_id),
+        )
+    except Exception:
+        logger.exception(
+            "auto-sync: sync_masters dispatch failed for company %s",
+            target_company_id,
+        )
+        return
+    if sync_result.get("status") != "success":
+        return
+    payload = sync_result.get("result") or {}
+    company_info = payload.get("company") or {}
+    try:
+        counts = persist_sync_masters_payload(
+            company_id=target_company_id,
+            user_id=None,
+            request_id=task_id,
+            ledgers=payload.get("ledgers") or [],
+            groups=payload.get("groups") or [],
+            tally_company_guid=company_info.get("guid"),
+            tally_company_name=company_info.get("name"),
+        )
+        logger.info(
+            "auto-sync sync_masters %s persisted for %s: "
+            "created=%d updated=%d skipped=%d",
+            task_id,
+            target_company_id,
+            counts["created"],
+            counts["updated"],
+            counts["skipped"],
+        )
+    except Exception:
+        logger.exception(
+            "auto-sync sync_masters %s persist failed for %s",
+            task_id,
+            target_company_id,
+        )
 
 
 async def _handle_heartbeat(

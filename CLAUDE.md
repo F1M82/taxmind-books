@@ -215,3 +215,41 @@ field — add that only if a non-India customer ever needs it). **If you
 add a new endpoint that defaults a date to "today" for a company, call
 `company_today(company)` — never `date.today()` or
 `datetime.now(UTC).date()` directly, or you'll reintroduce this bug.**
+
+## Rebuilding the connector wipes `connector/dist/.env`
+
+`connector/installer/build_exe.py` does `shutil.rmtree("dist")` before
+every build — **this deletes `connector/dist/.env`**, including
+whatever `CONNECTOR_TOKEN` is sitting there (production or local dev).
+Learned the hard way 2026-09-15: rebuilt the connector with a live
+production token in `.env` and had to walk the user through
+re-enrolling production from scratch. **Before running
+`installer/build_exe.py` (or `tools/dev_stack.ps1`'s rebuild
+suggestion), copy `connector/dist/.env` somewhere safe first** if it
+has a token you care about — there is no other copy of a connector
+token anywhere (never printed to logs, never committed, only ever
+lived in that one file). Re-enrolling is always possible (CONNECTOR
+tokens are cheap to reissue, see "Connector enrollment for local dev"
+above) but requires an `owner`'s login, so it's not something to
+trigger by accident.
+
+## Auto-sync-on-connect (2026-09-15)
+
+The backend now auto-fires `sync_masters` — no manual
+`POST /connector/sync/{company_id}` call needed — on two triggers:
+every connector `register` (connect/reconnect) and every
+`tally_company_changed` event (operator switched the open company in
+Tally). See `app/api/v1/connector_ws.py::_drive_auto_sync` +
+`docs/CONNECTOR_PROTOCOL.md` §"Auto-sync-on-connect". It resolves the
+Tally company currently open (via `get_active_tally_company`), matches
+it to whichever of the connector's *authorized* companies has that
+`tally_master_id`, and only then syncs — never syncs a company the
+connector isn't bound to, even if that company happens to be mapped to
+the same Tally GUID. Runs fire-and-forget (`asyncio.create_task`,
+never awaited inline from the register/event handler — the WS receive
+loop that dispatches those handlers is the same loop that has to
+receive the resulting `command_result`, so awaiting inline would
+deadlock the connection). Gated by `TAXMIND_SKIP_TALLY_DISPATCH` even
+though it's a read, not a dispatch — reuses the existing "don't reach
+out to a connector during tests" switch rather than adding a second
+flag; `tests/conftest.py` already sets it for the whole suite.

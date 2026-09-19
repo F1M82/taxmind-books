@@ -11,7 +11,7 @@ Configuration in TallyPrime:
 
 Per CONNECTOR_PROTOCOL.md command catalog, this client exposes:
     ping, get_ledger, get_all_ledgers, get_all_groups,
-    post_voucher, get_trial_balance, get_outstanding,
+    post_voucher, get_ledger_opening_balances, get_outstanding,
     approve_optional_voucher, reject_optional_voucher
 """
 
@@ -603,7 +603,7 @@ class TallyClient:
 
         Wraps `_post_xml` and adds the import-only parse-and-raise that
         `_post_xml` itself can't do: export-data callers (`get_ledger`,
-        `get_all_ledgers`, `get_all_groups`, `get_trial_balance`,
+        `get_all_ledgers`, `get_all_groups`, `get_ledger_opening_balances`,
         `get_outstanding`) share `_post_xml` and their response envelopes
         have no <CREATED> element. Single choke point for `post_voucher`,
         `approve_optional_voucher`, `reject_optional_voucher` — future
@@ -1055,34 +1055,45 @@ class TallyClient:
         }
 
     # ------------------------------------------------------------------
-    # get_trial_balance
+    # get_ledger_opening_balances
     # ------------------------------------------------------------------
 
-    async def get_trial_balance(
-        self,
-        from_date: str | None = None,
-        to_date: str | None = None,
-    ) -> list[TrialBalanceRow]:
-        from_date = from_date or _fiscal_year_start()
-        to_date = to_date or _fiscal_year_end()
+    async def get_ledger_opening_balances(self) -> list[TrialBalanceRow]:
+        """Every ledger's Tally OPENINGBALANCE (the balance at books-start).
 
+        TallyPrime rejects the bare `Export Data` / `Trial Balance` form
+        ("Unknown Request, cannot be processed" -- verified live
+        2026-09-19, every date variant), so this uses the TDL Collection
+        idiom, like `get_all_ledgers`. Tally signs debits NEGATIVE; the
+        returned `closing_balance` is converted to the backend convention
+        (positive = Dr, negative = Cr) so it can be fed straight to the
+        opening-balance seed.
+        """
         xml = (
             "<ENVELOPE>"
             "<HEADER>"
-            "<TALLYREQUEST>Export Data</TALLYREQUEST>"
-            "<TYPE>Data</TYPE>"
-            "<ID>Trial Balance</ID>"
+              "<VERSION>1</VERSION>"
+              "<TALLYREQUEST>Export</TALLYREQUEST>"
+              "<TYPE>Collection</TYPE>"
+              "<ID>TaxMindOpeningBalances</ID>"
             "</HEADER>"
             "<BODY><DESC>"
-            "<STATICVARIABLES>"
-            "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
-            f"<SVFROMDATE>{from_date}</SVFROMDATE>"
-            f"<SVTODATE>{to_date}</SVTODATE>"
-            "</STATICVARIABLES>"
+              "<STATICVARIABLES>"
+                "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
+              "</STATICVARIABLES>"
+              "<TDL>"
+                "<TDLMESSAGE>"
+                  '<COLLECTION NAME="TaxMindOpeningBalances" ISMODIFY="No">'
+                    "<TYPE>Ledger</TYPE>"
+                    "<NATIVEMETHOD>Name</NATIVEMETHOD>"
+                    "<NATIVEMETHOD>OpeningBalance</NATIVEMETHOD>"
+                  "</COLLECTION>"
+                "</TDLMESSAGE>"
+              "</TDL>"
             "</DESC></BODY></ENVELOPE>"
         )
         body = await self._post_xml(xml)
-        return self._parse_trial_balance(body)
+        return self._parse_opening_balances(body)
 
     # ------------------------------------------------------------------
     # get_outstanding
@@ -1203,7 +1214,7 @@ class TallyClient:
             out.append(GroupMaster(name=name, parent=parent))
         return out
 
-    def _parse_trial_balance(
+    def _parse_opening_balances(
         self, xml_string: str
     ) -> list[TrialBalanceRow]:
         try:
@@ -1211,19 +1222,18 @@ class TallyClient:
         except ET.ParseError as exc:
             raise TallyParseError(str(exc)) from exc
 
+        if root.tag == "RESPONSE":
+            raise TallyParseError(
+                f"Tally rejected the request: {(root.text or '').strip()}"
+            )
+
         out: list[TrialBalanceRow] = []
         for ledger in root.findall(".//LEDGER"):
-            name = _get_text(ledger, "NAME")
+            name = _strip_tally_ctrl(ledger.get("NAME", ""))
             if not name:
                 continue
-            out.append(
-                TrialBalanceRow(
-                    name=name,
-                    closing_balance=_decimal(
-                        _get_text(ledger, "CLOSINGBALANCE", "0")
-                    ),
-                )
-            )
+            tally_signed = _decimal(_get_text(ledger, "OPENINGBALANCE", "0"))
+            out.append(TrialBalanceRow(name=name, closing_balance=-tally_signed))
         return out
 
     def _parse_outstanding(self, xml_string: str) -> list[OutstandingItem]:

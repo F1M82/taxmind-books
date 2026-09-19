@@ -16,6 +16,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from datetime import date as _date
+from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -159,18 +160,38 @@ async def _handle_post_voucher(
 async def _handle_get_trial_balance(
     tally: TallyClient, args: dict[str, Any]
 ) -> dict[str, Any]:
-    """Read-only Trial Balance pull.
+    """Read-only opening-balance pull for the P3.2 seed.
 
-    Includes the current Tally company identity (name + GUID) alongside
-    the rows, mirroring `_handle_sync_masters` — callers that persist
-    Trial Balance data (e.g. the P3.2 opening-balance seed) run it through
-    the same fail-closed company-mapping gate as ledger master sync.
+    TallyPrime rejects a bare Trial Balance export, so this returns each
+    ledger's own OPENINGBALANCE (backend sign convention). That equals the
+    balance at `to_date + 1 day` ONLY when that day is the company's Tally
+    books-start date, so anything else is refused rather than written as
+    a wrong opening. Includes the Tally company identity (name + GUID) so
+    the seed runs through the same fail-closed company-mapping gate as
+    ledger master sync.
     """
     company = await tally.get_company_info()
-    rows = await tally.get_trial_balance(
-        from_date=args.get("from_date"),
-        to_date=args.get("to_date"),
-    )
+    to_date = args.get("to_date")
+    anchor = _date.fromisoformat(to_date) + timedelta(days=1) if to_date else None
+    if anchor is None or company.financial_year_start != anchor:
+        return {
+            "_error": {
+                "code": "opening_balance_anchor_not_books_start",
+                "message": (
+                    "Ledger opening balances are only valid at the Tally "
+                    "company's books-start date."
+                ),
+                "details": {
+                    "requested_anchor_date": anchor.isoformat() if anchor else None,
+                    "tally_books_start": (
+                        company.financial_year_start.isoformat()
+                        if company.financial_year_start
+                        else None
+                    ),
+                },
+            }
+        }
+    rows = await tally.get_ledger_opening_balances()
     return {
         "company": {"name": company.name, "guid": company.guid},
         "rows": [

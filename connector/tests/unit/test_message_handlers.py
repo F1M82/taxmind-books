@@ -40,9 +40,13 @@ def fake_tally() -> TallyClient:
         return_value=[GroupMaster(name="G1", parent="P1")]
     )
     c.get_company_info = AsyncMock(  # type: ignore[method-assign]
-        return_value=CompanyInfo(name="ACME", guid="c30a0ee5-0000-0000-0000-000000000000")
+        return_value=CompanyInfo(
+            name="ACME",
+            guid="c30a0ee5-0000-0000-0000-000000000000",
+            financial_year_start=date(2025, 4, 1),
+        )
     )
-    c.get_trial_balance = AsyncMock(  # type: ignore[method-assign]
+    c.get_ledger_opening_balances = AsyncMock(  # type: ignore[method-assign]
         return_value=[TrialBalanceRow(name="Cash", closing_balance=Decimal("100.00"))]
     )
     c.get_outstanding = AsyncMock(  # type: ignore[method-assign]
@@ -330,7 +334,11 @@ async def test_get_trial_balance_includes_company_identity(
     # carry the Tally company identity alongside the rows.
     result = await dispatch_command(
         tally=fake_tally,
-        payload={"command": "get_trial_balance", "args": {}, "company_id": "C"},
+        payload={
+            "command": "get_trial_balance",
+            "args": {"from_date": "2000-04-01", "to_date": "2025-03-31"},
+            "company_id": "C",
+        },
         registered_company_id="C",
     )
     assert result["status"] == "success"
@@ -341,6 +349,27 @@ async def test_get_trial_balance_includes_company_identity(
     )
     assert result["result"]["rows"][0]["name"] == "Cash"
     assert result["result"]["rows"][0]["closing_balance"] == "100.00"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("to_date", [None, "2025-06-30", "2025-04-01"])
+async def test_get_trial_balance_refuses_anchor_that_is_not_books_start(
+    fake_tally: TallyClient, to_date: str | None
+) -> None:
+    # Ledger openings are the balance at books-start only; any other anchor
+    # would seed wrong numbers, so the handler must refuse, not guess.
+    args = {"from_date": "2000-04-01"}
+    if to_date is not None:
+        args["to_date"] = to_date
+    result = await dispatch_command(
+        tally=fake_tally,
+        payload={"command": "get_trial_balance", "args": args, "company_id": "C"},
+        registered_company_id="C",
+    )
+    assert result["status"] == "error"
+    assert result["error"]["code"] == "opening_balance_anchor_not_books_start"
+    assert result["error"]["details"]["tally_books_start"] == "2025-04-01"
+    fake_tally.get_ledger_opening_balances.assert_not_called()  # type: ignore[attr-defined]
 
 
 # ---------------- unknown command ----------------

@@ -470,18 +470,23 @@ async def test_get_active_tally_company_surfaces_financial_year_start(
 # ---------------- get_trial_balance ----------------
 
 
-_TB_XML = """<?xml version="1.0" ?>
+# Shape captured from a live TallyPrime Ledger collection (2026-09-19): NAME is
+# an attribute, and Tally signs DEBITS NEGATIVE.
+_OPENING_XML = """<?xml version="1.0" ?>
 <ENVELOPE>
   <BODY>
     <DATA>
-      <LEDGER>
-        <NAME>Cash</NAME>
-        <CLOSINGBALANCE>50000.00</CLOSINGBALANCE>
-      </LEDGER>
-      <LEDGER>
-        <NAME>Sales</NAME>
-        <CLOSINGBALANCE>-100000.00</CLOSINGBALANCE>
-      </LEDGER>
+      <COLLECTION>
+        <LEDGER NAME="ADARSH AGRO SERVICE CENTRE" RESERVEDNAME="">
+          <OPENINGBALANCE TYPE="Amount">-93375.00</OPENINGBALANCE>
+        </LEDGER>
+        <LEDGER NAME="Capital A/c" RESERVEDNAME="">
+          <OPENINGBALANCE TYPE="Amount">200000.00</OPENINGBALANCE>
+        </LEDGER>
+        <LEDGER NAME="Zero Ledger" RESERVEDNAME="">
+          <OPENINGBALANCE TYPE="Amount">0.00</OPENINGBALANCE>
+        </LEDGER>
+      </COLLECTION>
     </DATA>
   </BODY>
 </ENVELOPE>
@@ -489,18 +494,34 @@ _TB_XML = """<?xml version="1.0" ?>
 
 
 @pytest.mark.asyncio
-async def test_get_trial_balance_uses_decimal(
+async def test_get_ledger_opening_balances_flips_to_backend_sign(
     client: TallyClient, httpx_mock: HTTPXMock
 ) -> None:
     httpx_mock.add_response(
-        url="http://localhost:9000", status_code=200, text=_TB_XML
+        url="http://localhost:9000", status_code=200, text=_OPENING_XML
     )
-    rows = await client.get_trial_balance()
+    rows = await client.get_ledger_opening_balances()
     by_name = {r.name: r for r in rows}
-    assert by_name["Cash"].closing_balance == Decimal("50000.00")
-    assert by_name["Sales"].closing_balance == Decimal("-100000.00")
-    # Verify Decimal not float.
-    assert isinstance(by_name["Cash"].closing_balance, Decimal)
+    # Tally -93375 is a DEBIT; backend convention is positive = Dr.
+    assert by_name["ADARSH AGRO SERVICE CENTRE"].closing_balance == Decimal("93375.00")
+    assert by_name["Capital A/c"].closing_balance == Decimal("-200000.00")
+    assert by_name["Zero Ledger"].closing_balance == Decimal("0.00")
+    assert isinstance(by_name["Capital A/c"].closing_balance, Decimal)
+
+
+@pytest.mark.asyncio
+async def test_get_ledger_opening_balances_raises_on_unknown_request(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    # Tally answers a rejected request with HTTP 200 and this envelope; it
+    # must NOT be read as "zero ledgers" (the silent-success bug).
+    httpx_mock.add_response(
+        url="http://localhost:9000",
+        status_code=200,
+        text="<RESPONSE>Unknown Request, cannot be processed</RESPONSE>",
+    )
+    with pytest.raises(TallyParseError, match="Unknown Request"):
+        await client.get_ledger_opening_balances()
 
 
 # ---------------- get_outstanding ----------------

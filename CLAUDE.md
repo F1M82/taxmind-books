@@ -72,9 +72,31 @@ directly in a visible PowerShell window) — a `-WindowStyle Minimized`
 or otherwise non-interactive launch skips the prompt and fails exactly
 as before, since there's nothing to answer it. See
 `connector/connector/enrollment.py` (step 2) and
-`mobile/src/screens/admin/AddDeviceScreen.tsx` (step 1). The mobile
-piece needs a fresh EAS build to actually reach a device — not yet
-verified on-device, only via TypeScript + Jest.
+`mobile/src/screens/admin/AddDeviceScreen.tsx` (step 1). Verified
+on-device 2026-09-19 (EAS build versionCode 9): owner generated a code
+in the app, pasted it into the connector, `.env` written, connected.
+Pitfalls hit that day:
+- The app on a phone only has "Add a device" if it was built after
+  commit `2ac3192`; an older APK simply lacks the screen. Rebuild via
+  `eas build --platform android --profile development`.
+- The `.exe` only has the enrollment prompt if built from `55f06aa` or
+  later. A stale `dist/` exe prints `CONNECTOR_TOKEN missing` and exits.
+- Piping a code in (`echo code | exe`, from an agent's Bash tool) does
+  NOT work — the prompt checks for a real console. The user has to run
+  it in their own PowerShell window. Also runs in the foreground:
+  closing that window stops the connector (it was found dead overnight
+  on 2026-09-19, which the app shows as "Tally connector disconnected").
+- Manual no-mobile fallback: `docs/CONNECTOR_ENROLLMENT.md` (login →
+  issue code → exchange, all API calls).
+
+**Mobile talks to production, not the LAN.** EAS builds (both
+`development` and `production` profiles in `mobile/eas.json`) bake
+`EXPO_PUBLIC_API_BASE_URL=https://books.gcwealthguru.com`, which
+`mobile/src/api/client.ts` reads before `app.json`'s
+`extra.API_BASE_URL`. That `extra` value (a LAN IP) only matters for
+Expo Go / dev-server runs — editing it does nothing for an installed
+build. A connector pointed at `ws://localhost:8000` while the phone uses
+production shows "disconnected": they are different backends.
 
 **Connector config.**
 
@@ -148,9 +170,33 @@ a backend change:
    startup, WS clients reconnecting) and `GET /health` returns
    `{"status":"ok","env":"production"}`.
 
+**Migrations are a separate manual step (missing from the above until
+2026-09-19).** The image only copies `app/`, not `alembic/`, and Postgres
+has no host port, so `alembic` can't run in the live container or from
+the host. Run it in a one-off container on the compose network with the
+host `backend/` mounted, *before* step 2's restart:
+
+```bash
+cd /opt/taxmind/app && docker compose -f docker-compose.prod.yml run --rm --no-deps \
+  -v /opt/taxmind/app/backend:/app --entrypoint alembic taxmind-api upgrade head
+```
+
+Check the current revision with
+`docker exec taxmind-prod-postgres-1 psql -U taxmind -d taxmind_books -c "SELECT * FROM alembic_version;"`.
+Before any migration: `cp -r` the backend dir and `pg_dump -Fc` (dump
+into `/var/backups/taxmind/`). Prod is at `0020` as of 2026-09-19. When
+several commits share one file (e.g. `models/company.py`), deploy them
+together, not one at a time, or code and schema drift.
+
+Not yet on prod as of 2026-09-20: auto-sync-on-connect (`5455d24`,
+`connector_ws.py` only). Safe over seeded data: `upsert_from_sync` never
+overwrites `opening_balance`.
+
 VPS host/port/SSH-key details are already recorded in this machine's
-Claude memory (`vps_cohosting_recon.md`) — not duplicated here since
-this file is checked into the repo.
+Claude memory (`vps_cohosting_recon.md`, `p32_opening_balance_seed.md`)
+— not duplicated here since this file is checked into the repo. The
+provider's noVNC console mangles multi-line paste; type one command at
+a time, and never push file contents through it (scp instead).
 
 ## Tally company mapping: two representations that can drift
 
@@ -175,22 +221,51 @@ don't reintroduce a binding-table-only lookup — it will silently
 report an already-mapped company as "Unmapped" and invite a doomed
 second mapping attempt.
 
+**Who can map.** `POST /connector/tally-mapping` and the mobile "Connect
+this company" button require **owner/admin** on a company the connector
+serves (`_connector_authorized`, `connector.py`). An `accountant` member
+gets a 403 that the app renders as the generic "Could not connect this
+company" (only `gstin_already_registered` and `tally_mapping_collision`
+have their own messages). Fix is a role change in Members, not a bug.
+
 ## Opening-balance seed (P3.2)
 
 Implements `docs/PHASE_3_OPENING_BALANCE_ARCHITECTURE.md` (the
 historical-Tally-mirror opening-balance design, APPROVED 2026-08-14).
-Built + tested 2026-09-15 (migration `0019`,
+Built 2026-09-15 (migration `0019`,
 `backend/app/services/tally/opening_balance_seed.py`,
-`POST /api/v1/connector/opening-balance-seed/{company_id}`) — **not yet
-run against any real company.** Migration `0019` has not been applied
-anywhere outside the test DB; no production `opening_balance` has been
-touched by this feature yet.
+`POST /api/v1/connector/opening-balance-seed/{company_id}`). **Run live
+on Vighnaharta Agro Chemicals 2026-09-19:** anchor `2025-04-01`, 621
+ledgers seeded (186 non-zero), DB Dr 72,82,340.65 / Cr 80,16,142.52 ==
+Tally's own totals. Do not re-run; a re-run is a no-op.
 
-**What it does.** Pulls a Tally Trial Balance (as-of `anchor_date - 1
-day`) via the connector's `get_trial_balance` command and writes each
-matched ledger's `opening_balance`/`balance_type` **once**. Owner-only,
-Idempotency-Key required, 202 + background persist — same shape as
-`sync_masters`/`trigger_sync`.
+**What it does.** Calls the connector's `get_trial_balance` command and
+writes each matched ledger's `opening_balance`/`balance_type` **once**.
+Owner-only, Idempotency-Key required, 202 + background persist — same
+shape as `sync_masters`/`trigger_sync`. The 202 says nothing about the
+outcome; read the server log line
+`opening_balance_seed <task_id> persisted ...: {'seeded': N, ...}`.
+
+**Tally quirks found on the first real run (2026-09-19):**
+- TallyPrime rejects the bare `Export Data`/`Trial Balance` request with
+  `<RESPONSE>Unknown Request</RESPONSE>` (HTTP 200) for every date form.
+  The connector used to read that as zero ledgers and report success, so
+  the first run "succeeded" with `seeded: 0`. The connector now uses a
+  TDL Ledger collection (`get_ledger_opening_balances`) and raises on a
+  `<RESPONSE>` error. Fake-Tally unit tests had hidden this.
+- Tally signs **debits negative**; the backend is positive = Dr. The
+  connector negates. Any new Tally-balance reader must too.
+- Ledger `OPENINGBALANCE` is the balance at the company's books-start
+  only, so the handler refuses unless `to_date + 1 day` equals Tally's
+  `STARTINGFROM` (`opening_balance_anchor_not_books_start`). A company
+  whose books begin on the anchor has no earlier data for a "TB as of
+  anchor − 1" (the original design), which is why this differs from the
+  architecture doc's wording.
+- Opening **stock** lives in stock items, not ledgers, so it is not
+  seeded: Vighnaharta's opening TB is short by exactly its stock value
+  (Dr 7,33,801.87). Open item, not yet handled.
+- The company anchor locks even when zero ledgers were seeded (the
+  no-op first run locked it to 2025-04-01), so pick the anchor carefully.
 
 **Idempotency/safety invariants worth knowing before touching this
 code again:**
@@ -212,14 +287,14 @@ code again:**
   Balance reply's Tally company GUID must match `Company.tally_master_id`,
   or nothing is written.
 
-Vighnaharta Agro Chemicals' 621 already-synced ledgers are all
-currently at `opening_balance=0` (master sync never carried opening
-balances — see `[[pilot_phase_a_direct_entry]]` memory) and would be
-the first real candidate for this operation, whenever that's approved.
+Master sync never carries opening balances (see
+`[[pilot_phase_a_direct_entry]]` memory), so "ledgers visible, balances
+all zero" after a fresh company sync means the seed hasn't been run,
+not that sync is broken.
 
 ## Company-timezone-aware "today" (dashboard/reports)
 
-Fixed 2026-09-15 (migration `0020`, `companies.timezone`,
+Fixed 2026-09-15, deployed to production 2026-09-19 (migration `0020`, `companies.timezone`,
 `app/core/company_time.py::company_today`). Every day-boundary default
 — dashboard's `today`/`this_month`, `GET /reports/*`'s `as_of_date`/
 `from_date`/`to_date` defaults — now goes through `company_today(company)`
@@ -251,7 +326,16 @@ token anywhere (never printed to logs, never committed, only ever
 lived in that one file). Re-enrolling is always possible (CONNECTOR
 tokens are cheap to reissue, see "Connector enrollment for local dev"
 above) but requires an `owner`'s login, so it's not something to
-trigger by accident.
+trigger by accident. Practice since 2026-09-19: `cp dist/.env
+.env.prod.bak` (outside `dist/`, untracked, holds a live token — delete
+when done), stop the running exe (`taskkill //IM
+TaxMindBooksConnector.exe //F`), build, copy the `.env` back, relaunch.
+
+**`BUILD_INFO.json` can lie about `dirty`.** A build made from
+uncommitted connector changes on 2026-09-19 was stamped
+`sha=2ac3192 dirty=False`, so the staleness check would call it current
+while it contained different code. Commit *before* building when the
+build is meant to ship; the stamped sha then identifies the binary.
 
 ## Auto-sync-on-connect (2026-09-15)
 

@@ -234,6 +234,24 @@ class TrialBalanceRow:
 
 
 @dataclass(frozen=True)
+class StockValuation:
+    """Tally's own stock value for the period the gateway is scoped to.
+
+    Values are in the BACKEND sign convention (Dr positive), so a debit
+    stock value is positive and a net credit (negative stock) is negative.
+    """
+
+    period_from: date
+    period_to: date
+    opening_value: Decimal
+    closing_value: Decimal
+    item_count: int
+    items_with_value: int
+    # Items whose closing QUANTITY is negative (issued more than received).
+    negative_stock_items: int
+
+
+@dataclass(frozen=True)
 class OutstandingItem:
     bill_name: str
     amount: Decimal
@@ -1196,6 +1214,77 @@ class TallyClient:
         )
         body = await self._post_xml(xml)
         return self._parse_opening_balances(body)
+
+    # ------------------------------------------------------------------
+    # get_stock_valuation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_get_stock_valuation_xml() -> str:
+        """READ-ONLY StockItem collection: name, opening/closing value+qty.
+
+        Sends NO date static variables: those froze live TallyPrime when
+        combined with valuation collections (2026-09-28). The values Tally
+        returns are for the period the gateway is scoped to (the company
+        period set at the Gateway of Tally main menu) -- verified live
+        against Tally's own Balance Sheet.
+        """
+        return (
+            "<ENVELOPE><HEADER><VERSION>1</VERSION>"
+            "<TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE>"
+            "<ID>TaxMindStockValuation</ID></HEADER><BODY><DESC>"
+            "<STATICVARIABLES>"
+            "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
+            "</STATICVARIABLES><TDL><TDLMESSAGE>"
+            '<COLLECTION NAME="TaxMindStockValuation" ISMODIFY="No">'
+            "<TYPE>StockItem</TYPE>"
+            "<NATIVEMETHOD>Name</NATIVEMETHOD>"
+            "<NATIVEMETHOD>OpeningValue</NATIVEMETHOD>"
+            "<NATIVEMETHOD>ClosingValue</NATIVEMETHOD>"
+            "<NATIVEMETHOD>ClosingBalance</NATIVEMETHOD>"
+            "</COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>"
+        )
+
+    async def get_stock_valuation(self) -> StockValuation:
+        """Opening/closing stock value for the gateway's active period.
+
+        Raises:
+            TallyParseError: malformed XML, or Tally rejected the request.
+        """
+        period_from, period_to = await self.get_active_period()
+        body = await self._post_xml(self._build_get_stock_valuation_xml())
+        try:
+            root = ET.fromstring(body)
+        except ET.ParseError as exc:
+            raise TallyParseError(str(exc)) from exc
+        if root.tag == "RESPONSE":
+            raise TallyParseError(
+                f"Tally rejected the request: {(root.text or '').strip()}"
+            )
+
+        opening = Decimal("0")
+        closing = Decimal("0")
+        count = with_value = negative_qty = 0
+        for item in root.findall(".//STOCKITEM"):
+            count += 1
+            o = _decimal(_get_text(item, "OPENINGVALUE", "0").strip())
+            c = _decimal(_get_text(item, "CLOSINGVALUE", "0").strip())
+            opening += o
+            closing += c
+            if o != 0 or c != 0:
+                with_value += 1
+            if _get_text(item, "CLOSINGBALANCE").strip().startswith("-"):
+                negative_qty += 1
+        # Tally signs debits negative; the backend is Dr-positive.
+        return StockValuation(
+            period_from=period_from,
+            period_to=period_to,
+            opening_value=-opening,
+            closing_value=-closing,
+            item_count=count,
+            items_with_value=with_value,
+            negative_stock_items=negative_qty,
+        )
 
     # ------------------------------------------------------------------
     # get_outstanding

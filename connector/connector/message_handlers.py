@@ -201,6 +201,30 @@ async def _handle_get_trial_balance(
     }
 
 
+async def _handle_get_stock_valuation(
+    tally: TallyClient, args: dict[str, Any]
+) -> dict[str, Any]:
+    """READ-ONLY opening/closing stock value for Tally's active period.
+
+    Includes the Tally company identity (name + GUID) so the backend runs it
+    through the same fail-closed company-mapping gate as every other write
+    derived from Tally. The period comes from Tally's own gateway scope; the
+    backend decides whether it is a single financial year worth storing.
+    """
+    company = await tally.get_company_info()
+    v = await tally.get_stock_valuation()
+    return {
+        "company": {"name": company.name, "guid": company.guid},
+        "period_from": v.period_from.isoformat(),
+        "period_to": v.period_to.isoformat(),
+        "opening_value": str(v.opening_value),
+        "closing_value": str(v.closing_value),
+        "item_count": v.item_count,
+        "items_with_value": v.items_with_value,
+        "negative_stock_items": v.negative_stock_items,
+    }
+
+
 async def _handle_get_outstanding(
     tally: TallyClient, args: dict[str, Any]
 ) -> dict[str, Any]:
@@ -320,6 +344,7 @@ HANDLERS: dict[str, HandlerFn] = {
     "get_active_tally_company": _handle_get_active_tally_company,
     "post_voucher": _handle_post_voucher,
     "get_trial_balance": _handle_get_trial_balance,
+    "get_stock_valuation": _handle_get_stock_valuation,
     "get_outstanding": _handle_get_outstanding,
     "export_vouchers": _handle_export_vouchers,
     "approve_optional_voucher": _handle_approve_optional_voucher,

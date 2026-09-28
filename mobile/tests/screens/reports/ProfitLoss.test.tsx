@@ -59,3 +59,39 @@ test("renders net = loss when net.type is loss", async () => {
 
   await findByText("Net Loss");
 });
+
+
+test("shows opening and closing stock when a valuation applies", async () => {
+  mockGetProfitLoss.mockResolvedValue({
+    from_date: "2025-04-01",
+    to_date: "2026-03-31",
+    income: { ledgers: [], total: "500.00" },
+    expense: { ledgers: [], total: "200.00" },
+    stock: {
+      opening_value: "700.00",
+      closing_value: "400.00",
+      source: "tally",
+      captured_at: "2026-09-28T10:00:00Z",
+    },
+    net: { value: "0.00", type: "profit" },
+  });
+  const { findByText, getByLabelText } = render(<ProfitLossScreen />);
+  await findByText("Opening stock");
+  await findByText("Closing stock");
+  expect(getByLabelText("stock-block")).toBeTruthy();
+  await findByText("From Tally, included in the net result.");
+});
+
+test("shows no stock block when no valuation applies", async () => {
+  mockGetProfitLoss.mockResolvedValue({
+    from_date: "2025-04-01",
+    to_date: "2025-12-31",
+    income: { ledgers: [], total: "0.00" },
+    expense: { ledgers: [], total: "0.00" },
+    stock: null,
+    net: { value: "0.00", type: "profit" },
+  });
+  const { findByLabelText, queryByLabelText } = render(<ProfitLossScreen />);
+  await findByLabelText("net-row");
+  expect(queryByLabelText("stock-block")).toBeNull();
+});

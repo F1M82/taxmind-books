@@ -800,6 +800,49 @@ failed run carries `error: { "code", "message" }`, e.g.
 
 ---
 
+#### `POST /api/v1/connector/stock-valuation/{company_id}`
+
+Read Tally's own opening/closing **stock value** and record it for one financial
+year (design: `PHASE_3_CLOSING_STOCK_DESIGN.md`). Owner/admin; `X-Company-ID` must
+equal the path id. No `Idempotency-Key` needed (re-pulling a year replaces it).
+
+Tally values stock for the period its XML gateway is scoped to, which the operator
+sets **at the Gateway of Tally main menu (F2 there)** to a single financial year.
+The Tally company identity must match this company (fail-closed, as for the master
+sync). Responds `200` with a `StockValuation` (see `GET /stock-valuations`).
+
+**Errors:**
+- `422 stock_period_not_single_fy` — Tally's active period is not exactly 1 April – 31 March; the message tells the operator to set one year.
+- `409 stock_opening_mismatch` — for the company's first financial year the opening stock must equal its Stock-in-Hand ledger balance (the seeded opening trial balance); `details` carries both figures.
+- `409 company_mapping_conflict` — Tally company GUID doesn't match this company.
+- `502 stock_valuation_pull_failed` — connector error/timeout (`details.connector_code` when the connector replied).
+- `503 connector_offline`.
+
+#### `GET /api/v1/stock-valuations`
+
+Recorded valuations, newest financial year first. Any role.
+
+```json
+{
+  "items": [
+    {
+      "id": "uuid", "label": "FY 2025-26",
+      "period_from": "2025-04-01", "period_to": "2026-03-31",
+      "opening_value": "733801.87", "closing_value": "-139818.21",
+      "source": "tally", "item_count": 210, "negative_stock_items": 18,
+      "captured_at": "2026-09-28T10:00:00Z"
+    }
+  ]
+}
+```
+Values are **Dr-positive and signed**: a negative `closing_value` is a net credit (Tally's negative stock — more issued than received) and is mirrored, never clamped. `negative_stock_items` counts items with a negative closing quantity, for a bookkeeper's review.
+
+#### `PUT /api/v1/stock-valuations/{period_from}`
+
+Enter or replace a year's values by hand (owner/admin). `period_from` must be a 1 April; the year end is derived. Body `{ "opening_value": "-50.00", "closing_value": "400.00" }`. Same rules as a Tally pull (`422 stock_period_not_single_fy`, `409 stock_opening_mismatch`). Audited as `stock_valuation.recorded`.
+
+**How reports use it.** Profit & loss and balance sheet apply a valuation only when the window is exactly the shape it describes — starts 1 April, ends on the year end (or, for the current year, on/after today). Otherwise, or with no valuation recorded, reports are unchanged. `GET /reports/profit-loss` then returns a `stock` block and `net = income − expense + closing − opening`; `GET /reports/balance-sheet` returns `stock_applied: true`, replaces the Stock-in-Hand ledger with a `Closing Stock` line and adds the stock effect to both P&L figures. The balance sheet applies stock all-or-nothing and only if it still balances.
+
 ---
 
 ### Tally Company Mapping (v1.3)
@@ -1211,13 +1254,13 @@ Response shape: see `REPORTS.md` § Trial Balance.
 
 Query: `from_date`, `to_date` (default current FY).
 
-Response shape: see `REPORTS.md` § Profit & Loss.
+Response shape: see `REPORTS.md` § Profit & Loss. When a stock valuation applies to the period the response also carries `stock: { opening_value, closing_value, source, captured_at }` and `net` includes it (see `POST /connector/stock-valuation`); otherwise `stock` is `null`.
 
 ### `GET /api/v1/reports/balance-sheet`
 
 Query: `as_of_date` (default today).
 
-Response shape: see `REPORTS.md` § Balance Sheet.
+Response shape: see `REPORTS.md` § Balance Sheet. Includes `prior_periods_profit_loss` and `stock_applied` (see `POST /connector/stock-valuation`).
 
 ### `GET /api/v1/reports/outstanding`
 
@@ -1489,6 +1532,9 @@ The following `error.code` values are stable v1 contracts. Clients depend on the
 | `ownership_transfer_required` | 409 | (v1.2) Account deletion blocked; user is sole owner |
 | `extraction_quota_exceeded` | 429 | (v1.2) Daily AI extraction limit reached |
 | `rate_limit_exceeded` | 429 | Too many requests |
+| `stock_period_not_single_fy` | 422 | (Phase B) A stock valuation period is not exactly one financial year (1 Apr – 31 Mar) |
+| `stock_opening_mismatch` | 409 | (Phase B) First-year opening stock differs from the Stock-in-Hand ledger balance |
+| `stock_valuation_pull_failed` | 502 | (Phase B) The connector could not return Tally's stock valuation |
 | `opening_balance_not_seeded` | 409 | (Phase B) Voucher import requested before the company's opening balances were seeded |
 | `voucher_import_before_anchor` | 422 | (Phase B) Voucher import range starts before the opening-balance anchor (or `to_date` < `from_date`) |
 | `voucher_import_run_not_found` | 404 | (Phase B) Unknown voucher-import task id, or it belongs to another company |

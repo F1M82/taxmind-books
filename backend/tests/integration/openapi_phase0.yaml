@@ -111,6 +111,12 @@ endpoints:
     methods: [POST]
   - path: /api/v1/connector/voucher-import/{task_id}
     methods: [GET]
+  - path: /api/v1/connector/stock-valuation/{company_id}
+    methods: [POST]
+  - path: /api/v1/stock-valuations
+    methods: [GET]
+  - path: /api/v1/stock-valuations/{period_from}
+    methods: [PUT]
   - path: /api/v1/connector/tally-mapping
     methods: [POST]
   - path: /api/v1/connector/{connector_id}/tally-companies

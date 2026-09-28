@@ -36,6 +36,7 @@ export default function DashboardScreen({
   onOpenMembers,
   onOpenAuditLog,
   onOpenAddDevice,
+  onOpenStockValuation,
 }: {
   onOpenCompanies: () => void;
   onOpenLedgers: () => void;
@@ -48,6 +49,7 @@ export default function DashboardScreen({
   onOpenMembers: () => void;
   onOpenAuditLog: () => void;
   onOpenAddDevice: () => void;
+  onOpenStockValuation: () => void;
 }): React.ReactElement {
   const { user, signOut } = useAuth();
   const { activeCompanyId, loading: companyLoading } = useActiveCompany();
@@ -291,6 +293,20 @@ export default function DashboardScreen({
                 >
                   <Text style={styles.shortcutTitle}>Activity Log</Text>
                   <Text style={styles.shortcutSubtitle}>Who did what</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="open-stock-valuation"
+                  onPress={onOpenStockValuation}
+                  style={({ pressed }) => [
+                    styles.shortcut,
+                    pressed && { opacity: 0.85 },
+                  ]}
+                >
+                  <Text style={styles.shortcutTitle}>Stock valuation</Text>
+                  <Text style={styles.shortcutSubtitle}>
+                    Opening / closing stock per year
+                  </Text>
                 </Pressable>
                 {isOwner && (
                   <Pressable

@@ -63,6 +63,7 @@ def migrated_db(db_or_skip: str) -> str:
         conn.execute(text("DROP TABLE IF EXISTS connectors CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS idempotency_keys CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS audit_logs CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS stock_valuations CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS ledger_entries CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS vouchers CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS ledgers CASCADE"))

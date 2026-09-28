@@ -234,3 +234,23 @@ class VoucherImportBeforeAnchor(ValidationFailed):
 
 class VoucherImportRunNotFound(NotFound):
     code = "voucher_import_run_not_found"
+
+
+class StockPeriodNotSingleFY(ValidationFailed):
+    """A stock valuation must cover exactly one Indian financial year
+    (1 April - 31 March)."""
+
+    code = "stock_period_not_single_fy"
+
+
+class StockOpeningMismatch(Conflict):
+    """The first financial year's opening stock differs from the company's
+    Stock-in-Hand ledger balance; applying it would unbalance the books."""
+
+    code = "stock_opening_mismatch"
+
+
+class StockValuationPullFailed(UpstreamError):
+    """The connector could not return Tally's stock valuation."""
+
+    code = "stock_valuation_pull_failed"

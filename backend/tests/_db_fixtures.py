@@ -75,6 +75,7 @@ def migrated_engine() -> Generator[str, None, None]:
         conn.execute(text("DROP TABLE IF EXISTS connectors CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS idempotency_keys CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS audit_logs CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS stock_valuations CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS ledger_entries CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS vouchers CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS ledgers CASCADE"))
@@ -159,7 +160,7 @@ def _reset_tenancy_tables(migrated_engine: str) -> Generator[None, None, None]:
                 "device_tokens, "
                 "connector_enrollment_codes, "
                 "connector_company_bindings, tally_companies_discovered, connectors, "
-                "idempotency_keys, audit_logs, ledger_entries, "
+                "idempotency_keys, audit_logs, ledger_entries, stock_valuations, "
                 "vouchers, ledgers, user_companies, companies, users "
                 "RESTART IDENTITY CASCADE"
             )

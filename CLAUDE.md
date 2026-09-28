@@ -370,3 +370,46 @@ deadlock the connection). Gated by `TAXMIND_SKIP_TALLY_DISPATCH` even
 though it's a read, not a dispatch — reuses the existing "don't reach
 out to a connector during tests" switch rather than adding a second
 flag; `tests/conftest.py` already sets it for the whole suite.
+
+## Phase B additions, built 2026-09-28 (NOT yet deployed)
+
+Local commits only until pushed/deployed. Deploy = the manual recipe above, **plus
+migration `0021`** (`stock_valuations`; run it in the one-off container *before* the
+restart), the backend files, a **rebuilt connector `.exe`** (back up `dist/.env`
+first) and a new EAS build for the mobile screens.
+
+**Tally gateway period rule (verified live).** The XML gateway is scoped to the
+*company-level period set at the Gateway of Tally main menu (F2 there)* — NOT a period
+changed inside an open report. A window outside it silently returns nothing, and
+`ClosingBalance`/stock values are for that period. The connector now checks
+(`get_active_period`, `TallyPeriodNotCovered` -> `tally_period_not_covered`).
+**Never send `SVFROMDATE`/`SVTODATE` static variables to this Tally**: with valuation
+collections they froze TallyPrime.
+
+**Historical voucher import** — `POST /connector/voucher-import/{company_id}`
+(owner, Idempotency-Key, **dry-run by default**) + `GET .../voucher-import/{task_id}`.
+Monthly windows via `export_vouchers`; refuses unless the opening balances are seeded and
+`from_date >= opening_balance_anchor_date`; re-checks the open Tally company (fail-closed
+mapping gate) before every window; commits per window; stops on first failure. Idempotent
+on `(company_id, tally_guid)`. Run state is in-process (lost on restart). Do a dry run
+first; the operator must set Tally's period to cover the range. Code:
+`services/tally/voucher_import_run.py`. Not live-verified end-to-end against prod.
+
+**Report periods** — `GET /reports/periods` (years from the anchor/earliest voucher to
+now) + mobile financial-year chips on P&L / Trial Balance / Balance Sheet.
+
+**Balance sheet multi-year fix** — it used to 500 (`balance_sheet_unbalanced`) for any
+date after the first financial year (prior years' profit was held nowhere). Now equity =
+`prior_periods_profit_loss` + current period, like Tally. Importing Vighnaharta's FY
+2026-27 vouchers would have triggered it.
+
+**Stock valuation** — per financial year, Tally's own opening/closing stock value
+(`stock_valuations`; `GET/PUT /stock-valuations`, `POST /connector/stock-valuation/{id}`,
+connector command `get_stock_valuation`, mobile Dashboard -> "Stock valuation"). Applied
+to P&L / balance sheet / dashboard only for whole-year windows with the needed rows;
+without them everything is unchanged. Vighnaharta has NO valuation recorded yet: after
+deploying, per year: set Tally's period to that one FY at the main menu, then "Read stock
+from Tally" (first year's opening must equal the seeded `Opening Stock` ledger,
+Dr 7,33,801.87). Tally shows **negative stock** for Vighnaharta (closing is a net credit;
+dozens of items have negative closing quantity) — mirrored faithfully, flagged in the app;
+the bookkeeper should review it. Design + as-built: `docs/PHASE_3_CLOSING_STOCK_DESIGN.md`.

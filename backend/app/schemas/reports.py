@@ -6,7 +6,7 @@ Decimal strings per R5/MONEY.md; date fields as ISO-8601.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -73,11 +73,26 @@ class PnLNet(TaxMindBooksBase):
     type: ProfitLoss
 
 
+class PnLStock(TaxMindBooksBase):
+    """Opening/closing stock folded into `net`. Dr-positive: a positive
+    closing value is stock on hand; a negative one is a net credit (Tally's
+    negative stock) and is shown faithfully."""
+
+    opening_value: SignedMoney
+    closing_value: SignedMoney
+    source: str  # "tally" | "manual"
+    captured_at: datetime
+
+
 class ProfitLossResponse(TaxMindBooksBase):
     from_date: date
     to_date: date
     income: PnLSection
     expense: PnLSection
+    # Present only when a stock valuation applies to this exact period;
+    # `net` = income - expense + closing stock - opening stock. Null means
+    # `net` = income - expense (no valuation recorded / period not a whole FY).
+    stock: PnLStock | None = None
     net: PnLNet
 
 
@@ -126,6 +141,9 @@ class BalanceSheetResponse(TaxMindBooksBase):
     # Net result of all financial years before the one containing
     # `as_of_date` (Tally's P&L A/c "Opening Balance"). Additive field.
     prior_periods_profit_loss: BSPnL
+    # True when the recorded stock valuation replaced the static Stock-in-Hand
+    # ledger balance and its profit effect is inside both P&L figures.
+    stock_applied: bool = False
     equation: BSEquation
 
 

@@ -141,6 +141,26 @@ export default function ProfitLossScreen(): React.ReactElement {
               ))}
             </Section>
 
+            {data.stock != null && (
+              <View style={styles.section} accessibilityLabel="stock-block">
+                <Text style={styles.sectionTitle}>Stock</Text>
+                <LineRow
+                  name="Opening stock"
+                  amount={data.stock.opening_value}
+                />
+                <LineRow
+                  name="Closing stock"
+                  amount={data.stock.closing_value}
+                />
+                <Text style={styles.stockNote}>
+                  {data.stock.source === "tally"
+                    ? "From Tally"
+                    : "Entered manually"}
+                  , included in the net result.
+                </Text>
+              </View>
+            )}
+
             <View
               accessibilityLabel="net-row"
               style={[
@@ -260,5 +280,6 @@ const styles = StyleSheet.create({
   netLabel: { color: "#fff", fontWeight: "700", fontSize: 16 },
   netAmount: { color: "#fff", fontWeight: "700", fontSize: 16 },
   empty: { color: "#666", fontStyle: "italic", paddingVertical: 4 },
+  stockNote: { fontSize: 12, color: "#666", marginTop: 2 },
   error: { color: "#c0392b", padding: 16 },
 });

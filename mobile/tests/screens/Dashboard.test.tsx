@@ -51,6 +51,7 @@ const HANDLERS = {
   onOpenMembers: jest.fn(),
   onOpenAuditLog: jest.fn(),
   onOpenAddDevice: jest.fn(),
+  onOpenStockValuation: jest.fn(),
 };
 
 beforeEach(() => {
@@ -164,4 +165,20 @@ test("surfaces an error message when the API call fails", async () => {
   const { findByText } = render(<DashboardScreen {...HANDLERS} />);
 
   await findByText("Could not load dashboard.");
+});
+
+
+test("the stock valuation tile opens the stock screen for an owner", async () => {
+  mockGetDashboardHome.mockResolvedValue(sample);
+
+  const { getByLabelText } = render(<DashboardScreen {...HANDLERS} />);
+
+  await waitFor(() => expect(mockGetDashboardHome).toHaveBeenCalled());
+  const tile = await waitFor(() => getByLabelText("open-stock-valuation"));
+
+  await act(async () => {
+    fireEvent.press(tile);
+  });
+
+  expect(HANDLERS.onOpenStockValuation).toHaveBeenCalled();
 });

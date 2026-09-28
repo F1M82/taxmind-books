@@ -19,6 +19,7 @@ from app.models.connector_enrollment import ConnectorEnrollmentCode
 from app.models.device_token import DevicePlatform, DeviceToken
 from app.models.idempotency_key import IdempotencyKey
 from app.models.ledger import BalanceType, Ledger
+from app.models.stock_valuation import StockValuation
 from app.models.user import User
 from app.models.voucher import (
     EntryType,
@@ -29,6 +30,7 @@ from app.models.voucher import (
 )
 
 __all__ = [
+    "StockValuation",
     "AccountDeletionRequest",
     "AccountDeletionStatus",
     "AuditLog",

@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Literal
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy.orm import Session
 
@@ -31,6 +31,7 @@ from app.services.reporting.profit_loss import (
     compute_profit_loss,
     fiscal_year_start,
 )
+from app.services.reporting.stock import balance_sheet_stock
 from app.services.reporting.tally_groups import ASSET_GROUPS, LIABILITY_GROUPS
 from app.services.reporting.trial_balance import (
     TrialBalanceRow,
@@ -68,6 +69,9 @@ class BalanceSheetResult:
     prior_periods_pnl_value: Decimal
     prior_periods_pnl_type: Literal["profit", "loss"]
     in_balance: bool
+    # True when the recorded stock valuation replaced the static Stock-in-Hand
+    # ledger balance and its profit effect is in both P&L figures.
+    stock_applied: bool = False
 
 
 def _section_from_rows(
@@ -112,8 +116,19 @@ def compute_balance_sheet(
     *,
     company_id: UUID,
     as_of_date: date,
+    anchor_date: date | None = None,
+    today: date | None = None,
 ) -> BalanceSheetResult:
-    """Compute the balance sheet as of `as_of_date`."""
+    """Compute the balance sheet as of `as_of_date`.
+
+    Pass ``anchor_date`` (the company's opening-balance anchor) and ``today``
+    (its local date) to apply the recorded stock valuation: the Stock-in-Hand
+    ledger balance is replaced by Tally's closing stock and the stock effect is
+    added to both P&L figures. It is applied all-or-nothing and only if the
+    result still balances; otherwise the sheet is exactly what it was without
+    stock, so a stale or mismatched valuation can never turn a good sheet into
+    a 500.
+    """
     asset_tb = compute_trial_balance(
         db,
         company_id=company_id,
@@ -149,20 +164,66 @@ def compute_balance_sheet(
     signed_pnl = _signed(pnl.net_value, pnl.net_type)
     signed_prior = _signed(prior.net_value, prior.net_type)
 
+    stock_applied = False
+    if today is not None:
+        stock = balance_sheet_stock(
+            db,
+            company_id=company_id,
+            as_of_date=as_of_date,
+            anchor_date=anchor_date,
+            today=today,
+        )
+        if stock is not None:
+            rows = [
+                r for r in asset_tb.rows if not _is_stock_group(r.group_name)
+            ]
+            rows.append(_stock_row(company_id, stock.closing_value))
+            assets_with_stock = _section_from_rows(rows, sign_for_section="Dr")
+            pnl_with_stock = signed_pnl + stock.current_net
+            prior_with_stock = signed_prior + stock.prior_net
+            if (
+                assets_with_stock.total
+                == liabilities.total + prior_with_stock + pnl_with_stock
+            ):
+                assets = assets_with_stock
+                signed_pnl, signed_prior = pnl_with_stock, prior_with_stock
+                stock_applied = True
+
     in_balance = assets.total == liabilities.total + signed_prior + signed_pnl
     return BalanceSheetResult(
         as_of_date=as_of_date,
         assets=assets,
         liabilities=liabilities,
-        current_period_pnl_value=pnl.net_value,
-        current_period_pnl_type=pnl.net_type,
-        prior_periods_pnl_value=prior.net_value,
-        prior_periods_pnl_type=prior.net_type,
+        current_period_pnl_value=abs(signed_pnl),
+        current_period_pnl_type="profit" if signed_pnl >= 0 else "loss",
+        prior_periods_pnl_value=abs(signed_prior),
+        prior_periods_pnl_type="profit" if signed_prior >= 0 else "loss",
         in_balance=in_balance,
+        stock_applied=stock_applied,
     )
 
 
 _BEGINNING_OF_TIME = date(1900, 1, 1)
+_STOCK_GROUP = "stock-in-hand"
+
+
+def _is_stock_group(group_name: str | None) -> bool:
+    return (group_name or "").strip().lower() == _STOCK_GROUP
+
+
+def _stock_row(company_id: UUID, closing_value: Decimal) -> TrialBalanceRow:
+    """Synthetic balance-sheet row for Tally's closing stock (Dr positive)."""
+    return TrialBalanceRow(
+        ledger_id=uuid5(NAMESPACE_URL, f"taxmind:stock-in-hand:{company_id}"),
+        ledger_name="Closing Stock",
+        group_name="Stock-in-Hand",
+        opening_balance=Decimal("0"),
+        opening_balance_type="Dr",
+        period_dr=Decimal("0"),
+        period_cr=Decimal("0"),
+        closing_balance=abs(closing_value),
+        closing_balance_type="Dr" if closing_value >= 0 else "Cr",
+    )
 
 
 def _signed(value: Decimal, kind: Literal["profit", "loss"]) -> Decimal:

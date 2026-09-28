@@ -43,6 +43,7 @@ from app.schemas.reports import (
     PnLLedger,
     PnLNet,
     PnLSection,
+    PnLStock,
     ProfitLossResponse,
     ReportPeriodsResponse,
     TrialBalanceExclusions,
@@ -161,7 +162,11 @@ def profit_loss(
     end = to_date or company_today(company)
     start = from_date or fiscal_year_start(end)
     result = compute_profit_loss(
-        db, company_id=company.id, from_date=start, to_date=end
+        db,
+        company_id=company.id,
+        from_date=start,
+        to_date=end,
+        today=company_today(company),
     )
     return ProfitLossResponse(
         from_date=result.from_date,
@@ -188,6 +193,16 @@ def profit_loss(
             ],
             total=result.expense.total,
         ),
+        stock=(
+            PnLStock(
+                opening_value=result.stock.opening_value,
+                closing_value=result.stock.closing_value,
+                source=result.stock.source,
+                captured_at=result.stock.captured_at,
+            )
+            if result.stock is not None
+            else None
+        ),
         net=PnLNet(value=result.net_value, type=result.net_type),
     )
 
@@ -206,7 +221,11 @@ def balance_sheet(
 ) -> BalanceSheetResponse:
     target = as_of_date or company_today(company)
     result = compute_balance_sheet(
-        db, company_id=company.id, as_of_date=target
+        db,
+        company_id=company.id,
+        as_of_date=target,
+        anchor_date=company.opening_balance_anchor_date,
+        today=company_today(company),
     )
     if not result.in_balance:
         # Per REPORTS.md: a balance sheet that doesn't balance means the
@@ -237,6 +256,7 @@ def balance_sheet(
             value=result.prior_periods_pnl_value,
             type=result.prior_periods_pnl_type,
         ),
+        stock_applied=result.stock_applied,
         equation=BSEquation(
             assets=result.assets.total,
             liabilities_plus_equity=(

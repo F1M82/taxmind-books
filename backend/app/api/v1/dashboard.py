@@ -95,7 +95,11 @@ def dashboard_financials(
     end = to_date or company_today(company)
     start = from_date or fiscal_year_start(end)
     result = compute_dashboard_financials(
-        db, company_id=company.id, from_date=start, to_date=end
+        db,
+        company_id=company.id,
+        from_date=start,
+        to_date=end,
+        today=company_today(company),
     )
     return DashboardFinancialsResponse(
         from_date=result.from_date,

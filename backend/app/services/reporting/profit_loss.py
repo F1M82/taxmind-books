@@ -29,6 +29,7 @@ from app.models.voucher import (
     Voucher,
     VoucherStatus,
 )
+from app.services.reporting.stock import StockEffect, stock_effect_for_window
 from app.services.reporting.tally_groups import EXPENSE_GROUPS, INCOME_GROUPS
 
 
@@ -54,6 +55,9 @@ class ProfitLossResult:
     expense: PnLSection
     net_value: Decimal
     net_type: Literal["profit", "loss"]
+    # Opening/closing stock folded into `net_*` (None = not applicable / no
+    # valuation recorded, in which case net is income - expense as before).
+    stock: StockEffect | None = None
 
 
 def _movements_for_groups(  # audit-exempt: read-only SELECT aggregation
@@ -114,8 +118,16 @@ def compute_profit_loss(
     company_id: UUID,
     from_date: date,
     to_date: date,
+    today: date | None = None,
 ) -> ProfitLossResult:
-    """Compute P&L over [from_date, to_date]."""
+    """Compute P&L over [from_date, to_date].
+
+    Pass ``today`` (the company's local date) to fold in the recorded stock
+    valuation: opening stock costs, closing stock adds, applied only when the
+    window is a whole-financial-year shape with valuations recorded (see
+    `reporting.stock`). Without ``today`` -- or with no valuation -- the
+    result is exactly income minus expense.
+    """
     # Income ledgers are Cr-natured: net income contribution = Cr - Dr.
     income = PnLSection()
     for lid, name, grp, sum_dr, sum_cr in _movements_for_groups(
@@ -154,7 +166,18 @@ def compute_profit_loss(
         )
         expense.total += amount
 
-    net = income.total - expense.total
+    stock = (
+        stock_effect_for_window(
+            db,
+            company_id=company_id,
+            from_date=from_date,
+            to_date=to_date,
+            today=today,
+        )
+        if today is not None
+        else None
+    )
+    net = income.total - expense.total + (stock.net if stock else Decimal("0"))
     net_value = abs(net)
     net_type: Literal["profit", "loss"] = "profit" if net >= 0 else "loss"
 
@@ -168,6 +191,7 @@ def compute_profit_loss(
         expense=expense,
         net_value=net_value,
         net_type=net_type,
+        stock=stock,
     )
 
 
@@ -235,6 +259,7 @@ def compute_dashboard_financials(
     company_id: UUID,
     from_date: date,
     to_date: date,
+    today: date | None = None,
 ) -> DashboardFinancials:
     """Headline financials over [from_date, to_date]: Sales (Cr-natured),
     Purchase and Expenses (Dr-natured), and Net Profit (full P&L)."""
@@ -263,7 +288,11 @@ def compute_dashboard_financials(
         credit_natured=False,
     )
     pl = compute_profit_loss(
-        db, company_id=company_id, from_date=from_date, to_date=to_date
+        db,
+        company_id=company_id,
+        from_date=from_date,
+        to_date=to_date,
+        today=today,
     )
     return DashboardFinancials(
         from_date=from_date,

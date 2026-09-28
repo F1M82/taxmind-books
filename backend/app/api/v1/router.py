@@ -21,6 +21,7 @@ from app.api.v1 import (
     ledgers,
     onboarding,
     reports,
+    stock_valuations,
     vouchers,
 )
 
@@ -38,3 +39,4 @@ api_v1.include_router(audit_logs.router)
 api_v1.include_router(connector.router)
 api_v1.include_router(connector_ws.router)
 api_v1.include_router(health.router)
+api_v1.include_router(stock_valuations.router)

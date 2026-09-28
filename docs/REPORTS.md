@@ -169,7 +169,10 @@ For each ledger L in (groups under Expense):
 total_income = sum(income_amounts)
 total_expense = sum(expense_amounts)
 gross_profit_or_loss = total_income - total_expense
+                       + closing_stock - opening_stock     # only when a stock valuation applies
 ```
+
+**Stock (Phase B).** TaxMind has no inventory, so stock comes from `stock_valuations` (one row per financial year: Tally's own opening and closing stock *value*, Dr-positive, recorded by a Tally pull or by hand — see `PHASE_3_CLOSING_STOCK_DESIGN.md`). It is applied only when the window is a whole-year shape — starts 1 April and ends on the year end (or, for the current year, on/after today) — and valuations exist for the first and last year of the window (`opening(FY n+1) = closing(FY n)`, so a multi-year window needs only those two). Otherwise, or with no valuation recorded, the P&L is exactly income − expense as before. The response then carries `stock: { opening_value, closing_value, source, captured_at }`; income/expense totals are unchanged and only `net` moves. A negative closing value (Tally's negative stock) is mirrored, never clamped. The dashboard's net profit uses the same computation.
 
 **Group classification:** the `group_name` field on `ledgers` carries Tally's group name. We map Tally groups to P&L vs Balance Sheet vs neither, per a static table in code (`backend/app/services/reporting/tally_groups.py`):
 
@@ -275,6 +278,8 @@ p_and_l_balance = compute_pnl(start_of_fy(as_of_date), as_of_date)
   }
 }
 ```
+
+**Stock on the balance sheet.** When a stock valuation applies (same whole-year rule, plus a valuation for every year the sheet depends on) the Stock-in-Hand ledger balance is replaced by a single `Closing Stock` line (Tally's closing value) and the stock effect (`closing − opening`) is added to the current-period figure and, for earlier years, to `prior_periods_profit_loss`; the response says `stock_applied: true`. Applied all-or-nothing, and only if the result still balances — otherwise the sheet is exactly what it was without stock, so a stale valuation cannot cause a 500.
 
 **Validation property:** `equation.in_balance` always true (`assets == liabilities + prior_periods_profit_loss + current_period_profit_loss`). If false, reject the response with a 500 error and an alert — the data is inconsistent.
 

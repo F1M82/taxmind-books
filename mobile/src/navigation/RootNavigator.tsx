@@ -9,6 +9,7 @@ import { ActivityIndicator, View } from "react-native";
 import { useAuth } from "../context/AuthContext";
 import { useActiveCompany } from "../context/CompanyContext";
 import AddDeviceScreen from "../screens/admin/AddDeviceScreen";
+import StockValuationScreen from "../screens/admin/StockValuationScreen";
 import AuditLogScreen from "../screens/admin/AuditLogScreen";
 import MembersScreen from "../screens/admin/MembersScreen";
 import LoginScreen from "../screens/auth/LoginScreen";
@@ -47,6 +48,7 @@ type AppStackParamList = {
   Members: undefined;
   AuditLog: undefined;
   AddDevice: undefined;
+  StockValuation: undefined;
 };
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -99,6 +101,9 @@ function AppFlow(): React.ReactElement {
             onOpenMembers={() => props.navigation.navigate("Members")}
             onOpenAuditLog={() => props.navigation.navigate("AuditLog")}
             onOpenAddDevice={() => props.navigation.navigate("AddDevice")}
+            onOpenStockValuation={() =>
+              props.navigation.navigate("StockValuation")
+            }
           />
         )}
       </AppStack.Screen>
@@ -192,6 +197,11 @@ function AppFlow(): React.ReactElement {
         name="AddDevice"
         component={AddDeviceScreen}
         options={{ title: "Add a device" }}
+      />
+      <AppStack.Screen
+        name="StockValuation"
+        component={StockValuationScreen}
+        options={{ title: "Stock valuation" }}
       />
       <AppStack.Screen name="Onboarding" options={{ title: "Onboarding" }}>
         {(props: NativeStackScreenProps<AppStackParamList, "Onboarding">) => (

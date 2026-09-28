@@ -52,11 +52,22 @@ export interface PnLSection {
   total: string;
 }
 
+/** Opening/closing stock folded into `net` (Dr-positive; a negative closing
+ *  value is a net credit, i.e. Tally's negative stock). */
+export interface PnLStock {
+  opening_value: string;
+  closing_value: string;
+  source: "tally" | "manual";
+  captured_at: string;
+}
+
 export interface ProfitLossResponse {
   from_date: string;
   to_date: string;
   income: PnLSection;
   expense: PnLSection;
+  /** Present only when a stock valuation applies to this exact period. */
+  stock?: PnLStock | null;
   net: { value: string; type: ProfitLossSign };
 }
 
@@ -94,6 +105,8 @@ export interface BalanceSheetResponse {
   /** Net result of financial years before the one shown (Tally's P&L A/c
    *  "Opening Balance"). Optional: absent from older backends. */
   prior_periods_profit_loss?: { value: string; type: ProfitLossSign };
+  /** True when the recorded stock valuation replaced the static stock ledger. */
+  stock_applied?: boolean;
   equation: {
     assets: string;
     liabilities_plus_equity: string;

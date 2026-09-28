@@ -1,7 +1,8 @@
-# Phase 3 — Stock valuation in P&L / Balance Sheet (PROPOSED)
+# Phase 3 — Stock valuation in P&L / Balance Sheet (IMPLEMENTED, not deployed)
 
-**Status:** PROPOSED 2026-09-28. Design only — no code, no schema change, nothing
-deployed. Needs approval before any build. Follows
+**Status:** APPROVED and BUILT 2026-09-28 (Option B, revised per the probe
+results below) — see "As built" at the end. Not deployed to prod: needs migration
+`0021`, the backend files, and a rebuilt connector `.exe`. Follows
 `PHASE_3_OPENING_BALANCE_ARCHITECTURE.md` (the opening-balance seed) and the
 one-off "Opening Stock" ledger created on prod for Vighnaharta on 2026-09-28.
 
@@ -202,3 +203,35 @@ Consequences for the design:
 
 Quantities, item masters, stock vouchers, godowns, batch tracking, GST HSN
 reporting from stock, any write to Tally.
+
+---
+
+## As built (2026-09-28)
+
+**Table** `stock_valuations` (migration `0021`): one row per (company, financial
+year), `opening_value` / `closing_value` signed Dr-positive, `source` tally|manual,
+`item_count` / `negative_stock_items` (data quality, Tally pulls only).
+
+**Recording** (`services/stock_valuation_service.py`):
+- exactly one Indian FY (1 Apr–31 Mar), else `422 stock_period_not_single_fy`;
+- for the company's first FY the opening must equal the Stock-in-Hand ledger
+  balance, else `409 stock_opening_mismatch` (keeps the balance sheet balanced);
+- re-recording a year replaces it; audited (`stock_valuation.recorded`).
+
+**Sources:** `POST /connector/stock-valuation/{company_id}` (connector command
+`get_stock_valuation`: plain StockItem query, no date variables; fail-closed company
+mapping) and `PUT /stock-valuations/{period_from}` (manual). `GET /stock-valuations`
+lists. Mobile: Dashboard -> "Stock valuation" (owner/admin pull button, negative-stock
+warning).
+
+**Reports** (`services/reporting/stock.py`): applied only for whole-year windows with
+the needed valuations; balance sheet all-or-nothing and only if it still balances;
+no valuation => reports unchanged. See `REPORTS.md`.
+
+**Operator runbook, per financial year:** in Tally, at the *Gateway of Tally main menu*
+press F2 and set the period to that one year -> in the app open Stock valuation ->
+"Read stock from Tally". Repeat for each year (first year first).
+
+**Not built:** manual-entry UI on mobile (API only), per-item quantities/rates, a
+Trial Balance stock line (the TB stays a ledger report; the seeded `Opening Stock`
+ledger keeps the opening TB honest), automatic capture on each sync.

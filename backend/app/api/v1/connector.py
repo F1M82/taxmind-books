@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, timedelta
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -23,7 +24,7 @@ from app.api.v1.auth import _system_audit_emitter, _user_audit_emitter
 from app.core.audit import AuditContext, AuditEmitter
 from app.core.database import SessionLocal, get_db
 from app.core.exceptions import ConnectorOffline as ConnectorOfflineHTTP
-from app.core.exceptions import VoucherImportRunNotFound
+from app.core.exceptions import StockValuationPullFailed, VoucherImportRunNotFound
 from app.core.idempotency import IdempotencyHandler
 from app.core.security import CONNECTOR_TOKEN_DEFAULT_EXPIRE_DAYS
 from app.models.company import Company, CompanyRole, UserCompany
@@ -44,6 +45,7 @@ from app.schemas.connector import (
     VoucherImportRunOut,
     VoucherImportTriggerResponse,
 )
+from app.schemas.stock_valuation import StockValuationOut
 from app.schemas.tally_mapping import (
     ActiveTallyCompanyOut,
     TallyCompaniesOut,
@@ -58,6 +60,7 @@ from app.services.connector_service import (
     _CodeNotFound,
 )
 from app.services.ledger_service import LedgerService
+from app.services.stock_valuation_service import StockValuationService
 
 # Module import (not `from ... import get_registry`) keeps the lookup
 # late so tests that monkeypatch connector_registry.get_registry see
@@ -759,6 +762,86 @@ def voucher_import_status(
     if run is None or run.company_id != company.id:
         raise VoucherImportRunNotFound("Voucher import run not found.")
     return VoucherImportRunOut(**run.as_dict())
+
+
+# ---------------------------------------------------------------------
+# Stock valuation pull (Tally -> stock_valuations)
+# ---------------------------------------------------------------------
+
+
+@router.post(
+    "/stock-valuation/{company_id}", response_model=StockValuationOut
+)
+async def pull_stock_valuation(
+    company_id: UUID,
+    request: Request,
+    company: Company = Depends(
+        require_role(CompanyRole.owner, CompanyRole.admin)
+    ),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_scoped_session),
+) -> StockValuationOut:
+    """Read Tally's opening/closing stock value and record it for one year.
+
+    Tally values stock for the period its gateway is scoped to, which the
+    operator sets at the Gateway of Tally main menu (F2 there). That period
+    must be exactly one financial year, else 422 ``stock_period_not_single_fy``
+    with instructions. The Tally company identity must match this company
+    (fail-closed, as for the master sync), and for the company's first year the
+    opening stock must equal its Stock-in-Hand ledger balance (409
+    ``stock_opening_mismatch``). Re-pulling a year replaces it (audited).
+    """
+    from app.api.v1.auth import _user_audit_emitter
+    from app.api.v1.stock_valuations import to_out
+    from app.services.tally.connector_registry import CommandTimeout
+
+    if company_id != company.id:
+        raise ConnectorOfflineHTTP(
+            "Path company_id does not match X-Company-ID header.",
+        )
+    registry = _connector_registry_mod.get_registry()
+    if not registry.is_online(company.id):
+        raise ConnectorOfflineHTTP("Connector is not connected.")
+
+    try:
+        reply = await registry.send_command(
+            company_id=company.id,
+            command="get_stock_valuation",
+            args={},
+            timeout_seconds=60,
+        )
+    except CommandTimeout as exc:
+        raise StockValuationPullFailed(
+            "The connector did not answer in time; is TallyPrime busy?"
+        ) from exc
+    if reply.get("status") != "success":
+        err = reply.get("error") or {}
+        raise StockValuationPullFailed(
+            str(err.get("message") or "The connector could not read stock."),
+            details={"connector_code": err.get("code")},
+        )
+
+    payload = reply.get("result") or {}
+    require_safe_company_mapping(
+        db,
+        company_id=company.id,
+        tally_company_guid=(payload.get("company") or {}).get("guid"),
+    )
+    audit = _user_audit_emitter(request, db, user, company=company)
+    service = StockValuationService(db, audit, company_id=company.id)
+    row = service.record(
+        period_from=date.fromisoformat(payload["period_from"]),
+        period_to=date.fromisoformat(payload["period_to"]),
+        opening_value=Decimal(str(payload["opening_value"])),
+        closing_value=Decimal(str(payload["closing_value"])),
+        source="tally",
+        item_count=payload.get("item_count"),
+        negative_stock_items=payload.get("negative_stock_items"),
+        captured_by=user.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return to_out(row)
 
 
 def persist_opening_balance_seed_payload(

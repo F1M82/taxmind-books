@@ -144,3 +144,23 @@ function qs(params: Record<string, string | undefined>): string {
   }
   return parts.length === 0 ? "" : `?${parts.join("&")}`;
 }
+
+// ---- Financial-year periods (picker) ----
+
+export interface FinancialYear {
+  /** e.g. "FY 2025-26" */
+  label: string;
+  from_date: string;
+  /** FY end, or today for the current year. */
+  to_date: string;
+  is_current: boolean;
+}
+
+export interface ReportPeriodsResponse {
+  items: FinancialYear[];
+}
+
+/** Financial years the company has data for, newest first. */
+export async function getReportPeriods(): Promise<ReportPeriodsResponse> {
+  return api.get<ReportPeriodsResponse>("/api/v1/reports/periods");
+}

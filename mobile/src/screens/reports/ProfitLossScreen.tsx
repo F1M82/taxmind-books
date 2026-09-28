@@ -10,12 +10,16 @@ import {
   View,
 } from "react-native";
 
-import { ProfitLossResponse, getProfitLoss } from "../../api/reports";
+import { FinancialYear, ProfitLossResponse, getProfitLoss } from "../../api/reports";
+import FinancialYearPicker from "../../components/reports/FinancialYearPicker";
+import { useReportPeriods } from "../../hooks/useReportPeriods";
 import { formatINR } from "../../utils/money";
 
 export default function ProfitLossScreen(): React.ReactElement {
   const [fromDate, setFromDate] = useState<string>("");
   const [toDate, setToDate] = useState<string>("");
+  const [fyLabel, setFyLabel] = useState<string | null>(null);
+  const periods = useReportPeriods();
   const [data, setData] = useState<ProfitLossResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -40,15 +44,29 @@ export default function ProfitLossScreen(): React.ReactElement {
     void load();
   }, [load]);
 
+  const selectYear = (p: FinancialYear): void => {
+    setFyLabel(p.label);
+    setFromDate(p.from_date);
+    setToDate(p.to_date);
+  };
+
   return (
     <View style={styles.container}>
+      <FinancialYearPicker
+        periods={periods}
+        selectedLabel={fyLabel}
+        onSelect={selectYear}
+      />
       <View style={styles.filterBlock}>
         <View style={styles.filterRow}>
           <Text style={styles.filterLabel}>From</Text>
           <TextInput
             accessibilityLabel="from-date"
             value={fromDate}
-            onChangeText={setFromDate}
+            onChangeText={(t) => {
+              setFyLabel(null);
+              setFromDate(t);
+            }}
             placeholder="YYYY-MM-DD (FY start)"
             style={styles.filterInput}
             autoCapitalize="none"
@@ -60,7 +78,10 @@ export default function ProfitLossScreen(): React.ReactElement {
           <TextInput
             accessibilityLabel="to-date"
             value={toDate}
-            onChangeText={setToDate}
+            onChangeText={(t) => {
+              setFyLabel(null);
+              setToDate(t);
+            }}
             placeholder="YYYY-MM-DD (today)"
             style={styles.filterInput}
             autoCapitalize="none"

@@ -57,6 +57,8 @@ endpoints:
     methods: [POST]
 
   # ---- Reports ----
+  - path: /api/v1/reports/periods
+    methods: [GET]
   - path: /api/v1/reports/trial-balance
     methods: [GET]
   - path: /api/v1/reports/profit-loss

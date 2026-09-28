@@ -14,10 +14,15 @@ import {
   TrialBalanceResponse,
   getTrialBalance,
 } from "../../api/reports";
+import { FinancialYear } from "../../api/reports";
+import FinancialYearPicker from "../../components/reports/FinancialYearPicker";
+import { useReportPeriods } from "../../hooks/useReportPeriods";
 import { formatINR } from "../../utils/money";
 
 export default function TrialBalanceScreen(): React.ReactElement {
   const [asOfDate, setAsOfDate] = useState<string>("");
+  const [fyLabel, setFyLabel] = useState<string | null>(null);
+  const periods = useReportPeriods();
   const [data, setData] = useState<TrialBalanceResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -41,14 +46,27 @@ export default function TrialBalanceScreen(): React.ReactElement {
     void load();
   }, [load]);
 
+  const selectYear = (p: FinancialYear): void => {
+    setFyLabel(p.label);
+    setAsOfDate(p.to_date);
+  };
+
   return (
     <View style={styles.container}>
+      <FinancialYearPicker
+        periods={periods}
+        selectedLabel={fyLabel}
+        onSelect={selectYear}
+      />
       <View style={styles.filterRow}>
         <Text style={styles.filterLabel}>As of</Text>
         <TextInput
           accessibilityLabel="as-of-date"
           value={asOfDate}
-          onChangeText={setAsOfDate}
+          onChangeText={(t) => {
+            setFyLabel(null);
+            setAsOfDate(t);
+          }}
           placeholder="YYYY-MM-DD (today)"
           style={styles.filterInput}
           autoCapitalize="none"

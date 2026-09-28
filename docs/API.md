@@ -1225,6 +1225,21 @@ Query: `type` (`receivables` | `payables`, required), `as_of_date` (default toda
 
 Response shape: see `REPORTS.md` § Outstanding.
 
+### `GET /api/v1/reports/periods`
+
+Financial years the report period picker offers, newest first. Driven by the company's data: from the earlier of the opening-balance anchor and the earliest voucher date, to the later of today (company timezone) and the latest voucher date. Indian FY (1 Apr – 31 Mar). The current year's `to_date` is clipped to today; it is always present, so the list is never empty.
+
+**Response 200:**
+```json
+{
+  "items": [
+    { "label": "FY 2026-27", "from_date": "2026-04-01", "to_date": "2026-09-28", "is_current": true },
+    { "label": "FY 2025-26", "from_date": "2025-04-01", "to_date": "2026-03-31", "is_current": false }
+  ]
+}
+```
+Use `from_date`/`to_date` as `from_date`/`to_date` for profit & loss, and `to_date` as `as_of_date` for the trial balance and balance sheet.
+
 ---
 
 ## Analytics (v1.2 — Phase 1)

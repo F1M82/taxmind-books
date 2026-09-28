@@ -145,3 +145,18 @@ class OutstandingResponse(TaxMindBooksBase):
     items: list[OutstandingItem]
     total: Money
     total_type: DrCr
+
+
+class FinancialYearOut(TaxMindBooksBase):
+    """One selectable financial year (Indian FY, 1 Apr - 31 Mar)."""
+
+    label: str
+    from_date: date
+    to_date: date
+    is_current: bool
+
+
+class ReportPeriodsResponse(TaxMindBooksBase):
+    """Financial years the company has data for, newest first."""
+
+    items: list[FinancialYearOut]

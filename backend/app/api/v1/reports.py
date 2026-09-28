@@ -6,6 +6,7 @@ Four read-only endpoints over the same data per docs/REPORTS.md:
   GET /api/v1/reports/profit-loss
   GET /api/v1/reports/balance-sheet
   GET /api/v1/reports/outstanding?type=receivables|payables
+  GET /api/v1/reports/periods   (financial years available for the picker)
 
 Any membership role can read reports (per R9). No idempotency, no
 audit emission — reads only. Computation lives in
@@ -36,12 +37,14 @@ from app.schemas.reports import (
     BSLine,
     BSPnL,
     BSSection,
+    FinancialYearOut,
     OutstandingItem,
     OutstandingResponse,
     PnLLedger,
     PnLNet,
     PnLSection,
     ProfitLossResponse,
+    ReportPeriodsResponse,
     TrialBalanceExclusions,
     TrialBalanceLedger,
     TrialBalanceResponse,
@@ -49,6 +52,7 @@ from app.schemas.reports import (
 )
 from app.services.reporting.balance_sheet import compute_balance_sheet
 from app.services.reporting.outstanding import compute_outstanding
+from app.services.reporting.periods import financial_years
 from app.services.reporting.profit_loss import (
     compute_profit_loss,
     fiscal_year_start,
@@ -63,6 +67,37 @@ class BalanceSheetUnbalanced(DomainException):
 
     status_code = 500
     code = "balance_sheet_unbalanced"
+
+
+# ---------------------------------------------------------------------
+# GET /reports/periods
+# ---------------------------------------------------------------------
+
+
+@router.get("/periods", response_model=ReportPeriodsResponse)
+def report_periods(
+    company: Company = Depends(get_active_company),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_scoped_session),
+) -> ReportPeriodsResponse:
+    """Financial years to offer in the report period picker, newest first."""
+    years = financial_years(
+        db,
+        company_id=company.id,
+        anchor_date=company.opening_balance_anchor_date,
+        today=company_today(company),
+    )
+    return ReportPeriodsResponse(
+        items=[
+            FinancialYearOut(
+                label=y.label,
+                from_date=y.from_date,
+                to_date=y.to_date,
+                is_current=y.is_current,
+            )
+            for y in years
+        ]
+    )
 
 
 # ---------------------------------------------------------------------

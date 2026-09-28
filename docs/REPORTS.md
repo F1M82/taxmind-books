@@ -232,8 +232,13 @@ For each ledger L in ASSET_GROUPS:
 For each ledger L in LIABILITY_GROUPS:
     liability_balance = closing_balance_signed(L, as_of_date) × sign_for_liabilities
 
+prior_pnl   = compute_pnl(beginning_of_time, start_of_fy(as_of_date) - 1 day)
 p_and_l_balance = compute_pnl(start_of_fy(as_of_date), as_of_date)
-# P&L for current FY rolls into liability side as Reserves & Surplus equivalent
+# Both roll into the liability side as Reserves & Surplus equivalent, exactly
+# as Tally's balance sheet shows "Profit & Loss A/c: Opening Balance" (all
+# earlier years) and "Current Period". Income/expense ledgers are not on the
+# balance sheet, so without prior_pnl a sheet dated in any year after the first
+# would not balance.
 ```
 
 **Response shape:**
@@ -259,6 +264,10 @@ p_and_l_balance = compute_pnl(start_of_fy(as_of_date), as_of_date)
     "value": "255000.00",
     "type": "profit"
   },
+  "prior_periods_profit_loss": {
+    "value": "0.00",
+    "type": "profit"
+  },
   "equation": {
     "assets": "1500000.00",
     "liabilities_plus_equity": "1500000.00",
@@ -267,7 +276,7 @@ p_and_l_balance = compute_pnl(start_of_fy(as_of_date), as_of_date)
 }
 ```
 
-**Validation property:** `equation.in_balance` always true. If false, reject the response with a 500 error and an alert — the data is inconsistent.
+**Validation property:** `equation.in_balance` always true (`assets == liabilities + prior_periods_profit_loss + current_period_profit_loss`). If false, reject the response with a 500 error and an alert — the data is inconsistent.
 
 ### Outstanding Receivables / Payables
 

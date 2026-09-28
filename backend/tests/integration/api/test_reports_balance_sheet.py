@@ -233,3 +233,102 @@ def test_balance_sheet_allows_negative_contra_balance(
     # Bank +1000 nets the debtor -1000 -> assets total 0, equation holds.
     assert Decimal(body["assets"]["total"]) == Decimal("0.00")
     assert body["equation"]["in_balance"] is True
+
+
+def _ledger_by_name(db: Session, company, name: str):  # type: ignore[no-untyped-def]
+    return (
+        db.query(Ledger)
+        .filter(Ledger.company_id == company.id, Ledger.name == name)
+        .one()
+    )
+
+
+def test_balance_sheet_balances_in_a_later_financial_year(
+    client: TestClient, db_session: Session
+) -> None:
+    """Prior years' profit must be carried into equity.
+
+    _seed books a 3000 sale in FY 2026-27. A further 500 sale in FY 2027-28
+    means a sheet dated in 2027-28 has 3000 of profit from the *previous*
+    year that no ledger group holds. Without carrying it, assets (13500) !=
+    liabilities (10000) + current-year profit (500) and the API 500s.
+    """
+    user, company = _seed(db_session)
+    _voucher(
+        db_session,
+        company.id,
+        voucher_type=VoucherType.Sales,
+        on_date=date(2027, 4, 10),
+        dr_ledger=_ledger_by_name(db_session, company, "Acme"),
+        cr_ledger=_ledger_by_name(db_session, company, "Sales"),
+        amount=Decimal("500.00"),
+    )
+    r = client.get(
+        "/api/v1/reports/balance-sheet?as_of_date=2027-04-30",
+        headers=_h(user, company),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["equation"]["in_balance"] is True
+    assert body["equation"]["assets"] == "13500.00"
+    assert body["equation"]["liabilities_plus_equity"] == "13500.00"
+    assert body["current_period_profit_loss"] == {
+        "value": "500.00",
+        "type": "profit",
+    }
+    assert body["prior_periods_profit_loss"] == {
+        "value": "3000.00",
+        "type": "profit",
+    }
+
+
+def test_balance_sheet_first_year_has_no_prior_profit(
+    client: TestClient, db_session: Session
+) -> None:
+    user, company = _seed(db_session)
+    r = client.get(
+        "/api/v1/reports/balance-sheet?as_of_date=2026-04-30",
+        headers=_h(user, company),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["prior_periods_profit_loss"] == {
+        "value": "0.00",
+        "type": "profit",
+    }
+
+
+def test_balance_sheet_carries_a_prior_year_loss(
+    client: TestClient, db_session: Session
+) -> None:
+    user, company = _seed(db_session)
+    rent = Ledger(
+        company_id=company.id,
+        name="Rent",
+        name_normalized="rent",
+        group_name="Indirect Expenses",
+        balance_type=BalanceType.Dr,
+    )
+    db_session.add(rent)
+    db_session.commit()
+    # FY 2026-27 profit is 3000; a 5000 rent paid from bank in the same year
+    # makes it a 2000 loss.
+    _voucher(
+        db_session,
+        company.id,
+        voucher_type=VoucherType.Payment,
+        on_date=date(2026, 5, 5),
+        dr_ledger=rent,
+        cr_ledger=_ledger_by_name(db_session, company, "Bank"),
+        amount=Decimal("5000.00"),
+    )
+    r = client.get(
+        "/api/v1/reports/balance-sheet?as_of_date=2027-04-30",
+        headers=_h(user, company),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["equation"]["in_balance"] is True
+    assert body["prior_periods_profit_loss"] == {
+        "value": "2000.00",
+        "type": "loss",
+    }

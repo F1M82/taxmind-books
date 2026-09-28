@@ -112,6 +112,21 @@ export default function BalanceSheetScreen(): React.ReactElement {
 
             <BSSectionView title="Liabilities" section={data.liabilities} />
 
+            {data.prior_periods_profit_loss !== undefined &&
+              Number(data.prior_periods_profit_loss.value) !== 0 && (
+                <View style={styles.pnlRow} accessibilityLabel="prior-pnl-row">
+                  <Text style={styles.pnlLabel}>
+                    Previous years{" "}
+                    {data.prior_periods_profit_loss.type === "profit"
+                      ? "profit"
+                      : "loss"}
+                  </Text>
+                  <Text style={styles.pnlAmount}>
+                    {formatINR(data.prior_periods_profit_loss.value)}
+                  </Text>
+                </View>
+              )}
+
             <View style={styles.pnlRow}>
               <Text style={styles.pnlLabel}>
                 Current period{" "}

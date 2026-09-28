@@ -123,6 +123,9 @@ class BalanceSheetResponse(TaxMindBooksBase):
     assets: BSSection
     liabilities: BSSection
     current_period_profit_loss: BSPnL
+    # Net result of all financial years before the one containing
+    # `as_of_date` (Tally's P&L A/c "Opening Balance"). Additive field.
+    prior_periods_profit_loss: BSPnL
     equation: BSEquation
 
 

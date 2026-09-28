@@ -1,11 +1,18 @@
 """Balance sheet per docs/REPORTS.md §"Balance Sheet".
 
 Snapshot of assets, liabilities, and equity as of a date. Equity is
-folded in as the current-FY P&L: profit increases liabilities side,
-loss decreases it (mirroring Tally's "Difference in Opening Balances"
-behavior when a P&L is in flight).
+folded in as the P&L: profit increases liabilities side, loss decreases
+it. Two parts, as in Tally's "Profit & Loss A/c" on the balance sheet:
 
-The validation property is that `assets == liabilities + current_pnl`
+* **prior periods** -- net result of every financial year before the one
+  containing `as_of_date` (Tally's "Opening Balance" of the P&L A/c).
+  Income/expense ledgers are not on the balance sheet, so without this a
+  sheet dated in any year after the first would not balance.
+* **current period** -- net result from the start of the current FY to
+  `as_of_date`.
+
+The validation property is that
+`assets == liabilities + prior_pnl + current_pnl`
 to the rupee. If it doesn't, the data is inconsistent and the API
 layer surfaces a 500 with an alert.
 """
@@ -13,7 +20,7 @@ layer surfaces a 500 with an alert.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -58,6 +65,8 @@ class BalanceSheetResult:
     liabilities: BSSection
     current_period_pnl_value: Decimal
     current_period_pnl_type: Literal["profit", "loss"]
+    prior_periods_pnl_value: Decimal
+    prior_periods_pnl_type: Literal["profit", "loss"]
     in_balance: bool
 
 
@@ -121,24 +130,43 @@ def compute_balance_sheet(
     assets = _section_from_rows(asset_tb.rows, sign_for_section="Dr")
     liabilities = _section_from_rows(liability_tb.rows, sign_for_section="Cr")
 
+    fy_start = fiscal_year_start(as_of_date)
     pnl = compute_profit_loss(
         db,
         company_id=company_id,
-        from_date=fiscal_year_start(as_of_date),
+        from_date=fy_start,
         to_date=as_of_date,
     )
+    # Everything before this FY. No vouchers exist before the opening-balance
+    # anchor, so an open-ended lower bound is exact and needs no anchor lookup.
+    prior = compute_profit_loss(
+        db,
+        company_id=company_id,
+        from_date=_BEGINNING_OF_TIME,
+        to_date=fy_start - timedelta(days=1),
+    )
     # Profit increases liabilities (owners' equity); loss decreases.
-    signed_pnl = pnl.net_value if pnl.net_type == "profit" else -pnl.net_value
+    signed_pnl = _signed(pnl.net_value, pnl.net_type)
+    signed_prior = _signed(prior.net_value, prior.net_type)
 
-    in_balance = assets.total == liabilities.total + signed_pnl
+    in_balance = assets.total == liabilities.total + signed_prior + signed_pnl
     return BalanceSheetResult(
         as_of_date=as_of_date,
         assets=assets,
         liabilities=liabilities,
         current_period_pnl_value=pnl.net_value,
         current_period_pnl_type=pnl.net_type,
+        prior_periods_pnl_value=prior.net_value,
+        prior_periods_pnl_type=prior.net_type,
         in_balance=in_balance,
     )
+
+
+_BEGINNING_OF_TIME = date(1900, 1, 1)
+
+
+def _signed(value: Decimal, kind: Literal["profit", "loss"]) -> Decimal:
+    return value if kind == "profit" else -value
 
 
 def _normalize_groups(groups: frozenset[str]) -> frozenset[str]:

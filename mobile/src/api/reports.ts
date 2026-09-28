@@ -91,6 +91,9 @@ export interface BalanceSheetResponse {
   assets: BSSection;
   liabilities: BSSection;
   current_period_profit_loss: { value: string; type: ProfitLossSign };
+  /** Net result of financial years before the one shown (Tally's P&L A/c
+   *  "Opening Balance"). Optional: absent from older backends. */
+  prior_periods_profit_loss?: { value: string; type: ProfitLossSign };
   equation: {
     assets: string;
     liabilities_plus_equity: string;

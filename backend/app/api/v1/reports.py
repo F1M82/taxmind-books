@@ -220,6 +220,11 @@ def balance_sheet(
         if result.current_period_pnl_type == "profit"
         else -result.current_period_pnl_value
     )
+    signed_prior = (
+        result.prior_periods_pnl_value
+        if result.prior_periods_pnl_type == "profit"
+        else -result.prior_periods_pnl_value
+    )
     return BalanceSheetResponse(
         as_of_date=result.as_of_date,
         assets=_section_to_schema(result.assets),
@@ -228,9 +233,15 @@ def balance_sheet(
             value=result.current_period_pnl_value,
             type=result.current_period_pnl_type,
         ),
+        prior_periods_profit_loss=BSPnL(
+            value=result.prior_periods_pnl_value,
+            type=result.prior_periods_pnl_type,
+        ),
         equation=BSEquation(
             assets=result.assets.total,
-            liabilities_plus_equity=result.liabilities.total + signed_pnl,
+            liabilities_plus_equity=(
+                result.liabilities.total + signed_prior + signed_pnl
+            ),
             in_balance=result.in_balance,
         ),
     )

@@ -906,9 +906,9 @@ Liveness probe. Unprefixed (not under `/api/v1`). Does not require auth.
 
 > Implemented in `backend/app/main.py` (Phase 0). `env` reflects `APP_ENV`.
 
-#### `GET /api/v1/health/ready` *(planned — not in Phase 0)*
+#### `GET /api/v1/health/ready`
 
-Readiness probe — checks DB and Redis. Does not require auth.
+Readiness probe — checks DB (`SELECT 1`) and Redis (`PING`, 2 s timeout). Does not require auth or `X-Company-ID`. Failure detail is limited to `ok` / `unavailable` (the cause is logged server-side only).
 
 **Response 200:**
 ```json
@@ -918,6 +918,17 @@ Readiness probe — checks DB and Redis. Does not require auth.
   "redis": "ok"
 }
 ```
+
+**Response 503** (any dependency down; the failing field reads `unavailable`):
+```json
+{
+  "status": "not_ready",
+  "database": "ok",
+  "redis": "unavailable"
+}
+```
+
+> Implemented in `backend/app/api/v1/health.py`.
 
 **Response 503** if any dependency is down.
 

@@ -34,8 +34,10 @@ cd "H:\Accounting Project\backend"
 
 Liveness probe is `GET /health` (unprefixed, **not** `/api/v1/health`).
 Returns `{"status":"ok","env":"<APP_ENV>"}`. Defined in
-`backend/app/main.py`. `/api/v1/health/ready` is documented in
-`docs/API.md` but is not implemented in Phase 0.
+`backend/app/main.py`. `GET /api/v1/health/ready` (readiness: Postgres
+`SELECT 1` + Redis `PING`; 200 `ready` / 503 `not_ready`, unauthenticated)
+is implemented in `backend/app/api/v1/health.py` but **not yet deployed
+to prod** (commit it, then use the manual deploy recipe below).
 
 ## Connector enrollment for local dev
 

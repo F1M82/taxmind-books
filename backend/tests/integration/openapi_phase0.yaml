@@ -119,3 +119,5 @@ endpoints:
     methods: [GET]
   - path: /health
     methods: [GET]
+  - path: /api/v1/health/ready
+    methods: [GET]

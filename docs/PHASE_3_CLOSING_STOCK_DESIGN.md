@@ -86,6 +86,43 @@ Deferred to Phase B / a real customer need.
 5. The `Opening Stock` ledger and the BS `Stock-in-hand` replacement must not
    double count — needs an explicit test on a company that has both.
 
+## Probe results (live Tally, Vighnaharta, 2026-09-28)
+
+Resolved:
+
+- **Sign.** Tally signs debits NEGATIVE in opening *and* closing alike (checked
+  against group totals: Sundry Debtors −39,06,266.58 → −42,09,599.27, Sundry
+  Creditors positive). Stock follows it, so backend value = `−tally_value`
+  (Dr-positive), same negation as the opening-balance seed.
+- **Group cross-check.** The `Stock-in-Hand` group balance equals
+  `Σ StockItem OPENINGVALUE/CLOSINGVALUE` exactly (−7,33,801.87 opening;
+  +1,39,818.21 closing), so the item sum is Tally's own stock figure.
+- **Closing stock is a net CREDIT (+1,39,818.21 in Tally sign ⇒ −1,39,818.21 in
+  backend convention).** 21 items close Cr (7,84,550.01), 18 close Dr
+  (6,44,731.80); many have **negative closing quantities** (e.g. KINGKONG 250 ML
+  −206 NOS): stock was sold without matching purchase receipts in inventory.
+  This is a **Tally data-quality issue**, not a sign bug. The valuation must
+  mirror Tally faithfully (**store signed, never clamp at zero**), and the bookkeeper
+  should be told about the negative-stock items.
+
+NOT resolved — and it changes the design:
+
+- **Any date-ranged request hangs TallyPrime here.** A `StockItem` collection with
+  `SVFROMDATE`/`SVTODATE` and a much smaller `Group` collection with the same
+  variables both timed out (30–240 s) and froze the UI. The same collections
+  *without* date variables answer in ~0.1 s. So the connector **cannot** ask
+  Tally for "stock at 2026-03-31" this way.
+- Consequence: a `get_stock_valuation(as_of_date)` command is not viable as
+  designed. What *is* safe is the **current** value (no date variables).
+  Revised approach: snapshot the current stock value on each sync/on demand and
+  label it with the snapshot date; a historical date is only available if a
+  snapshot was taken then (or is entered from Tally's own year-end report by the
+  bookkeeper). Reports must say when a needed date has no snapshot
+  (`stock_valuation_missing`) rather than interpolate.
+- Still to determine, safely: what period the no-date figure represents (books
+  start → last voucher date, or Tally's current date). Decide by comparing
+  against Tally's own Balance Sheet on screen, not by more date-ranged queries.
+
 ## Constraints found reading the report engine (2026-09-28)
 
 - **BS in-balance invariant.** `compute_balance_sheet` asserts

@@ -23,6 +23,7 @@ from app.api.v1.auth import _system_audit_emitter, _user_audit_emitter
 from app.core.audit import AuditContext, AuditEmitter
 from app.core.database import SessionLocal, get_db
 from app.core.exceptions import ConnectorOffline as ConnectorOfflineHTTP
+from app.core.exceptions import VoucherImportRunNotFound
 from app.core.idempotency import IdempotencyHandler
 from app.core.security import CONNECTOR_TOKEN_DEFAULT_EXPIRE_DAYS
 from app.models.company import Company, CompanyRole, UserCompany
@@ -39,6 +40,9 @@ from app.schemas.connector import (
     OpeningBalanceSeedRequest,
     OpeningBalanceSeedTriggerResponse,
     SyncTriggerResponse,
+    VoucherImportRequest,
+    VoucherImportRunOut,
+    VoucherImportTriggerResponse,
 )
 from app.schemas.tally_mapping import (
     ActiveTallyCompanyOut,
@@ -67,6 +71,12 @@ from app.services.tally.company_mapping import (
 )
 from app.services.tally.discovery_service import bind_discovery_reference, ingest_discovery
 from app.services.tally.opening_balance_seed import seed_opening_balances
+from app.services.tally.voucher_import_run import (
+    check_import_range,
+    execute_import_run,
+    get_run,
+    new_run,
+)
 
 logger = logging.getLogger("app.api.v1.connector")
 
@@ -663,6 +673,92 @@ async def trigger_opening_balance_seed(
     )
     db.commit()
     return body_out
+
+
+# ---------------------------------------------------------------------
+# Historical voucher import (Phase B)
+# ---------------------------------------------------------------------
+
+
+@router.post(
+    "/voucher-import/{company_id}",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=VoucherImportTriggerResponse,
+)
+async def trigger_voucher_import(
+    company_id: UUID,
+    body: VoucherImportRequest,
+    company: Company = Depends(require_role(CompanyRole.owner)),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_scoped_session),
+    idem: IdempotencyHandler = Depends(get_idempotency_handler),
+) -> Response | VoucherImportTriggerResponse:
+    """Import Tally vouchers for ``[from_date, to_date]``, month by month.
+
+    Owner-only, requires X-Company-ID + Idempotency-Key. Defaults to a
+    **dry run** (classify + count, write nothing). Refuses (409/422) unless
+    the company's opening balances are seeded and the range starts on/after
+    the anchor date. Returns 202; poll
+    ``GET /connector/voucher-import/{task_id}``. Tally's active period
+    (set at the Gateway of Tally main menu) must cover each window, else
+    the run stops with ``tally_period_not_covered``. Re-running is safe:
+    persistence is idempotent on ``(company_id, tally_guid)``.
+    """
+    if company_id != company.id:
+        raise ConnectorOfflineHTTP(
+            "Path company_id does not match X-Company-ID header.",
+        )
+
+    replay = await idem.check(required=True)
+    if replay is not None:
+        return replay
+
+    registry = _connector_registry_mod.get_registry()
+    if not registry.is_online(company.id):
+        raise ConnectorOfflineHTTP("Connector is not connected.")
+
+    check_import_range(
+        company, from_date=body.from_date, to_date=body.to_date
+    )
+
+    run = new_run(
+        company_id=company.id,
+        from_date=body.from_date,
+        to_date=body.to_date,
+        dry_run=body.dry_run,
+    )
+    asyncio.create_task(execute_import_run(run, user_id=user.id))
+
+    body_out = VoucherImportTriggerResponse(
+        task_id=run.task_id,
+        status="import_triggered",
+        dry_run=run.dry_run,
+        windows_total=run.windows_total,
+    )
+    idem.store_response(
+        status_code=202, body=body_out.model_dump(mode="json")
+    )
+    db.commit()
+    return body_out
+
+
+@router.get(
+    "/voucher-import/{task_id}", response_model=VoucherImportRunOut
+)
+def voucher_import_status(
+    task_id: UUID,
+    company: Company = Depends(get_active_company),
+    user: User = Depends(get_current_user),
+) -> VoucherImportRunOut:
+    """Progress/outcome of a voucher-import run for the active company.
+
+    Run state lives in the API process; it is lost on restart (the run
+    itself is safe to repeat).
+    """
+    run = get_run(task_id)
+    if run is None or run.company_id != company.id:
+        raise VoucherImportRunNotFound("Voucher import run not found.")
+    return VoucherImportRunOut(**run.as_dict())
 
 
 def persist_opening_balance_seed_payload(

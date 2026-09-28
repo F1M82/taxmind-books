@@ -33,6 +33,7 @@ State-changing endpoints (POST, PUT, PATCH, DELETE on financial entities) accept
 - `POST /api/v1/reconciliations/upload`
 - `POST /api/v1/connector/sync/{company_id}`
 - `POST /api/v1/connector/opening-balance-seed/{company_id}`
+- `POST /api/v1/connector/voucher-import/{company_id}`
 
 It is **optional but supported** on all other state-changing endpoints. Where required, the request returns 400 if the header is missing.
 
@@ -736,6 +737,69 @@ updated.
 - `409 company_mapping_conflict` (via the fail-closed gate, same as `sync_masters`) — company not mapped, or mapped to a different Tally company than the reply's GUID.
 - `503 connector_offline` — connector is not connected.
 
+#### `POST /api/v1/connector/voucher-import/{company_id}`
+
+Import historical Tally vouchers for a date range, one calendar month at a
+time, through the connector's read-only `export_vouchers` command. Owner-only;
+requires `X-Company-ID` (must equal the path id) and `Idempotency-Key`.
+
+**Defaults to a dry run:** with `dry_run: true` (the default) every voucher is
+classified and counted but **nothing is written**. Pass `dry_run: false` to
+persist. Persistence is idempotent on `(company_id, tally_guid)`: re-running the
+same range updates instead of duplicating.
+
+**Guards (refused before any run starts):** the company's opening balances must
+be seeded (`opening_balance_anchor_date` set), and `from_date` must be on/after
+that anchor (earlier vouchers are already inside the seeded openings).
+
+**Per window, the run:** re-reads the open Tally company and passes it through
+the fail-closed company-mapping gate, then exports and applies the window in its
+own transaction. Any failure stops the run; earlier windows stay committed.
+Tally's XML gateway is scoped to the company-level period set at the *Gateway
+of Tally main menu* (F2 there): a window outside it stops the run with
+`tally_period_not_covered` (the operator must widen the period).
+
+**Request:**
+```json
+{ "from_date": "2025-04-01", "to_date": "2026-07-21", "dry_run": true }
+```
+
+**Response 202:**
+```json
+{ "task_id": "uuid", "status": "import_triggered", "dry_run": true, "windows_total": 16 }
+```
+
+**Errors:**
+- `409 opening_balance_not_seeded` — seed the opening balances first.
+- `422 voucher_import_before_anchor` — range starts before the anchor date, or `to_date` precedes `from_date`.
+- `400 idempotency_key_required`
+- `503 connector_offline` — connector is not connected (also returned when the path id differs from `X-Company-ID`).
+
+#### `GET /api/v1/connector/voucher-import/{task_id}`
+
+Progress / outcome of a run for the active company (`X-Company-ID`). Run state
+lives in the API process and is lost on restart; the run itself is safe to repeat.
+
+**Response 200:**
+```json
+{
+  "task_id": "uuid", "company_id": "uuid",
+  "from_date": "2025-04-01", "to_date": "2026-07-21", "dry_run": true,
+  "state": "running | completed | failed",
+  "windows_total": 16, "windows_done": 16,
+  "totals": { "total": 539, "insert": 530, "update": 0, "manual_review": 9 },
+  "error": null,
+  "started_at": "2026-09-28T10:00:00Z", "finished_at": "2026-09-28T10:01:12Z"
+}
+```
+`totals` are summed across windows (counts only; no amounts or narration). A
+failed run carries `error: { "code", "message" }`, e.g.
+`tally_period_not_covered`, `company_mapping_conflict`, `connector_unreachable`.
+
+**Errors:** `404 voucher_import_run_not_found` (unknown id, or another company's run).
+
+---
+
 ---
 
 ### Tally Company Mapping (v1.3)
@@ -1410,6 +1474,9 @@ The following `error.code` values are stable v1 contracts. Clients depend on the
 | `ownership_transfer_required` | 409 | (v1.2) Account deletion blocked; user is sole owner |
 | `extraction_quota_exceeded` | 429 | (v1.2) Daily AI extraction limit reached |
 | `rate_limit_exceeded` | 429 | Too many requests |
+| `opening_balance_not_seeded` | 409 | (Phase B) Voucher import requested before the company's opening balances were seeded |
+| `voucher_import_before_anchor` | 422 | (Phase B) Voucher import range starts before the opening-balance anchor (or `to_date` < `from_date`) |
+| `voucher_import_run_not_found` | 404 | (Phase B) Unknown voucher-import task id, or it belongs to another company |
 | `opening_balance_anchor_mismatch` | 409 | (P3.2) Opening-balance seed called with an anchor date different from the company's already-locked `opening_balance_anchor_date` |
 
 New error codes added in later phases extend this table; existing codes are not renamed.

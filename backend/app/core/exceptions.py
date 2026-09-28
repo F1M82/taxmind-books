@@ -215,3 +215,22 @@ class OwnershipTransferRequired(Conflict):
 
 class OpeningBalanceAnchorMismatch(Conflict):
     code = "opening_balance_anchor_mismatch"
+
+
+class OpeningBalanceNotSeeded(Conflict):
+    """Voucher import requires the company's opening balances to be seeded
+    first (otherwise imported movements would sit on zero openings)."""
+
+    code = "opening_balance_not_seeded"
+
+
+class VoucherImportBeforeAnchor(ValidationFailed):
+    """Import window starts before the company's opening-balance anchor.
+    Vouchers dated before the anchor are already inside the seeded opening
+    balances; importing them would double-count."""
+
+    code = "voucher_import_before_anchor"
+
+
+class VoucherImportRunNotFound(NotFound):
+    code = "voucher_import_run_not_found"

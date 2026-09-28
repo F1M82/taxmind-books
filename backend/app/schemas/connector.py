@@ -104,3 +104,47 @@ class OpeningBalanceSeedTriggerResponse(TaxMindBooksBase):
     task_id: UUID
     status: str
     anchor_date: date
+
+
+class VoucherImportRequest(TaxMindBooksBase):
+    """Request body for ``POST /connector/voucher-import/{company_id}``.
+
+    ``dry_run`` defaults to ``True``: the run classifies every voucher and
+    reports counts but writes nothing. Set it to ``False`` to persist.
+    The range must start on/after the company's opening-balance anchor.
+    """
+
+    from_date: date
+    to_date: date
+    dry_run: bool = True
+
+
+class VoucherImportTriggerResponse(TaxMindBooksBase):
+    """``POST /connector/voucher-import/{company_id}`` 202 response."""
+
+    task_id: UUID
+    status: str
+    dry_run: bool
+    windows_total: int
+
+
+class VoucherImportErrorOut(TaxMindBooksBase):
+    code: str
+    message: str
+
+
+class VoucherImportRunOut(TaxMindBooksBase):
+    """``GET /connector/voucher-import/{task_id}`` progress/outcome."""
+
+    task_id: UUID
+    company_id: UUID
+    from_date: date
+    to_date: date
+    dry_run: bool
+    state: str
+    windows_total: int
+    windows_done: int
+    totals: dict[str, int]
+    error: VoucherImportErrorOut | None
+    started_at: datetime
+    finished_at: datetime | None

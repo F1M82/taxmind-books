@@ -188,9 +188,10 @@ into `/var/backups/taxmind/`). Prod is at `0020` as of 2026-09-19. When
 several commits share one file (e.g. `models/company.py`), deploy them
 together, not one at a time, or code and schema drift.
 
-Not yet on prod as of 2026-09-20: auto-sync-on-connect (`5455d24`,
-`connector_ws.py` only). Safe over seeded data: `upsert_from_sync` never
-overwrites `opening_balance`.
+Auto-sync-on-connect (`5455d24`, `connector_ws.py` only) is on prod —
+verified 2026-09-28: the VPS file is byte-identical to local and the
+running container contains `_drive_auto_sync`. Safe over seeded data:
+`upsert_from_sync` never overwrites `opening_balance`.
 
 VPS host/port/SSH-key details are already recorded in this machine's
 Claude memory (`vps_cohosting_recon.md`, `p32_opening_balance_seed.md`)
@@ -261,9 +262,19 @@ outcome; read the server log line
   whose books begin on the anchor has no earlier data for a "TB as of
   anchor − 1" (the original design), which is why this differs from the
   architecture doc's wording.
-- Opening **stock** lives in stock items, not ledgers, so it is not
-  seeded: Vighnaharta's opening TB is short by exactly its stock value
-  (Dr 7,33,801.87). Open item, not yet handled.
+- Opening **stock** lives in stock items, not ledgers, so the seed does
+  not carry it: Vighnaharta's opening TB was short by exactly its stock
+  value (36 of 210 stock items non-zero, Dr 7,33,801.87, confirmed by a
+  live Tally probe 2026-09-28). **Handled 2026-09-28 as a one-off on
+  prod:** a books-only ledger "Opening Stock" (group `Stock-in-hand`, Dr
+  7,33,801.87, id `e7e88843-0540-46d0-b232-b87b1cdfa730`, no
+  `tally_master_id`, `opening_balance_seeded_at` stamped) was created via
+  `LedgerService.create`; DB Dr and Cr now both 80,16,142.52. Pre-change
+  dump: `/var/backups/taxmind/pre_opening_stock_20260928.dump`. It is NOT
+  a general fix: the ledger is a static figure, not an inventory model,
+  so P&L / closing stock are still not computed, and any other company
+  needs the same manual step (or a proper seed step). Auto-sync leaves
+  it alone (never deactivates ledgers absent from Tally).
 - The company anchor locks even when zero ledgers were seeded (the
   no-op first run locked it to 2025-04-01), so pick the anchor carefully.
 

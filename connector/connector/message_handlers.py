@@ -433,6 +433,7 @@ async def _run_handler(
     except TallyError as exc:
         error_code = {
             "WrongCompanyOpen": "wrong_company_open",
+            "TallyPeriodNotCovered": "tally_period_not_covered",
         }.get(exc.__class__.__name__, exc.__class__.__name__)
         return {
             "command": command,

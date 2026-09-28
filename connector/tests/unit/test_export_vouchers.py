@@ -23,6 +23,7 @@ from connector.tally_client import (
     LedgerMaster,
     TallyClient,
     TallyParseError,
+    TallyPeriodNotCovered,
     TallyResponseError,
     TallyUnreachable,
     VoucherExportRow,
@@ -333,10 +334,31 @@ def test_scanner_holds_incomplete_block() -> None:
 # ====================================================================
 
 
+def _period_xml(frm: str, to: str) -> str:
+    """Canned reply of the active-period probe (live shape, 2026-09-28)."""
+    return (
+        "<ENVELOPE><HEADER><VERSION>1</VERSION><STATUS>1</STATUS></HEADER>"
+        "<BODY><DATA><COLLECTION>"
+        f'<COMPANY NAME="X"><TMFROM>{frm}</TMFROM><TMTO>{to}</TMTO></COMPANY>'
+        "</COLLECTION></DATA></BODY></ENVELOPE>"
+    )
+
+
+def _add_period(
+    httpx_mock: HTTPXMock, frm: str = "20000101", to: str = "20991231"
+) -> None:
+    """Stub the period probe `get_vouchers` issues first (registered first,
+    so pytest-httpx serves it before the voucher export)."""
+    httpx_mock.add_response(
+        url="http://localhost:9000", status_code=200, text=_period_xml(frm, to)
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_vouchers_returns_rows(
     client: TallyClient, httpx_mock: HTTPXMock
 ) -> None:
+    _add_period(httpx_mock)
     httpx_mock.add_response(
         url="http://localhost:9000",
         status_code=200,
@@ -351,11 +373,12 @@ async def test_get_vouchers_returns_rows(
 async def test_get_vouchers_date_window_is_sent(
     client: TallyClient, httpx_mock: HTTPXMock
 ) -> None:
+    _add_period(httpx_mock)
     httpx_mock.add_response(
         url="http://localhost:9000", status_code=200, text=_collection(GOLDEN)
     )
     await client.get_vouchers("20240401", "20250331")
-    sent = httpx_mock.get_requests()[0].content.decode("utf-8")
+    sent = httpx_mock.get_requests()[1].content.decode("utf-8")  # [0] = period probe
     assert '$$Date:"20240401"' in sent and '$$Date:"20250331"' in sent
     assert "Export Data" in sent and "IMPORTDATA" not in sent
 
@@ -364,6 +387,7 @@ async def test_get_vouchers_date_window_is_sent(
 async def test_get_vouchers_empty_window(
     client: TallyClient, httpx_mock: HTTPXMock
 ) -> None:
+    _add_period(httpx_mock)
     httpx_mock.add_response(
         url="http://localhost:9000", status_code=200, text=_collection()
     )
@@ -374,6 +398,7 @@ async def test_get_vouchers_empty_window(
 async def test_get_vouchers_non_200_raises(
     client: TallyClient, httpx_mock: HTTPXMock
 ) -> None:
+    _add_period(httpx_mock)
     httpx_mock.add_response(url="http://localhost:9000", status_code=500, text="boom")
     with pytest.raises(TallyResponseError) as ei:
         await client.get_vouchers("20260401", "20270331")
@@ -384,9 +409,111 @@ async def test_get_vouchers_non_200_raises(
 async def test_get_vouchers_connect_error_raises_unreachable(
     client: TallyClient, httpx_mock: HTTPXMock
 ) -> None:
+    _add_period(httpx_mock)
     httpx_mock.add_exception(httpx.ConnectError("refused"))
     with pytest.raises(TallyUnreachable):
         await client.get_vouchers("20260401", "20270331")
+
+
+# ---- active-period guard (2026-09-28: gateway is scoped to the company-level
+# period; an uncovered window returns [] silently, which a bulk import would
+# read as "no vouchers") ----
+
+
+@pytest.mark.asyncio
+async def test_get_active_period_parses_live_shape(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    _add_period(httpx_mock, "20240401", "20270331")
+    assert await client.get_active_period() == (
+        date(2024, 4, 1),
+        date(2027, 3, 31),
+    )
+
+
+@pytest.mark.asyncio
+async def test_active_period_probe_sends_no_date_static_variables(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    """SVFROMDATE/SVTODATE static variables froze live Tally; the probe must
+    read them via ##-variables only and stay read-only."""
+    _add_period(httpx_mock)
+    await client.get_active_period()
+    sent = httpx_mock.get_requests()[0].content.decode("utf-8")
+    assert "<SVFROMDATE>" not in sent and "<SVTODATE>" not in sent
+    assert "##SVFROMDATE" in sent and "##SVTODATE" in sent
+    assert "IMPORTDATA" not in sent and "ACTION" not in sent
+
+
+@pytest.mark.asyncio
+async def test_get_active_period_missing_fields_raises_not_guesses(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(
+        url="http://localhost:9000",
+        status_code=200,
+        text="<ENVELOPE><BODY><DATA><COLLECTION>"
+        '<COMPANY NAME="X"/></COLLECTION></DATA></BODY></ENVELOPE>',
+    )
+    with pytest.raises(TallyParseError):
+        await client.get_active_period()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("active", "window"),
+    [
+        (("20250401", "20260331"), ("20240401", "20250331")),  # before
+        (("20250401", "20260331"), ("20260401", "20270331")),  # after
+        (("20250401", "20260331"), ("20250101", "20260630")),  # straddles both
+    ],
+)
+async def test_get_vouchers_refuses_window_outside_active_period(
+    client: TallyClient,
+    httpx_mock: HTTPXMock,
+    active: tuple[str, str],
+    window: tuple[str, str],
+) -> None:
+    _add_period(httpx_mock, *active)
+    with pytest.raises(TallyPeriodNotCovered) as ei:
+        await client.get_vouchers(*window)
+    assert "Gateway of Tally main menu" in str(ei.value)
+    assert ei.value.active_from == date.fromisoformat(
+        f"{active[0][:4]}-{active[0][4:6]}-{active[0][6:]}"
+    )
+    # Only the period probe went out -- the voucher export was never issued.
+    assert len(httpx_mock.get_requests()) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_vouchers_allows_window_exactly_matching_period(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    _add_period(httpx_mock, "20250401", "20260331")
+    httpx_mock.add_response(
+        url="http://localhost:9000", status_code=200, text=_collection(GOLDEN)
+    )
+    rows = await client.get_vouchers("20250401", "20260331")
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_export_vouchers_reports_period_not_covered(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    _add_period(httpx_mock, "20250401", "20260331")
+    reply = await dispatch_command(
+        tally=client,
+        payload={
+            "command": "export_vouchers",
+            "company_id": "c-1",
+            "args": {"from_date": "20240401", "to_date": "20250331"},
+        },
+        registered_company_id="c-1",
+    )
+    assert reply["status"] == "error"
+    assert reply["error"]["code"] == "tally_period_not_covered"
+    assert reply["retryable"] is False
 
 
 # ====================================================================
@@ -405,6 +532,7 @@ def test_export_vouchers_is_not_a_mutating_command() -> None:
 async def test_dispatch_export_vouchers_success(
     client: TallyClient, httpx_mock: HTTPXMock
 ) -> None:
+    _add_period(httpx_mock)
     httpx_mock.add_response(
         url="http://localhost:9000",
         status_code=200,
@@ -456,6 +584,7 @@ async def test_reconnect_rerun_is_side_effect_free(
     # command is read-only (no cache, no Tally write), both runs return the
     # same fresh data with no accumulated/corrupted state.
     for _ in range(2):
+        _add_period(httpx_mock)
         httpx_mock.add_response(
             url="http://localhost:9000",
             status_code=200,

@@ -120,6 +120,38 @@ class WrongCompanyOpen(TallyError):
     """The requested company is not the company currently open in Tally."""
 
 
+class TallyPeriodNotCovered(TallyError):
+    """Tally's active period does not cover the window being read.
+
+    Tally's XML gateway scopes every collection to the company-level period
+    set at the Gateway of Tally main menu (F2 there). A window outside it
+    does not error: Tally just returns nothing, which for a bulk import
+    looks exactly like "no vouchers". Raised instead of returning that
+    empty result. Needs the operator to change the period, so it is not
+    retryable on its own.
+    """
+
+    def __init__(
+        self,
+        *,
+        requested_from: date,
+        requested_to: date,
+        active_from: date,
+        active_to: date,
+    ) -> None:
+        super().__init__(
+            f"Tally's active period ({active_from.isoformat()} to "
+            f"{active_to.isoformat()}) does not cover the requested window "
+            f"({requested_from.isoformat()} to {requested_to.isoformat()}). "
+            "At the Gateway of Tally main menu press F2 and set the period "
+            "to cover it."
+        )
+        self.requested_from = requested_from
+        self.requested_to = requested_to
+        self.active_from = active_from
+        self.active_to = active_to
+
+
 # ---------------------------------------------------------------------
 # Domain models
 # ---------------------------------------------------------------------
@@ -878,6 +910,70 @@ class TallyClient:
             "</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>"
         )
 
+    @staticmethod
+    def _build_get_active_period_xml() -> str:
+        """READ-ONLY request for the gateway's active period.
+
+        Reads Tally's own ``##SVFROMDATE`` / ``##SVTODATE`` through computed
+        fields on the tiny ``Company`` collection. It deliberately sends NO
+        ``SVFROMDATE``/``SVTODATE`` static variables: those, on StockItem /
+        Group collections, froze TallyPrime in live probing (2026-09-28).
+        """
+        return (
+            "<ENVELOPE><HEADER><VERSION>1</VERSION>"
+            "<TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE>"
+            "<ID>TaxMindActivePeriod</ID></HEADER><BODY><DESC>"
+            "<STATICVARIABLES>"
+            "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
+            "</STATICVARIABLES><TDL><TDLMESSAGE>"
+            '<COLLECTION NAME="TaxMindActivePeriod" ISMODIFY="No">'
+            "<TYPE>Company</TYPE><NATIVEMETHOD>Name</NATIVEMETHOD>"
+            "<COMPUTE>TMFrom : ##SVFROMDATE</COMPUTE>"
+            "<COMPUTE>TMTo : ##SVTODATE</COMPUTE>"
+            "</COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>"
+        )
+
+    async def get_active_period(self) -> tuple[date, date]:
+        """The period (inclusive) Tally's XML gateway is currently scoped to.
+
+        Raises:
+            TallyParseError: malformed XML, or the reply carries no usable
+                period (never guessed -- a wrong guess is the empty-import
+                trap this exists to prevent).
+        """
+        body = await self._post_xml(self._build_get_active_period_xml())
+        try:
+            root = ET.fromstring(body)
+        except ET.ParseError as exc:
+            raise TallyParseError(str(exc)) from exc
+        period_from = _parse_optional_tally_date(
+            root.findtext(".//TMFROM", default="").strip()
+        )
+        period_to = _parse_optional_tally_date(
+            root.findtext(".//TMTO", default="").strip()
+        )
+        if period_from is None or period_to is None:
+            raise TallyParseError(
+                "Tally did not report its active period (TMFROM/TMTO missing)"
+            )
+        return period_from, period_to
+
+    async def ensure_period_covers(self, from_date: str, to_date: str) -> None:
+        """Raise `TallyPeriodNotCovered` unless the active period contains
+        ``[from_date, to_date]`` (YYYYMMDD). Read-only."""
+        want_from = _parse_optional_tally_date(from_date)
+        want_to = _parse_optional_tally_date(to_date)
+        if want_from is None or want_to is None:
+            raise ValueError("from_date/to_date must be YYYYMMDD strings")
+        active_from, active_to = await self.get_active_period()
+        if want_from < active_from or want_to > active_to:
+            raise TallyPeriodNotCovered(
+                requested_from=want_from,
+                requested_to=want_to,
+                active_from=active_from,
+                active_to=active_to,
+            )
+
     async def get_vouchers(
         self, from_date: str, to_date: str
     ) -> list[VoucherExportRow]:
@@ -888,11 +984,17 @@ class TallyClient:
         never fully materialised in memory. Returns the parsed rows in the
         order Tally emits them. The caller paginates by choosing the window.
 
+        The window must lie inside Tally's active period (see
+        `ensure_period_covers`); otherwise Tally would silently return an
+        empty list and a bulk import would read it as "no vouchers".
+
         Raises:
+            TallyPeriodNotCovered: the active period doesn't cover the window.
             TallyUnreachable: transport failure reaching Tally.
             TallyResponseError: Tally returned a non-200 status.
             TallyParseError: a voucher block is malformed after sanitisation.
         """
+        await self.ensure_period_covers(from_date, to_date)
         xml = self._build_get_vouchers_xml(from_date, to_date)
         scanner = _VoucherBlockScanner()
         rows: list[VoucherExportRow] = []

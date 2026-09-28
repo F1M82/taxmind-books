@@ -25,7 +25,7 @@ import {
 } from "../../api/stockValuation";
 import { useAuth } from "../../context/AuthContext";
 import { useActiveCompany } from "../../context/CompanyContext";
-import { formatINR } from "../../utils/money";
+import { formatDrCr, negativeAmountStyle } from "../../utils/money";
 
 export default function StockValuationScreen(): React.ReactElement {
   const { user } = useAuth();
@@ -153,7 +153,9 @@ function Row({
   return (
     <View style={styles.row}>
       <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={styles.rowAmount}>{formatINR(amount)}</Text>
+      <Text style={[styles.rowAmount, negativeAmountStyle(amount)]}>
+        {formatDrCr(amount)}
+      </Text>
     </View>
   );
 }

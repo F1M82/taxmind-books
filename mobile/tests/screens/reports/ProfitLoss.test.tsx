@@ -1,5 +1,6 @@
 import { render, waitFor } from "@testing-library/react-native";
 import React from "react";
+import { StyleSheet } from "react-native";
 
 import ProfitLossScreen from "../../../src/screens/reports/ProfitLossScreen";
 
@@ -94,4 +95,26 @@ test("shows no stock block when no valuation applies", async () => {
   const { findByLabelText, queryByLabelText } = render(<ProfitLossScreen />);
   await findByLabelText("net-row");
   expect(queryByLabelText("stock-block")).toBeNull();
+});
+
+
+test("stock rows show Dr/Cr and a credit closing value is red", async () => {
+  mockGetProfitLoss.mockResolvedValue({
+    from_date: "2025-04-01",
+    to_date: "2026-03-31",
+    income: { ledgers: [], total: "0.00" },
+    expense: { ledgers: [], total: "0.00" },
+    stock: {
+      opening_value: "733801.87",
+      closing_value: "-139818.21",
+      source: "tally",
+      captured_at: "2026-09-28T10:00:00Z",
+    },
+    net: { value: "873620.08", type: "loss" },
+  });
+  const { findByText } = render(<ProfitLossScreen />);
+  const opening = await findByText("₹7,33,801.87 Dr");
+  const closing = await findByText("₹1,39,818.21 Cr");
+  expect(StyleSheet.flatten(closing.props.style).color).toBe("#c0392b");
+  expect(StyleSheet.flatten(opening.props.style).color).not.toBe("#c0392b");
 });

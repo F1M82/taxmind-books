@@ -13,7 +13,11 @@ import {
 import { FinancialYear, ProfitLossResponse, getProfitLoss } from "../../api/reports";
 import FinancialYearPicker from "../../components/reports/FinancialYearPicker";
 import { useReportPeriods } from "../../hooks/useReportPeriods";
-import { formatINR } from "../../utils/money";
+import {
+  formatDrCr,
+  formatINR,
+  negativeAmountStyle,
+} from "../../utils/money";
 
 export default function ProfitLossScreen(): React.ReactElement {
   const [fromDate, setFromDate] = useState<string>("");
@@ -147,10 +151,12 @@ export default function ProfitLossScreen(): React.ReactElement {
                 <LineRow
                   name="Opening stock"
                   amount={data.stock.opening_value}
+                  drCr
                 />
                 <LineRow
                   name="Closing stock"
                   amount={data.stock.closing_value}
+                  drCr
                 />
                 <Text style={styles.stockNote}>
                   {data.stock.source === "tally"
@@ -199,7 +205,9 @@ function Section({
       )}
       <View style={styles.sectionTotalRow}>
         <Text style={styles.sectionTotalLabel}>Total {title}</Text>
-        <Text style={styles.sectionTotalAmount}>{formatINR(total)}</Text>
+        <Text style={[styles.sectionTotalAmount, negativeAmountStyle(total)]}>
+          {formatINR(total)}
+        </Text>
       </View>
     </View>
   );
@@ -208,14 +216,19 @@ function Section({
 function LineRow({
   name,
   amount,
+  drCr = false,
 }: {
   name: string;
   amount: string;
+  /** Show as Dr/Cr (stock values, where negative = net credit). */
+  drCr?: boolean;
 }): React.ReactElement {
   return (
     <View style={styles.lineRow}>
       <Text style={styles.lineName}>{name}</Text>
-      <Text style={styles.lineAmount}>{formatINR(amount)}</Text>
+      <Text style={[styles.lineAmount, negativeAmountStyle(amount)]}>
+        {drCr ? formatDrCr(amount) : formatINR(amount)}
+      </Text>
     </View>
   );
 }

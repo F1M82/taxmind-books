@@ -3,6 +3,10 @@ import {
   formatINR,
   moneyEquals,
   normalizeMoneyInput,
+  formatDrCr,
+  isNegativeAmount,
+  negativeAmountStyle,
+  NEGATIVE_AMOUNT_COLOR,
 } from "../../src/utils/money";
 
 
@@ -42,4 +46,41 @@ test("moneyEquals compares normalized values", () => {
   expect(moneyEquals("100", "100.00")).toBe(true);
   expect(moneyEquals("100.5", "100.50")).toBe(true);
   expect(moneyEquals("100", "101")).toBe(false);
+});
+
+
+describe("formatDrCr (signed Dr-positive value -> Dr/Cr)", () => {
+  test("positive is a debit", () => {
+    expect(formatDrCr("733801.87")).toBe("₹7,33,801.87 Dr");
+  });
+  test("negative is a credit, shown without a minus sign", () => {
+    expect(formatDrCr("-139818.21")).toBe("₹1,39,818.21 Cr");
+  });
+  test("zero has no side", () => {
+    expect(formatDrCr("0.00")).toBe("₹0.00");
+    expect(formatDrCr("-0.00")).toBe("₹0.00");
+  });
+  test("blank and invalid input", () => {
+    expect(formatDrCr("")).toBe("—");
+    expect(formatDrCr(null)).toBe("—");
+    expect(formatDrCr("abc")).toBe("abc");
+  });
+});
+
+describe("negative amounts are red", () => {
+  test("isNegativeAmount", () => {
+    expect(isNegativeAmount("-0.01")).toBe(true);
+    expect(isNegativeAmount("0.00")).toBe(false);
+    expect(isNegativeAmount("5.00")).toBe(false);
+    expect(isNegativeAmount("")).toBe(false);
+    expect(isNegativeAmount(undefined)).toBe(false);
+    expect(isNegativeAmount("abc")).toBe(false);
+  });
+  test("negativeAmountStyle is red only for negatives", () => {
+    expect(negativeAmountStyle("-50.00")).toEqual({
+      color: NEGATIVE_AMOUNT_COLOR,
+    });
+    expect(negativeAmountStyle("50.00")).toBeUndefined();
+    expect(negativeAmountStyle(null)).toBeUndefined();
+  });
 });

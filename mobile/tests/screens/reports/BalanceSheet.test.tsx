@@ -1,5 +1,6 @@
 import { render, waitFor } from "@testing-library/react-native";
 import React from "react";
+import { StyleSheet } from "react-native";
 
 import BalanceSheetScreen from "../../../src/screens/reports/BalanceSheetScreen";
 
@@ -105,4 +106,43 @@ test("hides the previous-years row when it is zero", async () => {
   const { findByText, queryByLabelText } = render(<BalanceSheetScreen />);
   await findByText("Current period profit");
   expect(queryByLabelText("prior-pnl-row")).toBeNull();
+});
+
+
+test("a negative line (net-credit closing stock) is red; positive lines are not", async () => {
+  mockGetBalanceSheet.mockResolvedValue({
+    as_of_date: "2026-03-31",
+    assets: {
+      groups: [
+        {
+          group_name: "Stock-in-Hand",
+          ledgers: [
+            { ledger_id: "s", ledger_name: "Closing Stock", amount: "-139818.21" },
+          ],
+          total: "-139818.21",
+        },
+        {
+          group_name: "Bank Accounts",
+          ledgers: [{ ledger_id: "b", ledger_name: "Bank", amount: "28330.64" }],
+          total: "28330.64",
+        },
+      ],
+      total: "-111487.57",
+    },
+    liabilities: { groups: [], total: "0.00" },
+    current_period_profit_loss: { value: "0.00", type: "profit" },
+    stock_applied: true,
+    equation: { assets: "-111487.57", liabilities_plus_equity: "-111487.57", in_balance: true },
+  });
+  const { findAllByText } = render(<BalanceSheetScreen />);
+  const negatives = await findAllByText("₹-1,39,818.21");
+  // the line and its group total are both red
+  for (const n of negatives) {
+    expect(StyleSheet.flatten(n.props.style).color).toBe("#c0392b");
+  }
+  expect(negatives.length).toBeGreaterThanOrEqual(2);
+  const positives = await findAllByText("₹28,330.64");
+  for (const p of positives) {
+    expect(StyleSheet.flatten(p.props.style).color).not.toBe("#c0392b");
+  }
 });

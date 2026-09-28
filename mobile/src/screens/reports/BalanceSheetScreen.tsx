@@ -19,7 +19,7 @@ import {
 import { FinancialYear } from "../../api/reports";
 import FinancialYearPicker from "../../components/reports/FinancialYearPicker";
 import { useReportPeriods } from "../../hooks/useReportPeriods";
-import { formatINR } from "../../utils/money";
+import { formatINR, negativeAmountStyle } from "../../utils/money";
 
 export default function BalanceSheetScreen(): React.ReactElement {
   const [asOfDate, setAsOfDate] = useState<string>("");
@@ -182,7 +182,12 @@ function BSSectionView({
       ))}
       <View style={styles.sectionTotalRow}>
         <Text style={styles.sectionTotalLabel}>Total {title}</Text>
-        <Text style={styles.sectionTotalAmount}>
+        <Text
+          style={[
+            styles.sectionTotalAmount,
+            negativeAmountStyle(section.total),
+          ]}
+        >
           {formatINR(section.total)}
         </Text>
       </View>
@@ -197,12 +202,18 @@ function GroupBlock({ group }: { group: BSGroup }): React.ReactElement {
       {group.ledgers.map((l) => (
         <View key={l.ledger_id} style={styles.lineRow}>
           <Text style={styles.lineName}>{l.ledger_name}</Text>
-          <Text style={styles.lineAmount}>{formatINR(l.amount)}</Text>
+          <Text style={[styles.lineAmount, negativeAmountStyle(l.amount)]}>
+            {formatINR(l.amount)}
+          </Text>
         </View>
       ))}
       <View style={styles.groupTotalRow}>
         <Text style={styles.groupTotalLabel}>Group total</Text>
-        <Text style={styles.groupTotalAmount}>{formatINR(group.total)}</Text>
+        <Text
+          style={[styles.groupTotalAmount, negativeAmountStyle(group.total)]}
+        >
+          {formatINR(group.total)}
+        </Text>
       </View>
     </View>
   );

@@ -232,6 +232,8 @@ no valuation => reports unchanged. See `REPORTS.md`.
 press F2 and set the period to that one year -> in the app open Stock valuation ->
 "Read stock from Tally". Repeat for each year (first year first).
 
+**Display (mobile):** stock values are shown as Dr/Cr (`₹7,33,801.87 Dr`, `₹1,39,818.21 Cr`; a negative value is a credit, never clamped or hidden) and every negative figure is red — stock screen, P&L stock rows, and balance sheet lines/totals. Shared helpers in `mobile/src/utils/money.ts` (`formatDrCr`, `negativeAmountStyle`).
+
 **Not built:** manual-entry UI on mobile (API only), per-item quantities/rates, a
 Trial Balance stock line (the TB stays a ledger report; the seeded `Opening Stock`
 ledger keeps the opening TB honest), automatic capture on each sync.

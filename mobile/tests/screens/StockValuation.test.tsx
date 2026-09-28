@@ -1,6 +1,8 @@
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import React from "react";
 
+import { StyleSheet } from "react-native";
+
 import { ApiError } from "../../src/api/client";
 import StockValuationScreen from "../../src/screens/admin/StockValuationScreen";
 
@@ -45,9 +47,17 @@ beforeEach(() => {
 test("lists recorded years with opening and closing stock", async () => {
   const { findByText } = render(<StockValuationScreen />);
   await findByText("FY 2025-26");
-  await findByText("₹7,33,801.87");
-  // Net credit is shown faithfully (formatted, sign preserved by the API string).
-  await findByText(/1,39,818\.21/);
+  await findByText("₹7,33,801.87 Dr");
+  // Net credit (negative stock in Tally) is shown as Cr.
+  await findByText("₹1,39,818.21 Cr");
+});
+
+test("a credit (negative) value is red and a debit is not", async () => {
+  const { findByText } = render(<StockValuationScreen />);
+  const cr = await findByText("₹1,39,818.21 Cr");
+  const dr = await findByText("₹7,33,801.87 Dr");
+  expect(StyleSheet.flatten(cr.props.style).color).toBe("#c0392b");
+  expect(StyleSheet.flatten(dr.props.style).color).not.toBe("#c0392b");
 });
 
 test("warns about items with negative stock in Tally", async () => {
@@ -76,7 +86,7 @@ test("reading from Tally records the year and refreshes the list", async () => {
   fireEvent.press(await findByLabelText("pull-stock"));
   await findByText("Recorded FY 2025-26.");
   expect(mockPull).toHaveBeenCalledWith("backend-1");
-  await findByText("₹7,33,801.87");
+  await findByText("₹7,33,801.87 Dr");
 });
 
 test("shows the backend's instruction when Tally's period is not one year", async () => {

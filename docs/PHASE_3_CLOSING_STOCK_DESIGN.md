@@ -86,6 +86,41 @@ Deferred to Phase B / a real customer need.
 5. The `Opening Stock` ledger and the BS `Stock-in-hand` replacement must not
    double count — needs an explicit test on a company that has both.
 
+## Constraints found reading the report engine (2026-09-28)
+
+- **BS in-balance invariant.** `compute_balance_sheet` asserts
+  `assets == liabilities + current-FY P&L`. If the BS swaps the static
+  `Opening Stock` ledger for `valuation(as_of)` *and* the P&L gains
+  `+closing − opening`, the sheet still balances only when
+  `opening valuation used by the P&L == the seeded ledger balance`
+  (true for the anchor FY: `valuation(anchor − 1 day)` must equal the seeded
+  Dr 7,33,801.87). Enforce this: seed a `stock_valuations` row at
+  `anchor − 1 day` from the same Tally `OPENINGVALUE` sum, and test that a
+  mismatch is surfaced, not papered over.
+- **Later FYs are already incomplete.** The BS only folds in the *current* FY's
+  P&L; prior-year profit is expected to arrive via capital/reserve openings, which
+  the single-anchor design does not roll forward. Stock valuation inherits that
+  limitation; it does not fix it. Multi-FY balance-sheet correctness is a separate
+  item and should not be bundled into this change.
+- **API shape.** `PnLLedgerLine` carries a `ledger_id: UUID`. The synthetic
+  Opening/Closing Stock lines have no ledger, so the response schema (and the
+  mobile P&L screen that renders it) needs either a nullable `ledger_id` or a
+  separate `stock` block. Additive, but it touches `docs/API.md`, the OpenAPI
+  reference and the mobile client, so it is more than a backend-only change.
+- **Blast radius.** `compute_profit_loss` also feeds the dashboard's net profit
+  (`compute_dashboard_financials`), so every consumer moves at once when a
+  valuation row first appears. With no valuation rows, behaviour must stay
+  byte-identical to today (test this first).
+
+## Build order once the probe is done
+
+1. Connector `get_stock_valuation` + fake-Tally tests (sign per the probe).
+2. Migration + model `stock_valuations` (append-only), service to record/read.
+3. Seed the `anchor − 1` row; wire an on-demand pull (and optionally auto-sync).
+4. P&L lines + BS stock swap behind "valuation rows exist", with the
+   no-valuation-rows-means-unchanged regression test written before the feature.
+5. API schema/OpenAPI/docs, then mobile rendering.
+
 ## Out of scope
 
 Quantities, item masters, stock vouchers, godowns, batch tracking, GST HSN

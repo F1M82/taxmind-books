@@ -107,18 +107,28 @@ Resolved:
 
 NOT resolved — and it changes the design:
 
-- **Any date-ranged request hangs TallyPrime here.** A `StockItem` collection with
-  `SVFROMDATE`/`SVTODATE` and a much smaller `Group` collection with the same
-  variables both timed out (30–240 s) and froze the UI. The same collections
-  *without* date variables answer in ~0.1 s. So the connector **cannot** ask
-  Tally for "stock at 2026-03-31" this way.
-- Consequence: a `get_stock_valuation(as_of_date)` command is not viable as
-  designed. What *is* safe is the **current** value (no date variables).
-  Revised approach: snapshot the current stock value on each sync/on demand and
-  label it with the snapshot date; a historical date is only available if a
-  snapshot was taken then (or is entered from Tally's own year-end report by the
-  bookkeeper). Reports must say when a needed date has no snapshot
+- **`SVFROMDATE`/`SVTODATE` static variables on `StockItem` / `Group`
+  collections hang TallyPrime here.** Both timed out (30–240 s) and froze the UI;
+  the same collections *without* them answer in ~0.1 s. **Correction
+  (2026-09-28, later):** this is NOT proof that all date-scoping fails. The
+  project's own P3.0 spike (see `_build_get_vouchers_xml`) found that dates only
+  take effect as **literal values inside a TDL `FILTER`**; `@@SVFromDate` /
+  static variables do not resolve in a collection. My probe used the wrong form,
+  so the hang is most likely self-inflicted, not a Tally limitation. Whether a
+  *valuation* (as opposed to a voucher `Date`) can be scoped by a literal filter
+  is still unknown, because stock value at a date is computed by Tally, not a
+  stored field a filter can select.
+- Consequence: a `get_stock_valuation(as_of_date)` command via variables is not
+  viable. Two routes remain: (1) the safe **current** value (no variables),
+  snapshotted and labelled with its date; (2) compute valuation ourselves from
+  voucher inventory lines fetched through the proven literal-filter voucher export.
+  Reports must say when a needed date has no snapshot
   (`stock_valuation_missing`) rather than interpolate.
+- **Loaded-company facts (Tally, 2026-09-28):** `STARTINGFROM = BOOKSFROM =
+  2025-04-01`, `LASTVOUCHERDATE = 2026-07-21`, i.e. about 1.3 years, not 3. Three
+  literal-filter voucher windows inside that span (Apr 2025, Mar 2026, Jul 2026)
+  all returned 0 vouchers although vouchers exist, so the period selected in the
+  Tally window probably scopes what a collection can see. Unresolved.
 - Still to determine, safely: what period the no-date figure represents (books
   start → last voucher date, or Tally's current date). Decide by comparing
   against Tally's own Balance Sheet on screen, not by more date-ranged queries.

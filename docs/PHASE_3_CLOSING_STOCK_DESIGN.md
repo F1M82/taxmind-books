@@ -133,6 +133,36 @@ NOT resolved — and it changes the design:
   start → last voucher date, or Tally's current date). Decide by comparing
   against Tally's own Balance Sheet on screen, not by more date-ranged queries.
 
+## RESOLUTION of the gateway/period mystery (2026-09-28, verified live)
+
+**The XML gateway is scoped by the company-level period set from the Gateway of
+Tally main menu (F2 there) — not by a period changed inside an open report, and
+not by anything the request says.** Verified against the on-screen Balance Sheet
+for 31-Mar-26: with the main-menu period on FY 2025-26 the plain (no date
+variable) group query returned Stock-in-Hand closing +1,39,818.21 (Tally sign;
+screen shows (−)1,39,818.21), Bank −28,330.64, Cash +40,518.00, Debtors
+−42,09,599.27 — all matching the screen — and the connector's literal-filter
+`get_vouchers` returned 21 vouchers for Apr-2025 and 36 for Mar-2026. While the
+period had been changed only inside a report window, the same queries returned
+closing == opening and zero vouchers. My earlier "SVFROMDATE persists" hypothesis
+was wrong; the static variables did cause the freezes (StockItem/Group valuation
+with them), but the empty results were the period scope.
+
+Consequences for the design:
+
+1. **Per-period stock via the operator is viable and needs no risky queries.**
+   The operator selects the period at the Gateway of Tally main menu; the connector
+   reads Tally's own Opening/Closing stock with the plain query; the backend stores
+   the pair against that period (`period_start`, `period_end`, `opening_value`,
+   `closing_value`, `captured_at`). Repeat once per financial year.
+2. **Import must verify the period, not assume it.** Before reading any window the
+   connector must confirm Tally's active period covers it (read the company's
+   period), and refuse with a clear message ("set the period to FY xx-yy at the
+   Gateway of Tally") instead of returning an empty list that looks like "no
+   vouchers". The current `get_vouchers` silently returns `[]` — a data-loss trap
+   for a bulk import.
+3. **Never send `SVFROMDATE`/`SVTODATE` to this Tally.**
+
 ## Constraints found reading the report engine (2026-09-28)
 
 - **BS in-balance invariant.** `compute_balance_sheet` asserts

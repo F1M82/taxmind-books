@@ -371,12 +371,18 @@ though it's a read, not a dispatch — reuses the existing "don't reach
 out to a connector during tests" switch rather than adding a second
 flag; `tests/conftest.py` already sets it for the whole suite.
 
-## Phase B additions, built 2026-09-28 (NOT yet deployed)
+## Phase B additions, built 2026-09-28
 
-Local commits only until pushed/deployed. Deploy = the manual recipe above, **plus
-migration `0021`** (`stock_valuations`; run it in the one-off container *before* the
-restart), the backend files, a **rebuilt connector `.exe`** (back up `dist/.env`
-first) and a new EAS build for the mobile screens.
+**Backend DEPLOYED to prod 2026-09-29**: migration `0021` applied (`stock_valuations`),
+20 backend files copied, `taxmind-api` rebuilt + restarted, verified healthy
+(`docker ps` all healthy; `/health` = `{"status":"ok","env":"production"}`;
+`/api/v1/health/ready` = `{"status":"ready","database":"ok","redis":"ok"}`). Backup
+taken first: `/opt/taxmind/app/backend.bak-20260928`,
+`/var/backups/taxmind/pre_phaseb_20260928.dump`. Prod alembic now `0021`.
+**Still NOT done:** `git push origin main` (still local-only, ~15 commits ahead of
+origin as of 2026-09-28), connector `.exe` rebuild (back up `dist/.env` first), and a
+new EAS mobile build — none of the new backend endpoints are reachable from the
+connector or the app until those two ship.
 
 **Tally gateway period rule (verified live).** The XML gateway is scoped to the
 *company-level period set at the Gateway of Tally main menu (F2 there)* — NOT a period

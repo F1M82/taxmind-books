@@ -27,8 +27,11 @@ Founder test matrix (A–R):
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from uuid import UUID
+
+import pytest
 
 from app.models.ledger import Ledger
 from app.models.voucher import Voucher
@@ -358,6 +361,31 @@ def test_zero_amount_entry_flagged_manual_review(db_session: Session) -> None:
 
     assert report.zero_amount == 1
     assert report.manual_review == 1
+
+
+def test_zero_amount_entry_logs_identity(
+    db_session: Session, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The report's zero_amount counter alone can't tell an operator WHICH
+    voucher to go look at in Tally. Log its identity (guid/number/date —
+    no amount) so a re-run of the dry run is enough to find it."""
+    company = make_company(db_session)
+    _make_ledger(db_session, company.id, name="Bank")
+
+    with caplog.at_level(logging.WARNING):
+        plan_voucher_import(
+            db_session,
+            company_id=company.id,
+            rows=[_row(
+                tally_guid="GUID-ZERO",
+                voucher_number="RV/42",
+                entries=[{"ledger_name": "Bank", "amount": "0.00", "entry_type": "Dr"}],
+            )],
+        )
+
+    [record] = [r for r in caplog.records if "zero_amount_entry" in r.message]
+    assert "GUID-ZERO" in record.message
+    assert "RV/42" in record.message
 
 
 # ---------------------------------------------------------------------

@@ -497,6 +497,14 @@ def _classify_viable_row(
     if any(_is_zero_amount(e) for e in raw_entries):
         report.zero_amount += 1
         needs_review = True
+        logger.warning(
+            "voucher_import zero_amount_entry company_id=%s tally_guid=%s "
+            "voucher_number=%s date=%s",
+            report.company_id,
+            tally_guid,
+            voucher_number,
+            raw.get("date"),
+        )
     needs_review = _count_state_flags(raw, report) or needs_review
 
     existing_id = existing.get(tally_guid)

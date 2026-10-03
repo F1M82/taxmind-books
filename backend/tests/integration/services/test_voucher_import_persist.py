@@ -34,6 +34,7 @@ Mandatory test matrix (founder Phase 6B §12):
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
@@ -452,25 +453,35 @@ def test_missing_ledger_manual_review(db_session: Session) -> None:
     assert db_session.query(Voucher).filter(Voucher.company_id == company.id).count() == 0
 
 
-def test_zero_amount_entry_manual_review_not_persisted(db_session: Session) -> None:
+def test_zero_amount_entry_dropped_and_rest_persisted(db_session: Session) -> None:
     """A Tally line valued at 0 must never reach the DB: LedgerEntry has a
-    CHECK amount > 0 constraint (regression for the 2026-10-03 live import
-    crash — ck_ledger_entries_amount_positive)."""
+    CHECK amount > 0 constraint (the 2026-10-03 live import crash --
+    ck_ledger_entries_amount_positive). Live evidence that day showed every
+    occurrence was Tally's own Round Off ledger at 0.00 when no rounding
+    was needed -- harmless, since it never affects the Dr/Cr totals. Drop
+    just that line and persist the rest, rather than quarantining a
+    perfectly good voucher."""
     user, company, bank, party = _setup(db_session)
     report = persist_voucher_import(
         db_session,
         company_id=company.id,
         rows=[_row(tally_guid="GUID-ZERO", entries=[
+            *_two_line_entries(bank, party),
             {"ledger_name": bank.name, "ledger_guid": bank.tally_master_id,
-             "amount": "0.00", "entry_type": "Dr"},
-            {"ledger_name": party.name, "ledger_guid": party.tally_master_id,
-             "amount": "-100.00", "entry_type": "Cr"},
+             "amount": "0.00", "entry_type": "Cr"},
         ])],
         audit=_audit(db_session, company, user),
     )
     db_session.commit()
-    assert report.manual_review == 1
-    assert db_session.query(Voucher).filter(Voucher.company_id == company.id).count() == 0
+    assert report.manual_review == 0
+    assert report.inserted == 1
+    v = (
+        db_session.query(Voucher)
+        .filter(Voucher.company_id == company.id, Voucher.tally_guid == "GUID-ZERO")
+        .one()
+    )
+    assert len(v.entries) == 2
+    assert v.total_amount == Decimal("100.00")
 
 
 # ---------------------------------------------------------------------

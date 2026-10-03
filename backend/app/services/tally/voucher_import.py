@@ -235,9 +235,16 @@ def _preload_ledgers(
 
 
 def _is_zero_amount(raw: dict[str, Any]) -> bool:
-    """A Tally ledger line present but valued at 0 -- LedgerEntry requires
-    amount > 0, so this must route to manual review, never persist."""
-    return abs(Decimal(str(raw.get("amount") or "0"))) == 0
+    """A Tally ledger line explicitly valued at 0 (seen live: Tally's own
+    Round Off ledger when no rounding is needed). It never affects the
+    voucher's Dr/Cr totals, so it is dropped rather than persisted --
+    LedgerEntry's amount > 0 constraint would reject it anyway. An amount
+    key that's simply absent is a different (malformed) case, not this
+    one -- real Tally export rows always carry an amount."""
+    amount = raw.get("amount")
+    if amount is None:
+        return False
+    return abs(Decimal(str(amount))) == 0
 
 
 def _reconcile_entry(
@@ -493,19 +500,20 @@ def _classify_viable_row(
         number_to_guids[key] = number_to_guids.get(key, set()) | {tally_guid}
 
     raw_entries = [e for e in raw.get("entries") or [] if isinstance(e, dict)]
-    entries = tuple(_reconcile_entry(e, by_master, by_name) for e in raw_entries)
-    needs_review = _count_entries(report, entries)
-    if any(_is_zero_amount(e) for e in raw_entries):
+    zero_entries = [e for e in raw_entries if _is_zero_amount(e)]
+    if zero_entries:
         report.zero_amount += 1
-        needs_review = True
-        logger.warning(
-            "voucher_import zero_amount_entry company_id=%s tally_guid=%s "
+        logger.info(
+            "voucher_import zero_amount_entry_dropped company_id=%s tally_guid=%s "
             "voucher_number=%s date=%s",
             report.company_id,
             tally_guid,
             voucher_number,
             raw.get("date"),
         )
+    non_zero_entries = [e for e in raw_entries if not _is_zero_amount(e)]
+    entries = tuple(_reconcile_entry(e, by_master, by_name) for e in non_zero_entries)
+    needs_review = _count_entries(report, entries)
     needs_review = _count_state_flags(raw, report) or needs_review
 
     existing_id = existing.get(tally_guid)
@@ -609,24 +617,28 @@ def _resolve_entries(
 ) -> tuple[list[dict[str, Any]], bool]:
     """Map raw ledger lines to (ledger_id, amount, entry_type).
 
+    A zero-amount line (e.g. Tally's own Round Off ledger when no rounding
+    is needed) is dropped silently -- it never affects the Dr/Cr totals,
+    so it can be excluded without the caller needing to do anything else.
+
     Returns ``(resolved, needs_review)``. ``needs_review`` is True when any
-    line is ambiguous, missing, or valued at zero — the caller routes the
-    whole voucher to manual review and MUST NOT persist it. Amounts are
-    stored as positive
-    Decimals with Dr/Cr in `entry_type` (matching LedgerEntry's
-    ``amount > 0`` constraint); the Tally export's signed Dr+/Cr- sign is
-    folded into `entry_type`.
+    remaining line is ambiguous or missing a ledger match — the caller
+    routes the whole voucher to manual review and MUST NOT persist it.
+    Amounts are stored as positive Decimals with Dr/Cr in `entry_type`
+    (matching LedgerEntry's ``amount > 0`` constraint); the Tally export's
+    signed Dr+/Cr- sign is folded into `entry_type`.
     """
     resolved: list[dict[str, Any]] = []
     for raw in raw_entries:
         if not isinstance(raw, dict):
+            continue
+        if _is_zero_amount(raw):
             continue
         planned = _reconcile_entry(raw, by_master, by_name)
         if (
             planned.ledger_match is LedgerMatch.AMBIGUOUS
             or planned.ledger_match is LedgerMatch.MISSING
             or planned.ledger_id is None
-            or _is_zero_amount(raw)
         ):
             return [], True
         resolved.append(

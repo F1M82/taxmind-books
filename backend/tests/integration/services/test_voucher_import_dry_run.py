@@ -375,35 +375,45 @@ def test_ledger_missing_manual_review(db_session: Session) -> None:
     assert report.manual_review == 1
 
 
-def test_zero_amount_entry_flagged_manual_review(db_session: Session) -> None:
-    """Regression for the 2026-10-03 live import crash: a zero-valued Tally
-    line passed dry-run classification clean, then hit LedgerEntry's
-    CHECK amount > 0 constraint on persist. Dry run must now flag it."""
+def test_zero_amount_entry_dropped_not_manual_review(db_session: Session) -> None:
+    """Live evidence 2026-10-03 (Vighnaharta, 9 occurrences): every
+    zero-valued line was Tally's own Round Off ledger emitting 0.00 when no
+    rounding was needed -- harmless by construction, since a 0.00 line can
+    never change the voucher's Dr/Cr totals. Drop the line, keep the
+    voucher; don't make an operator review something that isn't wrong."""
     company = make_company(db_session)
     _make_ledger(db_session, company.id, name="Bank")
+    _make_ledger(db_session, company.id, name="Round Off")
 
     report = plan_voucher_import(
         db_session,
         company_id=company.id,
         rows=[_row(tally_guid="GUID-ZERO", entries=[
-            {"ledger_name": "Bank", "amount": "0.00", "entry_type": "Dr"},
+            {"ledger_name": "Bank", "amount": "100.00", "entry_type": "Dr"},
+            {"ledger_name": "Round Off", "amount": "0.00", "entry_type": "Cr"},
         ])],
     )
 
     assert report.zero_amount == 1
-    assert report.manual_review == 1
+    assert report.manual_review == 0
+    assert report.insert == 1
+    planned = report.planned[0]
+    assert planned.disposition is Disposition.INSERT
+    # only the non-zero line survives into the plan
+    assert len(planned.entries) == 1
+    assert planned.entries[0].ledger_name == "Bank"
 
 
 def test_zero_amount_entry_logs_identity(
     db_session: Session, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The report's zero_amount counter alone can't tell an operator WHICH
-    voucher to go look at in Tally. Log its identity (guid/number/date —
-    no amount) so a re-run of the dry run is enough to find it."""
+    voucher had a line dropped. Log its identity (guid/number/date — no
+    amount) so a re-run of the dry run is enough to find it if needed."""
     company = make_company(db_session)
     _make_ledger(db_session, company.id, name="Bank")
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO):
         plan_voucher_import(
             db_session,
             company_id=company.id,
@@ -414,7 +424,7 @@ def test_zero_amount_entry_logs_identity(
             )],
         )
 
-    [record] = [r for r in caplog.records if "zero_amount_entry" in r.message]
+    [record] = [r for r in caplog.records if "zero_amount_entry_dropped" in r.message]
     assert "GUID-ZERO" in record.message
     assert "RV/42" in record.message
 

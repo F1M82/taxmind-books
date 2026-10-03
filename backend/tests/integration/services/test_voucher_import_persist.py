@@ -452,6 +452,27 @@ def test_missing_ledger_manual_review(db_session: Session) -> None:
     assert db_session.query(Voucher).filter(Voucher.company_id == company.id).count() == 0
 
 
+def test_zero_amount_entry_manual_review_not_persisted(db_session: Session) -> None:
+    """A Tally line valued at 0 must never reach the DB: LedgerEntry has a
+    CHECK amount > 0 constraint (regression for the 2026-10-03 live import
+    crash — ck_ledger_entries_amount_positive)."""
+    user, company, bank, party = _setup(db_session)
+    report = persist_voucher_import(
+        db_session,
+        company_id=company.id,
+        rows=[_row(tally_guid="GUID-ZERO", entries=[
+            {"ledger_name": bank.name, "ledger_guid": bank.tally_master_id,
+             "amount": "0.00", "entry_type": "Dr"},
+            {"ledger_name": party.name, "ledger_guid": party.tally_master_id,
+             "amount": "-100.00", "entry_type": "Cr"},
+        ])],
+        audit=_audit(db_session, company, user),
+    )
+    db_session.commit()
+    assert report.manual_review == 1
+    assert db_session.query(Voucher).filter(Voucher.company_id == company.id).count() == 0
+
+
 # ---------------------------------------------------------------------
 # 15 / 16 / 17 — identity metadata + date
 # ---------------------------------------------------------------------
@@ -528,18 +549,19 @@ def test_duplicate_guid_in_batch_detected(db_session: Session) -> None:
 
 def test_atomic_rollback_on_failure(db_session: Session) -> None:
     user, company, bank, party = _setup(db_session)
-    # First voucher is valid; the second passes reconciliation but has a
-    # zero amount, which violates LedgerEntry.amount > 0 at flush time.
-    # The whole batch must roll back — no partial voucher survives.
+    # First voucher is valid; the second passes reconciliation but has an
+    # amount exceeding LedgerEntry.amount's NUMERIC(15,2) precision, which
+    # fails at flush time. The whole batch must roll back — no partial
+    # voucher survives.
     rows = [
         _row(tally_guid="GUID-OK", entries=_two_line_entries(bank, party)),
         _row(
             tally_guid="GUID-BAD",
             entries=[
                 {"ledger_name": bank.name, "ledger_guid": bank.tally_master_id,
-                 "amount": "0", "entry_type": "Dr"},
+                 "amount": "999999999999999.99", "entry_type": "Dr"},
                 {"ledger_name": party.name, "ledger_guid": party.tally_master_id,
-                 "amount": "0", "entry_type": "Cr"},
+                 "amount": "-999999999999999.99", "entry_type": "Cr"},
             ],
         ),
     ]

@@ -256,7 +256,8 @@ def test_ledger_masterid_match(db_session: Session) -> None:
         rows=[
             _row(
                 tally_guid="GUID-G",
-                entries=[{"ledger_name": "HDFC BANK", "ledger_guid": "LED-M1"}],
+                entries=[{"ledger_name": "HDFC BANK", "ledger_guid": "LED-M1",
+                          "amount": "100.00", "entry_type": "Dr"}],
             )
         ],
     )
@@ -337,6 +338,25 @@ def test_ledger_missing_manual_review(db_session: Session) -> None:
     entry = report.planned[0].entries[0]
     assert entry.ledger_match is LedgerMatch.MISSING
     assert report.ledger_missing == 1
+    assert report.manual_review == 1
+
+
+def test_zero_amount_entry_flagged_manual_review(db_session: Session) -> None:
+    """Regression for the 2026-10-03 live import crash: a zero-valued Tally
+    line passed dry-run classification clean, then hit LedgerEntry's
+    CHECK amount > 0 constraint on persist. Dry run must now flag it."""
+    company = make_company(db_session)
+    _make_ledger(db_session, company.id, name="Bank")
+
+    report = plan_voucher_import(
+        db_session,
+        company_id=company.id,
+        rows=[_row(tally_guid="GUID-ZERO", entries=[
+            {"ledger_name": "Bank", "amount": "0.00", "entry_type": "Dr"},
+        ])],
+    )
+
+    assert report.zero_amount == 1
     assert report.manual_review == 1
 
 

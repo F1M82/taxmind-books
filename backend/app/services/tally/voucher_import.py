@@ -125,6 +125,7 @@ class DryRunReport:
     ledger_match_name: int = 0
     ledger_ambiguous: int = 0
     ledger_missing: int = 0
+    zero_amount: int = 0
     planned: list[PlannedVoucher] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -148,6 +149,7 @@ class DryRunReport:
             "ledger_match_name": self.ledger_match_name,
             "ledger_ambiguous": self.ledger_ambiguous,
             "ledger_missing": self.ledger_missing,
+            "zero_amount": self.zero_amount,
         }
 
 
@@ -229,6 +231,12 @@ def _preload_ledgers(
             by_master.setdefault(master_id, []).append(lid)
         by_name.setdefault(name_norm, []).append(lid)
     return by_master, by_name
+
+
+def _is_zero_amount(raw: dict[str, Any]) -> bool:
+    """A Tally ledger line present but valued at 0 -- LedgerEntry requires
+    amount > 0, so this must route to manual review, never persist."""
+    return abs(Decimal(str(raw.get("amount") or "0"))) == 0
 
 
 def _reconcile_entry(
@@ -483,12 +491,12 @@ def _classify_viable_row(
         key = (voucher_type, voucher_number)
         number_to_guids[key] = number_to_guids.get(key, set()) | {tally_guid}
 
-    entries = tuple(
-        _reconcile_entry(e, by_master, by_name)
-        for e in raw.get("entries") or []
-        if isinstance(e, dict)
-    )
+    raw_entries = [e for e in raw.get("entries") or [] if isinstance(e, dict)]
+    entries = tuple(_reconcile_entry(e, by_master, by_name) for e in raw_entries)
     needs_review = _count_entries(report, entries)
+    if any(_is_zero_amount(e) for e in raw_entries):
+        report.zero_amount += 1
+        needs_review = True
     needs_review = _count_state_flags(raw, report) or needs_review
 
     existing_id = existing.get(tally_guid)
@@ -593,8 +601,9 @@ def _resolve_entries(
     """Map raw ledger lines to (ledger_id, amount, entry_type).
 
     Returns ``(resolved, needs_review)``. ``needs_review`` is True when any
-    line is ambiguous or missing — the caller routes the whole voucher to
-    manual review and MUST NOT persist it. Amounts are stored as positive
+    line is ambiguous, missing, or valued at zero — the caller routes the
+    whole voucher to manual review and MUST NOT persist it. Amounts are
+    stored as positive
     Decimals with Dr/Cr in `entry_type` (matching LedgerEntry's
     ``amount > 0`` constraint); the Tally export's signed Dr+/Cr- sign is
     folded into `entry_type`.
@@ -608,6 +617,7 @@ def _resolve_entries(
             planned.ledger_match is LedgerMatch.AMBIGUOUS
             or planned.ledger_match is LedgerMatch.MISSING
             or planned.ledger_id is None
+            or _is_zero_amount(raw)
         ):
             return [], True
         resolved.append(

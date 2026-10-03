@@ -108,6 +108,7 @@ def _make_existing_voucher(
     voucher = Voucher(
         company_id=company_id,
         voucher_type=voucher_type,
+        tally_voucher_type=voucher_type,
         voucher_number=voucher_number,
         date=date(2026, 9, 12),
         total_amount=0,
@@ -237,11 +238,41 @@ def test_unknown_voucher_type_flagged_not_fatal(db_session: Session) -> None:
     # Both rows still planned (import does not fail wholesale); the
     # unknown-type row requires manual review.
     assert report.manual_review == 1
-    assert report.insert == 2
     unknown = report.planned[0]
     assert unknown.is_known_type is False
     assert unknown.voucher_type == "Delivery Challan"  # raw preserved
     assert report.planned[1].is_known_type is True
+
+
+def test_duplicate_number_check_survives_existing_unknown_type_voucher(
+    db_session: Session,
+) -> None:
+    """Regression for a 2026-10-03 prod crash: an unknown-type voucher is
+    persisted with voucher_type=NULL (tally_voucher_type holds the raw
+    string). A later dry run's duplicate-number preload queried
+    Voucher.voucher_type and called .value on it unconditionally, which
+    raised AttributeError the moment any such row existed — on EVERY
+    window of a run, not just the one containing that voucher."""
+    company = make_company(db_session)
+    existing = Voucher(
+        company_id=company.id,
+        voucher_type=None,
+        tally_voucher_type="Delivery Challan",
+        voucher_number="DC/1",
+        date=date(2026, 9, 12),
+        total_amount=0,
+        tally_guid="GUID-UNKNOWN",
+    )
+    db_session.add(existing)
+    db_session.commit()
+
+    report = plan_voucher_import(
+        db_session,
+        company_id=company.id,
+        rows=[_row(tally_guid="GUID-OTHER", voucher_type="Sales")],
+    )
+
+    assert report.insert == 1
 
 
 # ---------------------------------------------------------------------

@@ -195,17 +195,18 @@ def _preload_number_to_guids(
     case where one GUID is already persisted and a second arrives).
     """
     rows = (
-        db.query(Voucher.voucher_type, Voucher.voucher_number, Voucher.tally_guid)
+        db.query(Voucher.tally_voucher_type, Voucher.voucher_number, Voucher.tally_guid)
         .filter(
             Voucher.company_id == company_id,
             Voucher.tally_guid.isnot(None),
             Voucher.voucher_number.isnot(None),
+            Voucher.tally_voucher_type.isnot(None),
         )
         .all()
     )
     out: dict[tuple[str, str], set[str]] = {}
     for vtype, vnumber, guid in rows:
-        key = (vtype.value, vnumber)
+        key = (vtype, vnumber)
         out[key] = out.get(key, set()) | {guid}
     return out
 

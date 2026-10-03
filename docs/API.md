@@ -589,6 +589,17 @@ Cancel a voucher (sets status='cancelled'). The voucher remains in the database;
 
 **Side effects:** audit row `action='voucher.cancelled'`. If voucher was posted to Tally, a reversal voucher is **not** auto-created — that is a future feature.
 
+#### `POST /api/v1/vouchers/{voucher_id}/retry-tally-post`
+
+Operator-triggered re-dispatch of a stranded voucher to Tally. The backend auto-recovers vouchers stuck on connector-offline retries, but a Tally-side rejection (missing ledger, etc.) or an unsynced-ledger block needs the operator to fix the underlying issue first, then call this to re-post.
+
+**Response 200:** the voucher's post-retry state — `status='posted'` on success, or still `status='pending_tally_post'` with `tally_last_error` set if it failed again. A handled dispatch failure is not an API error; it's reported on the voucher.
+
+**Errors:**
+- `409 conflict` — voucher is not `pending_tally_post` (nothing to retry); `details.status` carries the voucher's actual status
+
+**Side effects:** audit row `action='voucher.tally_post_retry_requested'`, plus whatever audit row the dispatch itself emits (`posted_to_tally` / `tally_post_failed` / `tally_post_blocked` / `tally_post_queued`).
+
 ---
 
 ### Connector Status & Health

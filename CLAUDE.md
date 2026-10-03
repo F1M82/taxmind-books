@@ -201,6 +201,18 @@ Claude memory (`vps_cohosting_recon.md`, `p32_opening_balance_seed.md`)
 provider's noVNC console mangles multi-line paste; type one command at
 a time, and never push file contents through it (scp instead).
 
+**Agent auto-mode classifier blocks writing to the VPS, not reading it.**
+Read-only SSH (`docker ps`, `docker logs`, `md5sum`, even making a local
+backup copy of a file on the box) runs fine for the agent. The `scp` that
+overwrites a file under `/opt/taxmind/app/` gets denied every time it's been
+tried (2026-09-28, 2026-10-03) — don't retry it through another path; hand
+the exact `scp` + `docker compose build/up --no-deps` commands to the user
+and let them run it, then verify the result yourself (checksum the deployed
+file against the local one, check `/health`). `git push origin main` itself
+has NOT been consistently denied (succeeded for the agent 2026-10-03) even
+though it was denied earlier (2026-09-28) — don't assume either way, just
+try it and fall back to asking the user if it's blocked.
+
 ## Tally company mapping: two representations that can drift
 
 A company's "is this Tally-mapped" status is tracked in **two
@@ -379,10 +391,10 @@ flag; `tests/conftest.py` already sets it for the whole suite.
 `/api/v1/health/ready` = `{"status":"ready","database":"ok","redis":"ok"}`). Backup
 taken first: `/opt/taxmind/app/backend.bak-20260928`,
 `/var/backups/taxmind/pre_phaseb_20260928.dump`. Prod alembic now `0021`.
-**Still NOT done:** `git push origin main` (still local-only, ~15 commits ahead of
-origin as of 2026-09-28), connector `.exe` rebuild (back up `dist/.env` first), and a
-new EAS mobile build — none of the new backend endpoints are reachable from the
-connector or the app until those two ship.
+**All closed out by 2026-10-03:** pushed to `origin/main`, connector `.exe` rebuilt
+(`sha=80e6421` then `ea7155f` after the zero-amount fix below) and relaunched against
+prod, new EAS development build installed on-device (versionCode 10) — every Phase B
+endpoint is now reachable end-to-end.
 
 **Tally gateway period rule (verified live).** The XML gateway is scoped to the
 *company-level period set at the Gateway of Tally main menu (F2 there)* — NOT a period
@@ -399,7 +411,28 @@ Monthly windows via `export_vouchers`; refuses unless the opening balances are s
 mapping gate) before every window; commits per window; stops on first failure. Idempotent
 on `(company_id, tally_guid)`. Run state is in-process (lost on restart). Do a dry run
 first; the operator must set Tally's period to cover the range. Code:
-`services/tally/voucher_import_run.py`. Not live-verified end-to-end against prod.
+`services/tally/voucher_import_run.py`.
+
+**Live-run against Vighnaharta, full history 2025-04-01..2026-10-03, done 2026-10-03,
+FULLY RESOLVED same day.** The dry run reported clean (539 vouchers, 0 issues), but the
+real run crashed at window 3/19 on `psycopg.errors.CheckViolation:
+ck_ledger_entries_amount_positive` — a real Tally ledger line valued at exactly `0.00`.
+Neither the dry-run classifier nor the persist path had ever checked for a zero amount
+(only ledger-match outcomes were checked). First fix (`ea7155f`) routed zero-amount
+entries to `manual_review` instead of crashing — safe, but left 9 vouchers unimported.
+Follow-up the same day: added identity logging to a re-run dry run (`5b5486e`) to find
+out WHICH 9; found and fixed an unrelated latent crash in `_preload_number_to_guids`
+triggered by an existing unknown-Tally-type voucher (`7a7cc38`, `.value` called on a
+NULL `voucher_type` — use `tally_voucher_type` instead, always populated); then Gaurav
+checked all 9 directly in TallyPrime — 2 were genuine data-entry mistakes (deleted in
+Tally directly), the other 7 were all Tally's own **Round Off ledger line at exactly
+0.00** (harmless — a 0.00 line can never change a voucher's Dr/Cr totals). Real fix
+(`3eb045b`): both paths now **drop the zero-amount line and import the rest of the
+voucher**, instead of quarantining the whole thing. Final verified state: 537/537
+vouchers in prod DB (539 minus the 2 deleted in Tally), `manual_review: 0`. If you add a
+NEW raw-Tally numeric field anywhere in this import path, check it against
+zero/malformed explicitly — the dry run passing clean is not proof the persist path will
+succeed. See memory `voucher_import_zero_amount_bug.md` for full detail.
 
 **Report periods** — `GET /reports/periods` (years from the anchor/earliest voucher to
 now) + mobile financial-year chips on P&L / Trial Balance / Balance Sheet.
@@ -413,9 +446,11 @@ date after the first financial year (prior years' profit was held nowhere). Now 
 (`stock_valuations`; `GET/PUT /stock-valuations`, `POST /connector/stock-valuation/{id}`,
 connector command `get_stock_valuation`, mobile Dashboard -> "Stock valuation"). Applied
 to P&L / balance sheet / dashboard only for whole-year windows with the needed rows;
-without them everything is unchanged. Vighnaharta has NO valuation recorded yet: after
-deploying, per year: set Tally's period to that one FY at the main menu, then "Read stock
-from Tally" (first year's opening must equal the seeded `Opening Stock` ledger,
-Dr 7,33,801.87). Tally shows **negative stock** for Vighnaharta (closing is a net credit;
+without them everything is unchanged. Per year: set Tally's period to that one FY at the
+main menu, then "Read stock from Tally" (first year's opening must equal the seeded
+`Opening Stock` ledger, Dr 7,33,801.87) — **verified working live on-device for
+Vighnaharta 2026-09-29** (connector -> backend -> mobile round trip confirmed; exact
+figure/FY not recorded, re-check if it matters). Tally shows **negative stock** for
+Vighnaharta (closing is a net credit;
 dozens of items have negative closing quantity) — mirrored faithfully, flagged in the app;
 the bookkeeper should review it. Design + as-built: `docs/PHASE_3_CLOSING_STOCK_DESIGN.md`.

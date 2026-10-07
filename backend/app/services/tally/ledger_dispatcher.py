@@ -141,11 +141,14 @@ async def dispatch_ledger_to_tally(
 ) -> dict[str, object]:
     """Push one ledger to TallyPrime via the registered connector.
 
-    On success, stamps `tally_master_id` (= the ledger's own id, the
-    REMOTEID Tally echoed back) + `tally_synced_at` + `confirmed_in_tally_at`
-    and audits `ledger.confirmed_in_tally`. A voucher-create-time check
-    reads `confirmed_in_tally_at` to decide whether to still force Optional
-    -- see `voucher_service.py`.
+    On success, stamps `tally_master_id` (Tally's own GUID, read back by
+    name after the Create -- live-verified 2026-10-07 that Tally does
+    NOT honor REMOTEID on a LEDGER Create the way it does on VOUCHER, so
+    the connector confirms the real GUID itself rather than this backend
+    assuming the id it sent was accepted) + `tally_synced_at` +
+    `confirmed_in_tally_at`, and audits `ledger.confirmed_in_tally`. A
+    voucher-create-time check reads `confirmed_in_tally_at` to decide
+    whether to still force Optional -- see `voucher_service.py`.
     """
     registry = registry or _connector_registry_mod.get_registry()
 
@@ -235,8 +238,32 @@ async def dispatch_ledger_to_tally(
             raise TallyRetryableEnvelope(error_code, error_message)
         raise TallyRejectedEnvelope(error_code, error_message)
 
+    master_id = result.get("tally_master_id")
+    if not master_id:
+        # Contract violation: a "success" result must carry Tally's real
+        # GUID (the connector confirms it by read-back; see
+        # TallyClient.create_ledger). Never fall back to a made-up value
+        # here -- that's exactly the identity-corruption bug this dance
+        # exists to avoid. Treat as ambiguous/retryable instead.
+        audit.emit(
+            action="ledger.sync_failed",
+            entity_type="ledger",
+            entity_id=ledger.id,
+            old_value=None,
+            new_value={
+                "error": "success result missing tally_master_id",
+                "error_class": "TallyAmbiguousResponse",
+            },
+            actor_user_id=user_id,
+            company_id_override=company_id,
+        )
+        raise TallyRetryableEnvelope(
+            "missing_tally_master_id",
+            "Tally create succeeded but returned no confirmed master id",
+        )
+
     now = datetime.now(UTC)
-    ledger.tally_master_id = result.get("tally_master_id") or str(ledger.id)
+    ledger.tally_master_id = master_id
     ledger.tally_synced_at = now
     ledger.confirmed_in_tally_at = now
     audit.emit(

@@ -210,10 +210,12 @@ class LedgerInput:
     parent_group: str
     opening_balance: Decimal = Decimal("0")
     balance_type: str = "Dr"  # 'Dr' or 'Cr'
-    # BUG-004-Layer-C-style durable id: stamped as the ledger's Tally
-    # REMOTEID on Create, same mechanism as VoucherInput.remote_id. We
-    # set it to the backend ledger id so a later alter (not yet built)
-    # could target it the same way approve/reject target a voucher.
+    # Live-verified 2026-10-07: unlike VoucherInput.remote_id, Tally does
+    # NOT honor REMOTEID on a LEDGER Create -- it assigns its own GUID
+    # regardless. Still sent (harmless -- Tally just ignores it) in case
+    # a future Tally version changes this; `create_ledger`'s real
+    # `tally_master_id` comes from a confirming read-back by name, not
+    # from this field. Do not rely on it for identity.
     remote_id: str | None = None
 
 
@@ -1153,17 +1155,41 @@ class TallyClient:
         responsible for surfacing that to the operator since nothing
         here can resolve a name or group collision automatically.
 
+        Unlike `post_voucher`, Tally does NOT honor REMOTEID on a LEDGER
+        Create -- live-verified 2026-10-07: a ledger created with
+        REMOTEID="<our-uuid>" came back from `get_all_ledgers()` with
+        Tally's own auto-assigned GUID (company-GUID + sequence), not the
+        REMOTEID we sent. Returning the REMOTEID as `tally_master_id`
+        here (as a naive mirror of post_voucher would) would silently
+        corrupt identity: a later sync_masters would see Tally's real
+        GUID, never match it to the fake one we stored, and permanently
+        orphan the ledger from reconciliation (`upsert_from_sync` Case C
+        -- name collision with a different GUID, skip forever). So this
+        does a confirming read-back by exact name instead, same idiom
+        `get_all_ledgers` already uses -- a full-collection scan, not a
+        name-filtered query (ponytail: reuse the already-proven call
+        rather than write a new, untested filtered TDL query for a
+        one-time confirmation read).
+
         Raises:
             TallyImportRejected: Tally rejected the create.
-            TallyAmbiguousResponse: response envelope shape unknown.
+            TallyAmbiguousResponse: response envelope shape unknown, OR
+                Create reported success but the ledger wasn't found on
+                the confirming read-back (surfaced as retryable -- a
+                retry's worst case is a clean "already exists" rejection,
+                never a silent duplicate).
             TallyUnreachable / TallyResponseError: transport failures.
         """
         parsed = await self._post_and_validate_import(
             self._build_ledger_create_xml(ledger), expect="created"
         )
+        all_ledgers = await self.get_all_ledgers()
+        matches = [led for led in all_ledgers if led.name == ledger.name]
+        if len(matches) != 1 or not matches[0].master_id:
+            raise TallyAmbiguousResponse(parsed, parsed.raw_body)
         return {
             "status": "success",
-            "tally_master_id": ledger.remote_id,
+            "tally_master_id": matches[0].master_id,
             "raw": parsed.raw_body,
         }
 

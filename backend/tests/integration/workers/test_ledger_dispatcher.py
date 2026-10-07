@@ -22,6 +22,7 @@ from app.services.tally.connector_registry import (
     ConnectorOffline,
     ConnectorRegistry,
     TallyRejectedEnvelope,
+    TallyRetryableEnvelope,
 )
 from app.services.tally.ledger_dispatcher import dispatch_ledger_to_tally
 from sqlalchemy.orm import Session
@@ -254,3 +255,52 @@ async def test_dispatch_rejected_envelope_raises_tally_rejected(
     db_session.expire_all()
     refreshed = db_session.query(Ledger).filter(Ledger.id == ledger.id).one()
     assert refreshed.confirmed_in_tally_at is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_success_without_master_id_raises_retryable(
+    db_session: Session,
+) -> None:
+    """A "success" result with no tally_master_id is a contract
+    violation (live-verified 2026-10-07: Tally doesn't honor REMOTEID on
+    a LEDGER Create, so the connector must always confirm the real GUID
+    by read-back -- see TallyClient.create_ledger). Must never fall back
+    to a made-up id; must raise retryable instead so a retry either
+    gets a clean confirmation or a clean "already exists" rejection."""
+    user, company, ledger = _setup(db_session)
+    reg = _FakeRegistry(
+        reply={
+            "command": "create_ledger",
+            "status": "success",
+            # tally_master_id deliberately omitted.
+            "duration_ms": 12,
+        }
+    )
+    _attach_connection(reg, company.id, uuid4())
+
+    with pytest.raises(TallyRetryableEnvelope):
+        await dispatch_ledger_to_tally(
+            db=db_session,
+            ledger_id=ledger.id,
+            company_id=company.id,
+            user_id=user.id,
+            request_id=uuid4(),
+            registry=reg,
+        )
+    db_session.commit()
+
+    db_session.expire_all()
+    refreshed = db_session.query(Ledger).filter(Ledger.id == ledger.id).one()
+    assert refreshed.confirmed_in_tally_at is None
+    assert refreshed.tally_master_id is None
+
+    audit = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.company_id == company.id,
+            AuditLog.action == "ledger.sync_failed",
+            AuditLog.entity_id == ledger.id,
+        )
+        .one()
+    )
+    assert audit.new_value["error_class"] == "TallyAmbiguousResponse"

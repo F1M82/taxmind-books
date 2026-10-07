@@ -666,17 +666,47 @@ async def test_post_voucher_builds_n_line_envelope(
 # ---------------- create_ledger (v1.3 item 7) ----------------
 
 
+def _create_then_readback_callback(
+    captured: dict[str, str], *, created_name: str, real_guid: str
+):  # type: ignore[no-untyped-def]
+    """Routes the Create request to a success reply and the follow-up
+    `get_all_ledgers()` confirming read-back (live-verified 2026-10-07:
+    Tally doesn't honor REMOTEID on a LEDGER Create, so `create_ledger`
+    always re-reads by name) to a Collection reply containing the
+    created ledger under Tally's own GUID."""
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode("utf-8")
+        if "TaxMindLedgers" in body:
+            return httpx.Response(
+                200,
+                text=(
+                    "<ENVELOPE><BODY><DATA>"
+                    '<COLLECTION ISMSTDEPTYPE="Yes" MSTDEPTYPE="8">'
+                    f'<LEDGER NAME="{created_name}" RESERVEDNAME="">'
+                    f'<GUID TYPE="String">{real_guid}</GUID>'
+                    "<PARENT TYPE=\"String\">Sundry Debtors</PARENT>"
+                    "</LEDGER>"
+                    "</COLLECTION>"
+                    "</DATA></BODY></ENVELOPE>"
+                ),
+            )
+        captured["body"] = body
+        return httpx.Response(200, text=_IMPORT_SUCCESS_CREATE)
+
+    return _route
+
+
 @pytest.mark.asyncio
 async def test_create_ledger_builds_create_envelope(
     client: TallyClient, httpx_mock: HTTPXMock
 ) -> None:
-    captured = {}
-
-    def _capture(request: httpx.Request) -> httpx.Response:
-        captured["body"] = request.content.decode("utf-8")
-        return httpx.Response(200, text=_IMPORT_SUCCESS_CREATE)
-
-    httpx_mock.add_callback(_capture, url="http://localhost:9000")
+    captured: dict[str, str] = {}
+    cb = _create_then_readback_callback(
+        captured, created_name="New Customer", real_guid="tally-real-guid-1"
+    )
+    httpx_mock.add_callback(cb, url="http://localhost:9000")
+    httpx_mock.add_callback(cb, url="http://localhost:9000")
 
     ledger = LedgerInput(
         name="New Customer",
@@ -685,7 +715,9 @@ async def test_create_ledger_builds_create_envelope(
     )
     result = await client.create_ledger(ledger)
     assert result["status"] == "success"
-    assert result["tally_master_id"] == "ledger-uuid-1"
+    # Tally's own GUID from the read-back, NOT the REMOTEID we sent --
+    # the whole point of the fix.
+    assert result["tally_master_id"] == "tally-real-guid-1"
 
     body = captured["body"]
     assert "<TALLYREQUEST>Import Data</TALLYREQUEST>" in body
@@ -704,12 +736,11 @@ async def test_create_ledger_nonzero_opening_balance_signed_dr_positive(
     client: TallyClient, httpx_mock: HTTPXMock
 ) -> None:
     captured: dict[str, str] = {}
-
-    def _capture(request: httpx.Request) -> httpx.Response:
-        captured["body"] = request.content.decode("utf-8")
-        return httpx.Response(200, text=_IMPORT_SUCCESS_CREATE)
-
-    httpx_mock.add_callback(_capture, url="http://localhost:9000")
+    cb = _create_then_readback_callback(
+        captured, created_name="New Customer", real_guid="tally-real-guid-1"
+    )
+    httpx_mock.add_callback(cb, url="http://localhost:9000")
+    httpx_mock.add_callback(cb, url="http://localhost:9000")
     ledger = LedgerInput(
         name="New Customer",
         parent_group="Sundry Debtors",
@@ -718,6 +749,33 @@ async def test_create_ledger_nonzero_opening_balance_signed_dr_positive(
     )
     await client.create_ledger(ledger)
     assert "<OPENINGBALANCE>500.00</OPENINGBALANCE>" in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_create_ledger_raises_ambiguous_when_readback_finds_no_match(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    """Create reports success but the confirming read-back can't find the
+    ledger by name -- must NOT fall back to the REMOTEID we sent (that
+    would silently corrupt identity); must raise instead."""
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode("utf-8")
+        if "TaxMindLedgers" in body:
+            return httpx.Response(
+                200,
+                text="<ENVELOPE><BODY><DATA>"
+                '<COLLECTION ISMSTDEPTYPE="Yes" MSTDEPTYPE="8">'
+                "</COLLECTION></DATA></BODY></ENVELOPE>",
+            )
+        return httpx.Response(200, text=_IMPORT_SUCCESS_CREATE)
+
+    httpx_mock.add_callback(_route, url="http://localhost:9000")
+    httpx_mock.add_callback(_route, url="http://localhost:9000")
+    with pytest.raises(TallyAmbiguousResponse):
+        await client.create_ledger(
+            LedgerInput(name="New Customer", parent_group="Sundry Debtors")
+        )
 
 
 @pytest.mark.asyncio

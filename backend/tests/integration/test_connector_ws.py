@@ -13,12 +13,14 @@ which exercises send_command + futures against a fake WebSocket.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from datetime import UTC, datetime
 from uuid import uuid4
 
 import jwt
 import pytest
+import app.api.v1.connector_ws as connector_ws_mod
 from app.config import get_settings
 from app.core.security import (
     CONNECTOR_TOKEN_KIND,
@@ -187,6 +189,59 @@ def test_heartbeat_returns_heartbeat_ack(client: TestClient) -> None:
 
         conn = _wait_for_registry(company_id)
         assert conn.queued_outbound_count == 5
+
+
+# ---------------- tally_company_changed ----------------
+
+
+def test_tally_company_changed_refires_reenqueue_sweep(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.3: when the operator switches Tally to the RIGHT company, a
+    voucher stranded by `wrong_company_open` must be re-dispatched
+    immediately — same helper as register, not only on the next
+    reconnect or periodic sweep."""
+    company_id = uuid4()
+    calls: list = []
+    fired = threading.Event()
+
+    def _record(company: object) -> None:
+        calls.append(company)
+        fired.set()
+
+    # Patch before the socket opens so register's own call is captured
+    # too. The message loop resolves the module global at call time.
+    monkeypatch.setattr(
+        connector_ws_mod, "_schedule_reenqueue_on_connector_up", _record
+    )
+
+    token = create_connector_token(
+        connector_id=uuid4(), company_id=company_id
+    )
+    with _open(client, token=token, company_id=company_id) as ws:
+        ws.send_text(
+            _build_envelope(type_="register", payload={"tally_running": True})
+        )
+        json.loads(ws.receive_text())  # register_ack
+        # register still fires it (BUG-Books-002 behaviour, unchanged).
+        assert fired.wait(timeout=2.0)
+        assert calls == [company_id]
+
+        # Operator switches the open Tally company → re-fire the sweep.
+        fired.clear()
+        ws.send_text(
+            _build_envelope(
+                type_="tally_company_changed",
+                payload={
+                    "previous": {"tally_company_identifier": "10000"},
+                    "current": {"tally_company_identifier": "10001"},
+                },
+            )
+        )
+        assert fired.wait(timeout=2.0), (
+            "tally_company_changed did not re-fire the re-enqueue sweep"
+        )
+        assert calls == [company_id, company_id]
 
 
 # ---------------- close codes ----------------

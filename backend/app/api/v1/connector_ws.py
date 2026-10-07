@@ -199,6 +199,13 @@ async def _run_message_loop(conn: ConnectorConnection) -> None:
             # The operator just switched Tally companies — pull the newly
             # active company's masters immediately, same trigger as register.
             _schedule_auto_sync_on_connector_up(conn)
+            # And drain this company's retryable-class stranded vouchers
+            # now: a strand parked by `wrong_company_open` (operator had
+            # the wrong Tally company open) is retryable the moment the
+            # RIGHT company is open. Waiting for the next register or the
+            # periodic sweep could strand it for hours. Same helper and
+            # same TAXMIND_SKIP_TALLY_DISPATCH gate as _handle_register.
+            _schedule_reenqueue_on_connector_up(conn.company_id)
         elif type_ == "error":
             logger.warning(
                 "connector-side error %s: %s", conn.company_id, payload

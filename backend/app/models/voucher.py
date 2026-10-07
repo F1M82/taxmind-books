@@ -76,6 +76,12 @@ class VoucherStatus(str, PyEnum):
     # Reports treat `pending_tally_post` as a live entry; only the
     # `tally_posted_at` timestamp signals "mirrored to Tally". (P0.46d)
     pending_tally_post = "pending_tally_post"
+    # v1.3 P0.54: a queued voucher whose retryable-class strand crossed
+    # the 30-day REENQUEUE_WINDOW without ever reaching Tally. Set only
+    # by the expiry sweep (voucher_reenqueue.expire_stranded_vouchers).
+    # NOT a live book entry — reports exclude it like `rejected_optional`;
+    # the operator must handle it manually (fix and re-post, or cancel).
+    tally_post_expired = "tally_post_expired"
     posted = "posted"
     cancelled = "cancelled"
     rejected_optional = "rejected_optional"

@@ -45,9 +45,11 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
+from app.core.audit import AuditContext, AuditEmitter
 from app.core.exceptions import LedgerNotSyncedToTally
 from app.models.audit_log import AuditLog
 from app.models.voucher import Voucher, VoucherStatus
+from app.services import notification_service
 from app.services.tally.connector_registry import (
     CommandTimeout,
     ConnectorOffline,
@@ -118,26 +120,7 @@ def select_retryable_strands(
     now = now or datetime.now(UTC)
     cutoff = now - window
 
-    # DISTINCT ON (entity_id) ORDER BY entity_id, created_at DESC → the
-    # single most-recent tally-post audit action per voucher. Postgres
-    # native; the test + CI DBs are Postgres.
-    latest_action = (
-        db.query(
-            AuditLog.entity_id.label("voucher_id"),
-            AuditLog.action.label("action"),
-        )
-        .filter(
-            AuditLog.entity_type == "voucher",
-            AuditLog.action.in_(_TALLY_POST_ACTIONS),
-        )
-        .distinct(AuditLog.entity_id)
-        .order_by(
-            AuditLog.entity_id,
-            AuditLog.created_at.desc(),
-            AuditLog.id.desc(),
-        )
-        .subquery()
-    )
+    latest_action = _latest_tally_post_action_subquery(db)
 
     query = (
         db.query(Voucher)
@@ -221,3 +204,202 @@ async def reenqueue_retryable_vouchers(
     if posted:
         logger.info("reenqueue: %d voucher(s) posted to Tally", posted)
     return posted
+
+
+# ---------------------------------------------------------------------
+# 30-day expiry sweep (v1.3 P0.54)
+# ---------------------------------------------------------------------
+
+
+def _latest_tally_post_action_subquery(db: Session):  # type: ignore[no-untyped-def]
+    """DISTINCT ON (entity_id) → the most-recent tally-post audit action
+    per voucher. Shared by the re-enqueue and expiry selections; Postgres
+    native (the test + CI DBs are Postgres)."""
+    return (
+        db.query(
+            AuditLog.entity_id.label("voucher_id"),
+            AuditLog.action.label("action"),
+        )
+        .filter(
+            AuditLog.entity_type == "voucher",
+            AuditLog.action.in_(_TALLY_POST_ACTIONS),
+        )
+        .distinct(AuditLog.entity_id)
+        .order_by(
+            AuditLog.entity_id,
+            AuditLog.created_at.desc(),
+            AuditLog.id.desc(),
+        )
+        .subquery()
+    )
+
+
+def select_expired_strands(
+    db: Session,
+    *,
+    company_id: UUID | None = None,
+    window: timedelta = REENQUEUE_WINDOW,
+    now: datetime | None = None,
+) -> list[Voucher]:
+    """Return the vouchers eligible for 30-day expiry (P0.54).
+
+    The window complement of `select_retryable_strands`: a voucher
+    qualifies when
+
+      * ``status == pending_tally_post``;
+      * its most recent tally-post audit action is
+        ``voucher.tally_post_queued`` (retryable class — rejection- and
+        blocked-class strands keep waiting for their operator action);
+      * ``tally_post_queued_at`` is OLDER than ``window`` (30 days).
+
+    Deliberately NOT bounded by `MAX_REENQUEUE_ATTEMPTS` — expiry is
+    about the wait, not the attempt count. Rejection/blocked strands are
+    excluded: they never belonged to the auto-retry queue and are
+    already surfaced with an error for manual handling.
+    """
+    now = now or datetime.now(UTC)
+    cutoff = now - window
+
+    latest_action = _latest_tally_post_action_subquery(db)
+
+    query = (
+        db.query(Voucher)
+        .join(latest_action, latest_action.c.voucher_id == Voucher.id)
+        .filter(
+            Voucher.status == VoucherStatus.pending_tally_post,
+            latest_action.c.action == _RETRYABLE_ACTION,
+            Voucher.tally_post_queued_at.isnot(None),
+            Voucher.tally_post_queued_at < cutoff,
+        )
+        .order_by(Voucher.tally_post_queued_at)
+    )
+    if company_id is not None:
+        query = query.filter(Voucher.company_id == company_id)
+
+    return query.all()
+
+
+def expire_stranded_vouchers(
+    db: Session,
+    *,
+    company_id: UUID | None = None,
+    window: timedelta = REENQUEUE_WINDOW,
+    now: datetime | None = None,
+) -> int:
+    """Mark overdue retryable-class strands ``tally_post_expired``.
+
+    P0.54: a queued voucher older than ``window`` (30 days, matching the
+    re-enqueue cutoff) has silently stopped being retried — past the
+    window `select_retryable_strands` drops it, and nothing said so. For
+    each such strand this flips the status to ``tally_post_expired``,
+    emits one ``voucher.tally_post_expired`` audit row (source=worker,
+    same emitter convention as the dispatcher), and pushes a
+    notification to the voucher's creator via the P0.44
+    `notification_service.send_to_user` channel. The voucher never
+    reached Tally, so it is not a live book entry: every report filter
+    is an explicit ``status.in_([posted, pending_tally_post])``
+    allow-list, so expired rows drop out of the books by construction.
+
+    Each voucher is committed on its own so one failure can't poison the
+    sweep; the notification is best-effort and never blocks the next
+    voucher. Returns the count expired. Idempotent: an expired voucher
+    no longer matches the selection, so re-running the sweep is a no-op
+    and never double-notifies.
+    """
+    strands = select_expired_strands(
+        db, company_id=company_id, window=window, now=now
+    )
+    if not strands:
+        return 0
+
+    logger.info(
+        "expiry: %d overdue strand(s) for company=%s (window=%s)",
+        len(strands),
+        company_id or "ALL",
+        window,
+    )
+
+    audit = AuditEmitter(
+        db,
+        AuditContext(
+            company=None,  # company_id_override per row, as the dispatcher does
+            user=None,
+            ip_address=None,
+            user_agent="voucher-expiry-sweep/1.0",
+            request_id=uuid4(),
+            source="worker",
+        ),
+    )
+    window_days = int(window.total_seconds() // 86400)
+
+    expired = 0
+    for voucher in strands:
+        vid = voucher.id
+        vcompany = voucher.company_id
+        try:
+            voucher.status = VoucherStatus.tally_post_expired
+            audit.emit(
+                action="voucher.tally_post_expired",
+                entity_type="voucher",
+                entity_id=vid,
+                old_value={"status": VoucherStatus.pending_tally_post.value},
+                new_value={
+                    "status": VoucherStatus.tally_post_expired.value,
+                    "queued_at": (
+                        voucher.tally_post_queued_at.isoformat()
+                        if voucher.tally_post_queued_at is not None
+                        else None
+                    ),
+                    "window_days": window_days,
+                },
+                actor_user_id=None,  # no human actor — the sweep decided
+                company_id_override=vcompany,
+            )
+            db.commit()
+            expired += 1
+        except Exception:
+            db.rollback()
+            logger.exception("expiry: voucher %s could not be expired", vid)
+            continue
+
+        _notify_voucher_expired(db, voucher)
+
+    if expired:
+        logger.info("expiry: %d voucher(s) marked tally_post_expired", expired)
+    return expired
+
+
+def _notify_voucher_expired(db: Session, voucher: Voucher) -> None:
+    """Best-effort push to the voucher's creator (P0.44 channel).
+
+    Never raises — a notification failure must not roll back the
+    committed status change + audit row. No active device tokens is a
+    normal no-op (single-founder pilot usually has the phone around, but
+    nothing depends on delivery).
+    """
+    if voucher.created_by is None:
+        return
+    label = voucher.voucher_number or str(voucher.id)[:8]
+    try:
+        notification_service.send_to_user(
+            db,
+            user_id=voucher.created_by,
+            notification=notification_service.Notification(
+                title="Voucher expired from the Tally queue",
+                body=(
+                    f"Voucher {label} waited {REENQUEUE_WINDOW.days} days "
+                    "without reaching Tally and left the retry queue — "
+                    "review it."
+                ),
+                data={
+                    "kind": "voucher.tally_post_expired",
+                    "voucher_id": str(voucher.id),
+                    "company_id": str(voucher.company_id),
+                    "status": VoucherStatus.tally_post_expired.value,
+                },
+            ),
+        )
+    except Exception:
+        logger.exception(
+            "expiry: notification for voucher %s failed", voucher.id
+        )

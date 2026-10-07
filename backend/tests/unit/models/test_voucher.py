@@ -256,6 +256,7 @@ def test_voucher_status_enum_values() -> None:
         "pending_approval",
         "optional",
         "pending_tally_post",
+        "tally_post_expired",  # v1.3 P0.54: 30-day expiry sweep
         "posted",
         "cancelled",
         "rejected_optional",

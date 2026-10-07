@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     # process-local connector registry. Two triggers share one core:
     #   1. connector-up event (always on unless dispatch is skipped);
     #   2. this periodic sweep (opt-in; off in tests + by default).
+    # The same periodic loop also runs the v1.3 P0.54 30-day expiry
+    # sweep (marks overdue strands `tally_post_expired` + notifies),
+    # so this toggle gates both Tally sweeps.
     TALLY_REENQUEUE_SWEEP_ENABLED: bool = Field(default=False)
     TALLY_REENQUEUE_SWEEP_INTERVAL_SECONDS: int = Field(default=300)
 

@@ -20,6 +20,10 @@ import { formatINR } from "../../utils/money";
 // `tally_last_error` after at least one attempt is a non-retryable
 // Tally rejection (validation error, missing ledger) — surface it
 // differently so the user knows a human needs to act.
+// v1.3 P0.54: `tally_post_expired` is a queued voucher that crossed the
+// 30-day retry window without ever reaching Tally — it is NOT a live
+// book entry (reports exclude it), so the operator must fix and re-post
+// or cancel it manually. Badge it loudest, like a rejection.
 function isTallyRejected(v: VoucherListItem): boolean {
   return (
     v.status === "pending_tally_post" &&
@@ -35,6 +39,8 @@ function isTallyRejected(v: VoucherListItem): boolean {
 function tallyTagLabel(v: VoucherListItem): string {
   if (v.status === "cancelled") return "Cancelled";
   if (v.status === "rejected_optional") return "Rejected";
+  if (v.status === "tally_post_expired")
+    return "Expired — review required";
   if (v.tally_posted_at !== null) return "Posted to Tally";
   if (isTallyRejected(v)) return "Tally rejected";
   if (v.status === "pending_tally_post") return "Queued for Tally";
@@ -45,6 +51,7 @@ function tallyTagStyle(v: VoucherListItem) {
   if (v.status === "cancelled" || v.status === "rejected_optional") {
     return styles.tallyCancelled;
   }
+  if (v.status === "tally_post_expired") return styles.tallyExpired;
   if (v.tally_posted_at !== null) return styles.tallyPosted;
   if (isTallyRejected(v)) return styles.tallyRejected;
   if (v.status === "pending_tally_post") return styles.tallyQueued;
@@ -171,6 +178,7 @@ const styles = StyleSheet.create({
   tallyPosted: { backgroundColor: "#27ae60", color: "#fff" },
   tallyPending: { backgroundColor: "#f39c12", color: "#fff" },
   tallyQueued: { backgroundColor: "#3498db", color: "#fff" },
+  tallyExpired: { backgroundColor: "#a04000", color: "#fff" },
   tallyRejected: { backgroundColor: "#c0392b", color: "#fff" },
   tallyCancelled: { backgroundColor: "#95a5a6", color: "#fff" },
   errorHint: { fontSize: 12, color: "#c0392b" },

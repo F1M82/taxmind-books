@@ -23,14 +23,21 @@ logger = logging.getLogger("app.main")
 
 
 async def _reenqueue_sweep_loop(interval_seconds: int) -> None:
-    """Periodically re-dispatch retryable-class stranded vouchers (BUG-002).
+    """Periodic Tally sweeps: re-enqueue (BUG-002) + 30-day expiry (P0.54).
 
-    Runs inside the API process so it can reach the process-local
-    connector registry. Each pass opens its own ``SessionLocal`` and
-    sweeps all companies. Exceptions never break the loop.
+    Runs inside the API process so the re-enqueue half can reach the
+    process-local connector registry. Each pass opens its own
+    ``SessionLocal`` and sweeps all companies: first re-dispatches
+    retryable-class strands, then marks strands older than the 30-day
+    window ``tally_post_expired`` (audit + push notification). The
+    expiry pass is DB-only and idempotent, so running it on every sweep
+    tick (default 5 min) only means an overdue voucher is marked within
+    minutes of crossing the threshold instead of within a day.
+    Exceptions never break the loop.
     """
     from app.core.database import SessionLocal
     from app.services.tally.voucher_reenqueue import (
+        expire_stranded_vouchers,
         reenqueue_retryable_vouchers,
     )
 
@@ -41,6 +48,10 @@ async def _reenqueue_sweep_loop(interval_seconds: int) -> None:
             await reenqueue_retryable_vouchers(db, company_id=None)
         except Exception:
             logger.exception("periodic re-enqueue sweep failed")
+        try:
+            expire_stranded_vouchers(db, company_id=None)
+        except Exception:
+            logger.exception("periodic expiry sweep failed")
         finally:
             db.close()
 

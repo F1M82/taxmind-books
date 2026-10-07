@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.core.audit import AuditContext, AuditEmitter
 from app.core.exceptions import LedgerNotSyncedToTally
+from app.models.connector import ConnectorCompanyBinding
 from app.models.ledger import Ledger
 from app.models.voucher import LedgerEntry, Voucher, VoucherStatus
 
@@ -102,6 +103,49 @@ def check_ledgers_synced(
             ),
         },
     )
+
+
+# ---------------------------------------------------------------------
+# Wrong-company guard target resolution (v1.3 queue-on-mismatch)
+# ---------------------------------------------------------------------
+
+
+def _resolve_target_company_identifier(
+    db: Session,
+    *,
+    registry: ConnectorRegistry,
+    company_id: UUID,
+) -> str | None:
+    """Return the Tally company identifier the connector must have open.
+
+    Resolves the identifier from the ``ConnectorCompanyBinding`` row of
+    the connector that will actually receive the command — the one the
+    registry maps this ``company_id`` to, not just any binding row.
+    The connector's ``_handle_post_voucher`` compares it against
+    ``get_active_tally_company()`` and fails the post with
+    ``wrong_company_open`` (retryable) when they differ, so a voucher
+    can never land in the wrong books.
+
+    Returns ``None`` — and the guard field is omitted — when there is
+    no live connection yet (``send_command`` will raise
+    ``ConnectorOffline`` anyway) or the connector serves this company
+    without a binding row (GUID-only legacy mappings; see CLAUDE.md
+    "Tally company mapping: two representations that can drift").
+    """
+    conn = registry.get(company_id)
+    if conn is None:
+        return None
+    binding = (
+        db.query(ConnectorCompanyBinding)
+        .filter(
+            ConnectorCompanyBinding.connector_id == conn.connector_id,
+            ConnectorCompanyBinding.company_id == company_id,
+        )
+        .first()
+    )
+    if binding is None:
+        return None
+    return binding.tally_company_identifier
 
 
 # ---------------------------------------------------------------------
@@ -326,6 +370,15 @@ async def dispatch_voucher_to_tally(
             for e in entries
         ],
     }
+
+    # v1.3 queue-on-mismatch: tell the connector which Tally company must
+    # be open. Omitted when there is no binding row (legacy GUID-only
+    # mappings) so companies without one keep working exactly as before.
+    target_identifier = _resolve_target_company_identifier(
+        db, registry=registry, company_id=company_id
+    )
+    if target_identifier is not None:
+        args["target_tally_company_identifier"] = target_identifier
 
     audit = AuditEmitter(
         db,

@@ -8,7 +8,7 @@ for the registry.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, datetime, date
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -16,6 +16,7 @@ from uuid import uuid4
 import pytest
 from app.models.audit_log import AuditLog
 from app.models.company import CompanyRole
+from app.models.connector import Connector, ConnectorCompanyBinding
 from app.models.ledger import Ledger
 from app.models.voucher import (
     EntryType,
@@ -26,6 +27,7 @@ from app.models.voucher import (
 )
 from app.services.tally.connector_registry import (
     CommandTimeout,
+    ConnectorConnection,
     ConnectorOffline,
     ConnectorRegistry,
     TallyRejectedEnvelope,
@@ -63,6 +65,21 @@ class _FakeRegistry(ConnectorRegistry):
         if isinstance(self.reply, Exception):
             raise self.reply
         return self.reply
+
+
+def _attach_connection(
+    reg: ConnectorRegistry, company_id, connector_id  # type: ignore[no-untyped-def]
+) -> None:
+    """Seed the registry as if the connector were live.
+
+    `send_command` is overridden by _FakeRegistry, so the connection's
+    WebSocket is never touched — None is safe here.
+    """
+    reg._by_company[company_id] = ConnectorConnection(
+        company_id=company_id,
+        connector_id=connector_id,
+        ws=None,  # type: ignore[arg-type]
+    )
 
 
 def _seed_voucher(
@@ -378,6 +395,187 @@ async def test_dispatch_envelope_retryable_true_raises_retryable_envelope(
         .one()
     )
     assert audit.new_value["error_class"] == "TallyUnreachable"
+
+
+# ---------------- v1.3 wrong-company guard (target identifier) ---------
+
+
+_WrongCompanyOpen_REPLY = {
+    "command": "post_voucher",
+    "status": "error",
+    "error": {
+        "code": "wrong_company_open",
+        "message": "requested company is not currently open in Tally",
+    },
+    "retryable": True,
+}
+
+
+def _bind_connector(
+    db: Session, company, *, identifier: str
+):  # type: ignore[no-untyped-def]
+    """Persist a Connector + ConnectorCompanyBinding pair, as the
+    tally-mapping endpoint would for a discovery-based mapping."""
+    connector_id = uuid4()
+    db.add(Connector(id=connector_id))
+    db.flush()
+    db.add(
+        ConnectorCompanyBinding(
+            connector_id=connector_id,
+            company_id=company.id,
+            data_folder_path="C:/Tally.9000",
+            tally_company_identifier=identifier,
+            tally_company_display_name="Vighnaharta Agro Chemicals",
+            configured_at=datetime.now(UTC),
+        )
+    )
+    db.commit()
+    return connector_id
+
+
+@pytest.mark.asyncio
+async def test_dispatch_sends_target_tally_company_identifier(
+    db_session: Session,
+) -> None:
+    """v1.3 queue-on-mismatch: when the company has a connector binding,
+    the post_voucher args carry the binding's tally_company_identifier so
+    the connector refuses to write into a different open Tally company."""
+    user, company, bank, party = _setup(db_session)
+    v = _seed_voucher(
+        db_session,
+        company=company,
+        bank=bank,
+        party=party,
+        status_=VoucherStatus.pending_tally_post,
+    )
+    connector_id = _bind_connector(
+        db_session, company, identifier="10000"
+    )
+    reg = _FakeRegistry(
+        reply={
+            "command": "post_voucher",
+            "status": "success",
+            "result": {"tally_voucher_guid": "g-1"},
+            "duration_ms": 10,
+        }
+    )
+    _attach_connection(reg, company.id, connector_id)
+
+    await dispatch_voucher_to_tally(
+        db=db_session,
+        voucher_id=v.id,
+        company_id=company.id,
+        user_id=user.id,
+        request_id=uuid4(),
+        registry=reg,
+    )
+    db_session.commit()
+
+    assert reg.received_args is not None
+    assert (
+        reg.received_args["args"]["target_tally_company_identifier"]
+        == "10000"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_omits_target_identifier_without_binding(
+    db_session: Session,
+) -> None:
+    """Companies mapped only via Company.tally_master_id (GUID-only legacy
+    mappings, zero ConnectorCompanyBinding rows) must keep dispatching —
+    the guard field is omitted, the connector behaves exactly as before."""
+    user, company, bank, party = _setup(db_session)
+    v = _seed_voucher(
+        db_session,
+        company=company,
+        bank=bank,
+        party=party,
+        status_=VoucherStatus.pending_tally_post,
+    )
+    reg = _FakeRegistry(
+        reply={
+            "command": "post_voucher",
+            "status": "success",
+            "result": {"tally_voucher_guid": "g-1"},
+            "duration_ms": 10,
+        }
+    )
+    _attach_connection(reg, company.id, uuid4())  # live connector, no binding
+
+    await dispatch_voucher_to_tally(
+        db=db_session,
+        voucher_id=v.id,
+        company_id=company.id,
+        user_id=user.id,
+        request_id=uuid4(),
+        registry=reg,
+    )
+    db_session.commit()
+
+    assert reg.received_args is not None
+    assert "target_tally_company_identifier" not in reg.received_args["args"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_wrong_company_open_keeps_pending_and_raises_retryable(
+    db_session: Session,
+) -> None:
+    """The connector refuses to post into the wrong Tally company
+    (wrong_company_open, retryable=True). The dispatcher must:
+    raise TallyRetryableEnvelope, emit voucher.tally_post_queued, and
+    leave the voucher in pending_tally_post (queue-on-mismatch) — the
+    state the re-enqueue sweep later drains."""
+    user, company, bank, party = _setup(db_session)
+    v = _seed_voucher(
+        db_session,
+        company=company,
+        bank=bank,
+        party=party,
+        status_=VoucherStatus.pending_tally_post,
+    )
+    connector_id = _bind_connector(
+        db_session, company, identifier="10000"
+    )
+    reg = _FakeRegistry(reply=dict(_WrongCompanyOpen_REPLY))
+    _attach_connection(reg, company.id, connector_id)
+
+    with pytest.raises(TallyRetryableEnvelope) as exc_info:
+        await dispatch_voucher_to_tally(
+            db=db_session,
+            voucher_id=v.id,
+            company_id=company.id,
+            user_id=user.id,
+            request_id=uuid4(),
+            registry=reg,
+        )
+    db_session.commit()
+    db_session.refresh(v)
+
+    # The guard field reached the connector so it COULD make this check.
+    assert reg.received_args is not None
+    assert (
+        reg.received_args["args"]["target_tally_company_identifier"]
+        == "10000"
+    )
+    # Queue-on-mismatch outcome.
+    assert exc_info.value.error_code == "wrong_company_open"
+    assert v.status == VoucherStatus.pending_tally_post
+    assert v.tally_posted_at is None
+    assert v.tally_post_attempts == 1
+    assert v.tally_last_error == (
+        "requested company is not currently open in Tally"
+    )
+    audit = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.entity_type == "voucher",
+            AuditLog.entity_id == v.id,
+            AuditLog.action == "voucher.tally_post_queued",
+        )
+        .one()
+    )
+    assert audit.new_value["error"]["code"] == "wrong_company_open"
 
 
 # ---------------- voucher not found in company ----------------

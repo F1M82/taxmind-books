@@ -76,6 +76,8 @@ class LedgerOut(TaxMindBooksBase):
     is_active: bool
     tally_master_id: str | None = None
     tally_synced_at: datetime | None = None
+    created_via_mobile: bool = False
+    confirmed_in_tally_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -88,6 +90,8 @@ class LedgerListItem(TaxMindBooksBase):
     balance_type: str
     gstin: str | None = None
     is_active: bool
+    created_via_mobile: bool = False
+    confirmed_in_tally_at: datetime | None = None
 
 
 class LedgerListResponse(TaxMindBooksBase):

@@ -9,6 +9,16 @@ export interface LedgerListItem {
   balance_type: "Dr" | "Cr";
   gstin: string | null;
   is_active: boolean;
+  created_via_mobile: boolean;
+  confirmed_in_tally_at: string | null;
+}
+
+export interface LedgerCreateRequest {
+  name: string;
+  group_name?: string | null;
+  opening_balance?: string;
+  balance_type?: "Dr" | "Cr";
+  gstin?: string | null;
 }
 
 export interface LedgerListResponse {
@@ -28,4 +38,18 @@ export async function listLedgers(params?: {
     `/api/v1/ledgers/${suffix ? `?${suffix}` : ""}`,
     { withCompany: true },
   );
+}
+
+/**
+ * Creates a ledger. Always lands `created_via_mobile=true` on the
+ * backend (v1.3 item 7) -- the connector pushes it to Tally in the
+ * background, and any voucher referencing it before Tally confirms is
+ * forced Optional, regardless of confidence.
+ */
+export async function createLedger(
+  req: LedgerCreateRequest,
+): Promise<LedgerListItem> {
+  return api.post<LedgerListItem>("/api/v1/ledgers/", req, {
+    withCompany: true,
+  });
 }

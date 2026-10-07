@@ -50,6 +50,8 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset(
         "ledger.updated",
         "ledger.sync_failed",
         "ledger.opening_balance_seeded",
+        "ledger.confirmed_in_tally",
+        "ledger.tally_sync_retry_requested",
         "stock_valuation.recorded",
         "recon.session_created",
         "recon.session_completed",

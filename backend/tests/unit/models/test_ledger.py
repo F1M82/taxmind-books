@@ -31,6 +31,8 @@ def test_ledger_has_expected_columns() -> None:
         "tally_master_id",
         "tally_synced_at",
         "opening_balance_seeded_at",
+        "created_via_mobile",
+        "confirmed_in_tally_at",
         "created_at",
         "updated_at",
     }

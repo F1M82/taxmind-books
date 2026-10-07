@@ -15,6 +15,7 @@ from connector.tally_client import (
     CompanyInfo,
     ImportResponse,
     LedgerEntryInput,
+    LedgerInput,
     LedgerMaster,
     TallyAmbiguousResponse,
     TallyClient,
@@ -660,6 +661,76 @@ async def test_post_voucher_builds_n_line_envelope(
     assert "<AMOUNT>-50000.00</AMOUNT>" in body
     # Default (as_optional=False) emits no ISOPTIONAL tag.
     assert "<ISOPTIONAL>" not in body
+
+
+# ---------------- create_ledger (v1.3 item 7) ----------------
+
+
+@pytest.mark.asyncio
+async def test_create_ledger_builds_create_envelope(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    captured = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(200, text=_IMPORT_SUCCESS_CREATE)
+
+    httpx_mock.add_callback(_capture, url="http://localhost:9000")
+
+    ledger = LedgerInput(
+        name="New Customer",
+        parent_group="Sundry Debtors",
+        remote_id="ledger-uuid-1",
+    )
+    result = await client.create_ledger(ledger)
+    assert result["status"] == "success"
+    assert result["tally_master_id"] == "ledger-uuid-1"
+
+    body = captured["body"]
+    assert "<TALLYREQUEST>Import Data</TALLYREQUEST>" in body
+    assert "<REPORTNAME>All Masters</REPORTNAME>" in body
+    assert (
+        '<LEDGER REMOTEID="ledger-uuid-1" NAME="New Customer" '
+        'ACTION="Create">' in body
+    )
+    assert "<PARENT>Sundry Debtors</PARENT>" in body
+    # Zero opening balance (the default) emits no OPENINGBALANCE tag.
+    assert "<OPENINGBALANCE>" not in body
+
+
+@pytest.mark.asyncio
+async def test_create_ledger_nonzero_opening_balance_signed_dr_positive(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    captured: dict[str, str] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(200, text=_IMPORT_SUCCESS_CREATE)
+
+    httpx_mock.add_callback(_capture, url="http://localhost:9000")
+    ledger = LedgerInput(
+        name="New Customer",
+        parent_group="Sundry Debtors",
+        opening_balance=Decimal("500.00"),
+        balance_type="Dr",
+    )
+    await client.create_ledger(ledger)
+    assert "<OPENINGBALANCE>500.00</OPENINGBALANCE>" in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_create_ledger_raises_TallyImportRejected_on_strict_rejection(
+    client: TallyClient, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(
+        url="http://localhost:9000", text=_IMPORT_REJECTION_LEDGER_MISSING
+    )
+    with pytest.raises(TallyImportRejected):
+        await client.create_ledger(
+            LedgerInput(name="Dup", parent_group="Sundry Debtors")
+        )
 
 
 # ---------------- Optional voucher flow (v1.2) ----------------

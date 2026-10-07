@@ -12,6 +12,7 @@ from app.core.database import SessionLocal
 # voucher_dispatcher.dispatch_voucher_to_tally expects the worker to
 # pick up the patch. Exception classes are class identity — direct
 # import is fine. See CONNECTOR_PROTOCOL.md §"Patchable singletons".
+from app.services.tally import ledger_dispatcher as _ledger_dispatcher_mod
 from app.services.tally import voucher_dispatcher as _voucher_dispatcher_mod
 from app.services.tally.connector_registry import (
     CommandTimeout,
@@ -75,6 +76,53 @@ def post_voucher_to_tally(  # type: ignore[no-untyped-def]
         # is in autoretry_for above, so Celery will retry. The non-
         # retryable TallyRejectedEnvelope still commits the audit row
         # before re-raising; Celery sees it as a non-retried failure.
+        db.commit()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+# v1.3 item 7. Same dormant-in-Phase-0 note as post_voucher_to_tally above:
+# CELERY_TASK_ALWAYS_EAGER=1 routes every ledger create through
+# `_enqueue_in_process` in `ledger_dispatcher`, not this task.
+@celery_app.task(
+    bind=True,
+    name="app.workers.create_ledger_in_tally",
+    autoretry_for=(ConnectorOffline, CommandTimeout, TallyRetryableEnvelope),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=5,
+)
+def create_ledger_in_tally(  # type: ignore[no-untyped-def]
+    self,
+    ledger_id: str,
+    company_id: str,
+    user_id: str | None,
+    request_id: str,
+):
+    """Run one async ledger-create dispatch on a fresh DB session."""
+    db = SessionLocal()
+    try:
+        asyncio.run(
+            _ledger_dispatcher_mod.dispatch_ledger_to_tally(
+                db=db,
+                ledger_id=UUID(ledger_id),
+                company_id=UUID(company_id),
+                user_id=UUID(user_id) if user_id else None,
+                request_id=UUID(request_id),
+            )
+        )
+        db.commit()
+    except (
+        ConnectorOffline,
+        CommandTimeout,
+        TallyRetryableEnvelope,
+        TallyRejectedEnvelope,
+    ):
         db.commit()
         raise
     except Exception:

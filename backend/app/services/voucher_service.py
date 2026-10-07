@@ -164,6 +164,14 @@ class VoucherService:
             # "live in the books"; tally_posted_at is "mirrored to Tally").
             status=VoucherStatus.pending_tally_post,
             tally_post_queued_at=datetime.now(UTC),
+            # v1.3 item 7: manual voucher creation has no caller-supplied
+            # is_optional_in_tally field at all (that's an OCR/Flow-B
+            # concept, see EXTRACTION_CONTRACT.md) -- it is forced True
+            # here, regardless of anything else, when any referenced
+            # ledger is still unconfirmed-in-Tally (`created_via_mobile
+            # AND confirmed_in_tally_at IS NULL`). See
+            # `_validate_ledger_ownership` and AMENDMENTS_v1.3.md.
+            is_optional_in_tally=self._pending_optional_taint,
             source="manual",
             client_channel=client_channel,
             is_auto_posted=False,
@@ -742,11 +750,19 @@ class VoucherService:
 
         Returns a `{ledger_id: group_name}` map so the caller can run
         type-specific rules (Sales requires Sundry Debtors, etc.) without
-        a second query.
+        a second query. Also stashes whether any referenced ledger is
+        still tainted (v1.3 item 7: `created_via_mobile AND
+        confirmed_in_tally_at IS NULL`) on `self._pending_optional_taint`
+        for `create()` to read -- same query, no extra round-trip.
         """
         ledger_ids = {e.ledger_id for e in data.entries}
         rows = (
-            self.db.query(Ledger.id, Ledger.group_name)
+            self.db.query(
+                Ledger.id,
+                Ledger.group_name,
+                Ledger.created_via_mobile,
+                Ledger.confirmed_in_tally_at,
+            )
             .filter(
                 Ledger.id.in_(ledger_ids),
                 Ledger.company_id == self.company_id,
@@ -760,6 +776,10 @@ class VoucherService:
                 "One or more ledgers do not belong to the active company.",
                 details={"missing_ledger_ids": [str(i) for i in missing]},
             )
+        self._pending_optional_taint = any(
+            row.created_via_mobile and row.confirmed_in_tally_at is None
+            for row in rows
+        )
         return groups
 
     # ------------------------------------------------------------------

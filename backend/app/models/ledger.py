@@ -96,6 +96,22 @@ class Ledger(Base, TenantScopedMixin):
         nullable=True,
     )
 
+    # v1.3 item 7: ledgers created from the mobile app are pushed to Tally
+    # (connector `create_ledger`) rather than staying DB-only. A voucher
+    # referencing a ledger where `created_via_mobile AND
+    # confirmed_in_tally_at IS NULL` is forced Optional regardless of
+    # confidence (AMENDMENTS_v1.3.md). Ledgers inserted any other way
+    # (sync_masters, an internal script) default False and are unaffected.
+    created_via_mobile: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("FALSE"),
+    )
+    confirmed_in_tally_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
     # P3.2 opening-balance seed (docs/PHASE_3_OPENING_BALANCE_ARCHITECTURE.md).
     # Set the one time the seed operation writes this ledger's anchor
     # opening balance from Tally. NULL means "never seeded" -- either a

@@ -55,6 +55,9 @@ def fake_tally() -> TallyClient:
     c.post_voucher = AsyncMock(  # type: ignore[method-assign]
         return_value={"status": "success", "voucher_number": "R-1"}
     )
+    c.create_ledger = AsyncMock(  # type: ignore[method-assign]
+        return_value={"status": "success", "tally_master_id": "ledger-1"}
+    )
     return c
 
 
@@ -256,6 +259,55 @@ async def test_post_voucher_success(fake_tally: TallyClient) -> None:
     )
     assert result["status"] == "success"
     assert result["result"]["voucher_number"] == "R-1"
+
+
+# ---------------- create_ledger (v1.3 item 7) ----------------
+
+
+@pytest.mark.asyncio
+async def test_create_ledger_success(fake_tally: TallyClient) -> None:
+    result = await dispatch_command(
+        tally=fake_tally,
+        payload={
+            "command": "create_ledger",
+            "company_id": "C",
+            "args": {
+                "ledger_id": "ledger-1",
+                "name": "New Customer",
+                "group_name": "Sundry Debtors",
+                "opening_balance": "0",
+                "balance_type": "Dr",
+            },
+        },
+        registered_company_id="C",
+    )
+    assert result["status"] == "success"
+    assert result["result"]["tally_master_id"] == "ledger-1"
+
+
+@pytest.mark.asyncio
+async def test_create_ledger_wrong_company_open_is_retryable(
+    fake_tally: TallyClient,
+) -> None:
+    fake_tally.get_active_tally_company = AsyncMock(  # type: ignore[method-assign]
+        return_value={"tally_company_identifier": "10000"}
+    )
+    result = await dispatch_command(
+        tally=fake_tally,
+        payload={
+            "command": "create_ledger",
+            "company_id": "C",
+            "args": {
+                "target_tally_company_identifier": "99999",
+                "ledger_id": "ledger-1",
+                "name": "New Customer",
+                "group_name": "Sundry Debtors",
+            },
+        },
+        registered_company_id="C",
+    )
+    assert result["error"]["code"] == "wrong_company_open"
+    assert result["retryable"] is True
 
 
 @pytest.mark.asyncio

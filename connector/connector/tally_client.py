@@ -194,6 +194,30 @@ class VoucherInput:
 
 
 @dataclass(frozen=True)
+class LedgerInput:
+    """Payload accepted by `create_ledger` (v1.3 item 7).
+
+    `opening_balance` sign follows the same convention as a voucher's
+    ledger entries (Dr positive, Cr negative via `_build_entry_xml`) --
+    NOT the debit-negative convention `get_ledger_opening_balances` reads
+    back out (that asymmetry is a documented Tally Export-vs-Import
+    quirk). Only `opening_balance == 0` has been live-verified; a
+    non-zero value is sent on the same assumption but flagged here as
+    unverified until confirmed against a real TallyPrime instance.
+    """
+
+    name: str
+    parent_group: str
+    opening_balance: Decimal = Decimal("0")
+    balance_type: str = "Dr"  # 'Dr' or 'Cr'
+    # BUG-004-Layer-C-style durable id: stamped as the ledger's Tally
+    # REMOTEID on Create, same mechanism as VoucherInput.remote_id. We
+    # set it to the backend ledger id so a later alter (not yet built)
+    # could target it the same way approve/reject target a voucher.
+    remote_id: str | None = None
+
+
+@dataclass(frozen=True)
 class LedgerMaster:
     name: str
     parent_group: str
@@ -1115,6 +1139,35 @@ class TallyClient:
         }
 
     # ------------------------------------------------------------------
+    # create_ledger  (v1.3 item 7)
+    # ------------------------------------------------------------------
+
+    async def create_ledger(self, ledger: LedgerInput) -> dict[str, Any]:
+        """Push a backend-created ledger into Tally as a new master.
+
+        Shares `_post_and_validate_import`'s strict success/rejection/
+        ambiguous classification with `post_voucher` -- the single choke
+        point for every ImportData write. A rejection (e.g. a ledger of
+        that name already exists, or `parent_group` doesn't match a real
+        Tally group) raises `TallyImportRejected`; the caller is
+        responsible for surfacing that to the operator since nothing
+        here can resolve a name or group collision automatically.
+
+        Raises:
+            TallyImportRejected: Tally rejected the create.
+            TallyAmbiguousResponse: response envelope shape unknown.
+            TallyUnreachable / TallyResponseError: transport failures.
+        """
+        parsed = await self._post_and_validate_import(
+            self._build_ledger_create_xml(ledger), expect="created"
+        )
+        return {
+            "status": "success",
+            "tally_master_id": ledger.remote_id,
+            "raw": parsed.raw_body,
+        }
+
+    # ------------------------------------------------------------------
     # approve_optional_voucher  (v1.2)
     # ------------------------------------------------------------------
 
@@ -1484,6 +1537,49 @@ class TallyClient:
             f"{entries_xml}"
             f"<NARRATION>{v.narration}</NARRATION>"
             "</VOUCHER>"
+            "</TALLYMESSAGE>"
+            "</REQUESTDATA>"
+            "</IMPORTDATA></BODY></ENVELOPE>"
+        )
+
+    def _build_ledger_create_xml(self, ledger: LedgerInput) -> str:
+        """Build a Tally Import-Data envelope creating one ledger master.
+
+        Deliberately minimal for v1.3 item 7's first version: only NAME,
+        PARENT (group) and OPENINGBALANCE are sent. GSTIN/PAN/phone/
+        email/address/state_code are NOT pushed to Tally yet -- they stay
+        backend-only -- because the exact Tally master tag names for
+        those fields were not confirmed against a live instance and a
+        wrong guess risks a malformed/rejected master rather than a
+        silent no-op. Add them once verified live.
+        """
+        remote_attr = (
+            f' REMOTEID="{ledger.remote_id}"' if ledger.remote_id else ""
+        )
+        opening_xml = ""
+        if ledger.opening_balance != 0:
+            signed = (
+                ledger.opening_balance
+                if ledger.balance_type == "Dr"
+                else -ledger.opening_balance
+            )
+            opening_xml = f"<OPENINGBALANCE>{signed}</OPENINGBALANCE>"
+        return (
+            "<ENVELOPE>"
+            "<HEADER>"
+            "<TALLYREQUEST>Import Data</TALLYREQUEST>"
+            "</HEADER>"
+            "<BODY><IMPORTDATA>"
+            "<REQUESTDESC>"
+            "<REPORTNAME>All Masters</REPORTNAME>"
+            "</REQUESTDESC>"
+            "<REQUESTDATA>"
+            '<TALLYMESSAGE xmlns:UDF="TallyUDF">'
+            f'<LEDGER{remote_attr} NAME="{ledger.name}" ACTION="Create">'
+            f"<NAME>{ledger.name}</NAME>"
+            f"<PARENT>{ledger.parent_group}</PARENT>"
+            f"{opening_xml}"
+            "</LEDGER>"
             "</TALLYMESSAGE>"
             "</REQUESTDATA>"
             "</IMPORTDATA></BODY></ENVELOPE>"

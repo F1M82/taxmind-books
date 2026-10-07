@@ -29,6 +29,7 @@ from connector.idempotency_cache import (
 )
 from connector.tally_client import (
     LedgerEntryInput,
+    LedgerInput,
     TallyClient,
     TallyError,
     VoucherExportRow,
@@ -48,6 +49,7 @@ MUTATING_COMMANDS = frozenset(
         "post_voucher",
         "approve_optional_voucher",
         "reject_optional_voucher",
+        "create_ledger",
     }
 )
 
@@ -155,6 +157,25 @@ async def _handle_post_voucher(
             )
     voucher = _voucher_from_args(args)
     return await tally.post_voucher(voucher)
+
+
+async def _handle_create_ledger(
+    tally: TallyClient, args: dict[str, Any]
+) -> dict[str, Any]:
+    """v1.3 item 7: push a mobile-created ledger into Tally.
+
+    Same wrong-company guard as `_handle_post_voucher` -- a ledger must
+    land in the right company's Tally data just as much as a voucher.
+    """
+    target = args.get("target_tally_company_identifier")
+    if target is not None:
+        active = await tally.get_active_tally_company()
+        if active.get("tally_company_identifier") != target:
+            raise WrongCompanyOpen(
+                "requested company is not currently open in Tally"
+            )
+    ledger = _ledger_from_args(args)
+    return await tally.create_ledger(ledger)
 
 
 async def _handle_get_trial_balance(
@@ -343,6 +364,7 @@ HANDLERS: dict[str, HandlerFn] = {
     "list_tally_companies": _handle_list_tally_companies,
     "get_active_tally_company": _handle_get_active_tally_company,
     "post_voucher": _handle_post_voucher,
+    "create_ledger": _handle_create_ledger,
     "get_trial_balance": _handle_get_trial_balance,
     "get_stock_valuation": _handle_get_stock_valuation,
     "get_outstanding": _handle_get_outstanding,
@@ -626,4 +648,21 @@ def _voucher_from_args(args: dict[str, Any]) -> VoucherInput:
         entries=entries,
         as_optional=bool(args.get("as_optional", False)),
         remote_id=remote_id,
+    )
+
+
+def _ledger_from_args(args: dict[str, Any]) -> LedgerInput:
+    """Build a LedgerInput from a backend `create_ledger` command's args.
+
+    Mirrors `_voucher_from_args`'s REMOTEID convention: the backend sends
+    its own ledger id so it can be stamped as the Tally ledger's REMOTEID
+    on Create and echoed back as the durable `tally_master_id`.
+    """
+    rid = args.get("ledger_id")
+    return LedgerInput(
+        name=str(args.get("name", "")),
+        parent_group=str(args.get("group_name", "")),
+        opening_balance=Decimal(str(args.get("opening_balance", "0"))),
+        balance_type=str(args.get("balance_type", "Dr")),
+        remote_id=str(rid) if rid else None,
     )

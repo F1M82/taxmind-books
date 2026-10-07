@@ -74,14 +74,29 @@ def check_ledgers_synced(
             context.
     """
     rows = (
-        db.query(Ledger.id, Ledger.name, Ledger.tally_master_id)
+        db.query(
+            Ledger.id,
+            Ledger.name,
+            Ledger.tally_master_id,
+            Ledger.created_via_mobile,
+        )
         .filter(
             Ledger.id.in_(list(ledger_ids)),
             Ledger.company_id == company_id,
         )
         .all()
     )
-    unsynced = [(r.id, r.name) for r in rows if r.tally_master_id is None]
+    # v1.3 item 7: a mobile-created ledger is never hard-blocked here even
+    # while tally_master_id is still NULL -- it's exempt because the
+    # connector is actively pushing it to Tally, and in the meantime the
+    # voucher is forced Optional instead (see VoucherService.create /
+    # AMENDMENTS_v1.3.md). The hard block still applies to every other
+    # unsynced ledger exactly as before BUG-005 established it.
+    unsynced = [
+        (r.id, r.name)
+        for r in rows
+        if r.tally_master_id is None and not r.created_via_mobile
+    ]
     if not unsynced:
         return
 
@@ -132,7 +147,12 @@ def _resolve_target_company_identifier(
     without a binding row (GUID-only legacy mappings; see CLAUDE.md
     "Tally company mapping: two representations that can drift").
     """
-    conn = registry.get(company_id)
+    # Tolerate duck-typed test fakes that only implement `send_command`
+    # (the established fake-registry convention in several suites): no
+    # `.get()` → no connection → omit the guard field, which is exactly
+    # the pre-v1.3 behaviour. The production registry always has .get().
+    get_conn = getattr(registry, "get", None)
+    conn = get_conn(company_id) if callable(get_conn) else None
     if conn is None:
         return None
     binding = (

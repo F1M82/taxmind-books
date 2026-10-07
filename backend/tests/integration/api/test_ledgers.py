@@ -52,6 +52,10 @@ def test_create_ledger_201_minimal(
     assert body["balance_type"] == "Dr"
     assert Decimal(body["opening_balance"]) == Decimal("0.00")
     assert body["is_active"] is True
+    # v1.3 item 7: every ledger created via this endpoint is tagged
+    # created_via_mobile=True and starts unconfirmed in Tally.
+    assert body["created_via_mobile"] is True
+    assert body["confirmed_in_tally_at"] is None
 
 
 def test_create_ledger_full_payload(
@@ -311,3 +315,69 @@ def test_delete_ledger_204_soft_deletes(
     db_session.expire_all()
     refreshed = db_session.query(Ledger).filter(Ledger.id == led.id).one()
     assert refreshed.is_active is False
+
+
+# ---------------- Retry Tally sync (v1.3 item 7) ----------------
+
+
+def test_retry_tally_sync_409_when_not_mobile_created(
+    client: TestClient, db_session: Session
+) -> None:
+    user, company = _setup(db_session)
+    led = Ledger(
+        company_id=company.id,
+        name="From Sync",
+        name_normalized="from sync",
+        tally_master_id="some-guid",
+        created_via_mobile=False,
+    )
+    db_session.add(led)
+    db_session.commit()
+    r = client.post(
+        f"/api/v1/ledgers/{led.id}/retry-tally-sync", headers=_h(user, company)
+    )
+    assert r.status_code == 409
+
+
+def test_retry_tally_sync_409_when_already_confirmed(
+    client: TestClient, db_session: Session
+) -> None:
+    from datetime import UTC, datetime
+
+    user, company = _setup(db_session)
+    led = Ledger(
+        company_id=company.id,
+        name="Confirmed",
+        name_normalized="confirmed",
+        created_via_mobile=True,
+        tally_master_id="guid-1",
+        confirmed_in_tally_at=datetime.now(UTC),
+    )
+    db_session.add(led)
+    db_session.commit()
+    r = client.post(
+        f"/api/v1/ledgers/{led.id}/retry-tally-sync", headers=_h(user, company)
+    )
+    assert r.status_code == 409
+
+
+def test_retry_tally_sync_no_connector_returns_still_unconfirmed(
+    client: TestClient, db_session: Session
+) -> None:
+    """No connector online: the dispatch failure is handled (not an API
+    error, per the voucher-retry precedent) -- 200 with the ledger still
+    unconfirmed."""
+    user, company = _setup(db_session)
+    led = Ledger(
+        company_id=company.id,
+        name="Pending",
+        name_normalized="pending",
+        created_via_mobile=True,
+    )
+    db_session.add(led)
+    db_session.commit()
+    r = client.post(
+        f"/api/v1/ledgers/{led.id}/retry-tally-sync", headers=_h(user, company)
+    )
+    assert r.status_code == 200, r.json()
+    assert r.json()["confirmed_in_tally_at"] is None

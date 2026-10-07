@@ -111,6 +111,41 @@ def test_check_ledgers_synced_raises_when_one_unsynced(
     assert "/api/v1/connector/sync/" in exc.details["remediation"]
 
 
+def test_check_ledgers_synced_exempts_mobile_created_ledger(
+    db_session: Session,
+) -> None:
+    """v1.3 item 7: a created_via_mobile ledger with tally_master_id still
+    NULL is exempt from the hard block -- the connector is actively
+    pushing it, and the voucher gets forced Optional instead (separately
+    tested below), not blocked outright."""
+    user = make_user(db_session)
+    company = make_company(db_session)
+    make_membership(db_session, user, company, role=CompanyRole.owner)
+    bank = Ledger(
+        company_id=company.id,
+        name="Bank",
+        name_normalized="bank",
+        group_name="Bank Accounts",
+        tally_master_id="bank-guid",
+    )
+    mobile_ledger = Ledger(
+        company_id=company.id,
+        name="New Customer",
+        name_normalized="new customer",
+        group_name="Sundry Debtors",
+        created_via_mobile=True,
+    )
+    db_session.add_all([bank, mobile_ledger])
+    db_session.commit()
+
+    # Should not raise, unlike an ordinary unsynced ledger.
+    check_ledgers_synced(
+        db_session,
+        ledger_ids=[bank.id, mobile_ledger.id],
+        company_id=company.id,
+    )
+
+
 def test_check_ledgers_synced_raises_when_multiple_unsynced(
     db_session: Session,
 ) -> None:
@@ -313,3 +348,90 @@ def test_dispatcher_blocks_voucher_and_emits_audit(
     assert voucher.tally_last_error is not None
     assert "not yet synced to Tally" in voucher.tally_last_error
     assert voucher.tally_post_attempts == 0  # pre-flight reject, not a Tally attempt
+
+
+# ---------------------------------------------------------------------
+# v1.3 item 7 — mobile-ledger Optional tainting (AMENDMENTS_v1.3.md)
+# ---------------------------------------------------------------------
+
+
+def test_api_create_voucher_forced_optional_for_unconfirmed_mobile_ledger(
+    db_session: Session,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A voucher referencing a created_via_mobile, not-yet-confirmed
+    ledger posts successfully (not blocked -- see the exemption test
+    above) AND lands as Optional regardless of confidence."""
+    monkeypatch.delenv("TAXMIND_SKIP_TALLY_DISPATCH", raising=False)
+
+    user = make_user(db_session)
+    company = make_company(db_session)
+    make_membership(db_session, user, company, role=CompanyRole.owner)
+    bank = Ledger(
+        company_id=company.id,
+        name="Bank",
+        name_normalized="bank",
+        group_name="Bank Accounts",
+        tally_master_id="bank-guid",
+    )
+    mobile_ledger = Ledger(
+        company_id=company.id,
+        name="New Customer",
+        name_normalized="new customer",
+        group_name="Sundry Debtors",
+        created_via_mobile=True,
+    )
+    db_session.add_all([bank, mobile_ledger])
+    db_session.commit()
+
+    resp = client.post(
+        "/api/v1/vouchers/",
+        json=_payload(bank, mobile_ledger),
+        headers=_headers(user, company, idem=str(uuid4())),
+    )
+    assert resp.status_code == 201
+    assert resp.json()["is_optional_in_tally"] is True
+
+
+def test_api_create_voucher_not_optional_once_mobile_ledger_confirmed(
+    db_session: Session,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once Tally has confirmed the mobile-created ledger
+    (confirmed_in_tally_at set), a new voucher referencing it is NOT
+    tainted -- the ledger behaves like any other synced ledger."""
+    monkeypatch.delenv("TAXMIND_SKIP_TALLY_DISPATCH", raising=False)
+
+    from datetime import UTC, datetime
+
+    user = make_user(db_session)
+    company = make_company(db_session)
+    make_membership(db_session, user, company, role=CompanyRole.owner)
+    bank = Ledger(
+        company_id=company.id,
+        name="Bank",
+        name_normalized="bank",
+        group_name="Bank Accounts",
+        tally_master_id="bank-guid",
+    )
+    confirmed_ledger = Ledger(
+        company_id=company.id,
+        name="Old Customer",
+        name_normalized="old customer",
+        group_name="Sundry Debtors",
+        created_via_mobile=True,
+        tally_master_id="old-customer-guid",
+        confirmed_in_tally_at=datetime.now(UTC),
+    )
+    db_session.add_all([bank, confirmed_ledger])
+    db_session.commit()
+
+    resp = client.post(
+        "/api/v1/vouchers/",
+        json=_payload(bank, confirmed_ledger),
+        headers=_headers(user, company, idem=str(uuid4())),
+    )
+    assert resp.status_code == 201
+    assert resp.json()["is_optional_in_tally"] is False

@@ -41,6 +41,8 @@ endpoints:
     methods: [POST, GET]
   - path: /api/v1/ledgers/{ledger_id}
     methods: [GET, PATCH, DELETE]
+  - path: /api/v1/ledgers/{ledger_id}/retry-tally-sync
+    methods: [POST]
 
   # ---- Vouchers ----
   - path: /api/v1/vouchers/

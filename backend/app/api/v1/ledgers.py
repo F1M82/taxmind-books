@@ -56,6 +56,8 @@ def _to_out(led) -> LedgerOut:  # type: ignore[no-untyped-def]
         is_active=led.is_active,
         tally_master_id=led.tally_master_id,
         tally_synced_at=led.tally_synced_at,
+        created_via_mobile=led.created_via_mobile,
+        confirmed_in_tally_at=led.confirmed_in_tally_at,
         created_at=led.created_at,
         updated_at=led.updated_at,
     )
@@ -79,6 +81,55 @@ def create_ledger(
     audit = _audit(request, db, user, company)
     service = LedgerService(db, audit, company_id=company.id)
     ledger = service.create(data)
+    db.commit()
+    db.refresh(ledger)
+
+    # v1.3 item 7: push the new ledger to Tally (no-op when no connector
+    # is online; same fire-and-forget shape as voucher posting).
+    from uuid import uuid4
+
+    from app.services.tally.ledger_dispatcher import enqueue_ledger_create
+
+    try:
+        enqueue_ledger_create(
+            ledger_id=ledger.id,
+            company_id=company.id,
+            user_id=user.id,
+            request_id=uuid4(),
+        )
+    except Exception:
+        import logging
+
+        logging.getLogger("app.api.v1.ledgers").exception(
+            "failed to enqueue create_ledger_in_tally for %s", ledger.id
+        )
+    return _to_out(ledger)
+
+
+# ---------------------------------------------------------------------
+# Retry Tally sync  (v1.3 item 7)
+# ---------------------------------------------------------------------
+
+
+@router.post("/{ledger_id}/retry-tally-sync", response_model=LedgerOut)
+async def retry_ledger_tally_sync(
+    ledger_id: UUID,
+    request: Request,
+    company: Company = Depends(get_active_company),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_scoped_session),
+) -> LedgerOut:
+    """Operator re-triggers a Tally push for a ledger stuck unconfirmed.
+
+    Mirrors `POST /vouchers/{id}/retry-tally-post`. Returns the ledger's
+    post-retry state -- `confirmed_in_tally_at` set on success, or still
+    unconfirmed with the failure visible in the audit log. A 409 is
+    returned only when there's nothing to retry (not mobile-created, or
+    already confirmed).
+    """
+    audit = _audit(request, db, user, company)
+    service = LedgerService(db, audit, company_id=company.id)
+    ledger = await service.retry_tally_sync(ledger_id, actor_id=user.id)
     db.commit()
     db.refresh(ledger)
     return _to_out(ledger)

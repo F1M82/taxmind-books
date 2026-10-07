@@ -6,14 +6,14 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.audit import AuditEmitter
 from app.core.database import SCOPE_BYPASS_OPTION
-from app.core.exceptions import LedgerInUse, LedgerNotFound
+from app.core.exceptions import Conflict, LedgerInUse, LedgerNotFound
 from app.models.ledger import BalanceType, Ledger
 from app.models.voucher import LedgerEntry
 from app.schemas.ledger import LedgerCreate, LedgerUpdate
@@ -55,6 +55,12 @@ def _ledger_snapshot(led: Ledger) -> dict[str, Any]:
         "state_code": led.state_code,
         "is_active": led.is_active,
         "tally_master_id": led.tally_master_id,
+        "created_via_mobile": led.created_via_mobile,
+        "confirmed_in_tally_at": (
+            led.confirmed_in_tally_at.isoformat()
+            if led.confirmed_in_tally_at
+            else None
+        ),
     }
 
 
@@ -78,7 +84,18 @@ class LedgerService:
     # Create
     # ------------------------------------------------------------------
 
-    def create(self, data: LedgerCreate) -> Ledger:
+    def create(
+        self, data: LedgerCreate, *, created_via_mobile: bool = True
+    ) -> Ledger:
+        """Create a ledger. ``created_via_mobile=True`` (the default, and
+        what every API caller passes) means the ledger is pushed to Tally
+        by the connector and tainted Optional on any voucher until Tally
+        confirms it (v1.3 item 7, AMENDMENTS_v1.3.md). Pass ``False`` only
+        for a deliberately book-only ledger that should never reach Tally
+        (e.g. the P3.2 one-off "Opening Stock" ledger) -- not reachable
+        from the public schema, since mobile should never be able to dodge
+        the Tally push.
+        """
         ledger = Ledger(
             company_id=self.company_id,
             name=data.name,
@@ -94,6 +111,7 @@ class LedgerService:
             address=data.address,
             state_code=data.state_code,
             is_active=True,
+            created_via_mobile=created_via_mobile,
         )
         self.db.add(ledger)
         self.db.flush()
@@ -105,6 +123,81 @@ class LedgerService:
             old_value=None,
             new_value=_ledger_snapshot(ledger),
         )
+        return ledger
+
+    # ------------------------------------------------------------------
+    # Retry Tally sync (v1.3 item 7)
+    # ------------------------------------------------------------------
+
+    async def retry_tally_sync(
+        self,
+        ledger_id: UUID,
+        *,
+        actor_id: UUID,
+        registry: Any = None,
+        timeout_seconds: int = 30,
+    ) -> Ledger:
+        """Re-dispatch a ledger that failed to sync to Tally, at an
+        operator's request. Mirrors `VoucherService.retry_tally_post` --
+        there is no automatic re-enqueue sweep for ledgers (unlike
+        vouchers), so this manual gesture is the only retry path after
+        the first push attempt fails.
+
+        A handled dispatch failure is NOT an API error: the dispatcher
+        already emitted its own audit row, so the outcome is surfaced on
+        the ledger (`confirmed_in_tally_at` / `tally_master_id`), not
+        raised. Only an out-of-contract state (already confirmed, or
+        never pushed at all) is a 409.
+        """
+        import contextlib
+
+        from app.services.tally.connector_registry import (
+            CommandTimeout,
+            TallyRejectedEnvelope,
+            TallyRetryableEnvelope,
+        )
+        from app.services.tally.connector_registry import (
+            ConnectorOffline as RegistryOffline,
+        )
+        from app.services.tally.ledger_dispatcher import (
+            dispatch_ledger_to_tally,
+        )
+
+        ledger = self.get(ledger_id)
+        if not ledger.created_via_mobile:
+            raise Conflict(
+                "Ledger was not created via the mobile sync flow; "
+                "nothing to retry.",
+            )
+        if ledger.confirmed_in_tally_at is not None:
+            raise Conflict(
+                "Ledger is already confirmed in Tally; nothing to retry.",
+            )
+
+        self.audit.emit(
+            action="ledger.tally_sync_retry_requested",
+            entity_type="ledger",
+            entity_id=ledger.id,
+            old_value=None,
+            new_value={"requested_by": str(actor_id)},
+        )
+        self.db.flush()
+
+        with contextlib.suppress(
+            RegistryOffline,
+            CommandTimeout,
+            TallyRetryableEnvelope,
+            TallyRejectedEnvelope,
+        ):
+            await dispatch_ledger_to_tally(
+                db=self.db,
+                ledger_id=ledger.id,
+                company_id=self.company_id,
+                user_id=actor_id,
+                request_id=uuid4(),
+                registry=registry,
+                timeout_seconds=timeout_seconds,
+            )
         return ledger
 
     # ------------------------------------------------------------------

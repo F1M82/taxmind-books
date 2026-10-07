@@ -17,6 +17,7 @@ import RegisterScreen from "../screens/auth/RegisterScreen";
 import CompanyCreateScreen from "../screens/companies/CompanyCreateScreen";
 import CompanyListScreen from "../screens/companies/CompanyListScreen";
 import DashboardScreen from "../screens/dashboard/DashboardScreen";
+import LedgerCreateScreen from "../screens/ledgers/LedgerCreateScreen";
 import LedgerListScreen from "../screens/ledgers/LedgerListScreen";
 import OnboardingScreen from "../screens/onboarding/OnboardingScreen";
 import TallySetupScreen from "../screens/onboarding/TallySetupScreen";
@@ -37,6 +38,7 @@ type AppStackParamList = {
   Companies: { pendingDiscoveryId?: string } | undefined;
   CreateCompany: { pendingDiscoveryId?: string } | undefined;
   Ledgers: undefined;
+  NewLedger: undefined;
   Vouchers: undefined;
   NewVoucher: undefined;
   TrialBalance: undefined;
@@ -138,11 +140,26 @@ function AppFlow(): React.ReactElement {
           />
         )}
       </AppStack.Screen>
-      <AppStack.Screen
-        name="Ledgers"
-        component={LedgerListScreen}
-        options={{ title: "Ledgers" }}
-      />
+      <AppStack.Screen name="Ledgers" options={{ title: "Ledgers" }}>
+        {(props: NativeStackScreenProps<AppStackParamList, "Ledgers">) => (
+          <LedgerListScreen
+            onCreate={() => props.navigation.navigate("NewLedger")}
+          />
+        )}
+      </AppStack.Screen>
+      <AppStack.Screen name="NewLedger" options={{ title: "New ledger" }}>
+        {(props: NativeStackScreenProps<AppStackParamList, "NewLedger">) => (
+          <LedgerCreateScreen
+            onCreated={() =>
+              props.navigation.reset({
+                index: 1,
+                routes: [{ name: "Dashboard" }, { name: "Ledgers" }],
+              })
+            }
+            onCancel={() => props.navigation.goBack()}
+          />
+        )}
+      </AppStack.Screen>
       <AppStack.Screen name="Vouchers" options={{ title: "Vouchers" }}>
         {(props: NativeStackScreenProps<AppStackParamList, "Vouchers">) => (
           <VoucherListScreen

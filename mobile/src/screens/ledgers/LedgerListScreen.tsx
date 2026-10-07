@@ -15,9 +15,12 @@ import { formatINR } from "../../utils/money";
 
 export default function LedgerListScreen({
   onPickLedger,
+  onCreate,
 }: {
   /** Optional — used by the voucher entry flow as a ledger picker. */
   onPickLedger?: (ledger: LedgerListItem) => void;
+  /** Optional — omitted when this screen is embedded as a picker. */
+  onCreate?: () => void;
 }): React.ReactElement {
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<LedgerListItem[] | null>(null);
@@ -48,6 +51,19 @@ export default function LedgerListScreen({
 
   return (
     <View style={styles.container}>
+      {onCreate !== undefined && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="new-ledger"
+          onPress={onCreate}
+          style={({ pressed }) => [
+            styles.newButton,
+            pressed && { opacity: 0.85 },
+          ]}
+        >
+          <Text style={styles.newButtonText}>+ New ledger</Text>
+        </Pressable>
+      )}
       <TextInput
         accessibilityLabel="ledger-search"
         placeholder="Search ledgers (fuzzy)"
@@ -93,6 +109,9 @@ export default function LedgerListScreen({
                 {led.group_name !== null && (
                   <Text style={styles.meta}>{led.group_name}</Text>
                 )}
+                {led.created_via_mobile && led.confirmed_in_tally_at === null && (
+                  <Text style={styles.pendingTag}>Pending Tally sync</Text>
+                )}
               </View>
               <View style={styles.rowRight}>
                 <Text style={styles.amount}>
@@ -110,6 +129,16 @@ export default function LedgerListScreen({
 const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
+  newButton: {
+    margin: 16,
+    marginBottom: 0,
+    padding: 14,
+    borderRadius: 8,
+    backgroundColor: "#2c3e50",
+    alignItems: "center",
+  },
+  newButtonText: { color: "#fff", fontWeight: "600", fontSize: 16 },
+  pendingTag: { fontSize: 12, color: "#d35400", fontWeight: "600" },
   search: {
     margin: 16,
     padding: 12,

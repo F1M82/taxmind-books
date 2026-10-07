@@ -440,7 +440,11 @@ Create a ledger.
 }
 ```
 
-**Response 201:** ledger object.
+**Response 201:** ledger object. `created_via_mobile=true` always (v1.3 item 7)
+— the connector pushes the ledger to Tally in the background; any voucher
+referencing it before Tally confirms (`confirmed_in_tally_at` still null)
+is automatically forced Optional regardless of confidence. No request field
+can opt out of this.
 
 #### `GET /api/v1/ledgers/{ledger_id}`
 
@@ -461,6 +465,17 @@ Soft-delete (sets `is_active = false`). Hard delete is forbidden.
 **Errors:**
 - `409 ledger_in_use` — ledger has voucher entries; cannot deactivate without explicit confirm flag
 - `409 ledger_in_use` with `details.entry_count` returned
+
+#### `POST /api/v1/ledgers/{ledger_id}/retry-tally-sync`
+
+Operator-triggered re-dispatch of a ledger that failed to sync to Tally (v1.3 item 7). There is no automatic re-enqueue sweep for ledgers (unlike vouchers), so this is the only way to retry after the first push attempt fails — e.g. once the operator has fixed a name/group collision at the Tally end.
+
+**Response 200:** the ledger's post-retry state — `confirmed_in_tally_at` set on success, or still null with the failure visible in the audit log. A handled dispatch failure is not an API error.
+
+**Errors:**
+- `409 conflict` — ledger was not created via mobile, or is already confirmed in Tally; nothing to retry
+
+**Side effects:** audit row `action='ledger.tally_sync_retry_requested'`, plus whatever the dispatch itself emits (`ledger.confirmed_in_tally` / `ledger.sync_failed`).
 
 ---
 

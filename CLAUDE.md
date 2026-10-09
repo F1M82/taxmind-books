@@ -519,8 +519,67 @@ read-only SSH before relying on it, not taken on faith. Without this flag the
 periodic loop (and therefore both the faster retry and all of the expiry sweep)
 does nothing.
 
-**Not yet done:** v1.3 item 7 (ledger creation from mobile synced to Tally via a new
-connector *write* command, forcing new-ledger vouchers Optional) — bigger scope,
-deliberately left for a separate task. Mobile "Expired — review required" badge in
+**v1.3 item 7 (ledger creation from mobile synced to Tally) shipped separately,
+2026-10-09 — see below.** Mobile "Expired — review required" badge in
 `VoucherListScreen.tsx` is built but needs a new EAS build to reach the phone —
 cosmetic, not blocking.
+
+## Ledger creation from mobile, synced to Tally (v1.3 item 7, 2026-10-09)
+
+The last outstanding gap in `AMENDMENTS_v1.3.md` — all four are now closed. Commits
+`ce39294` (feature) + `6214ba3` (live-test fix), pushed to `origin/main`, **DEPLOYED to
+prod same day**: migration `0022` → `0023`, 10 files scp'd, image rebuilt, `taxmind-api`
+restarted. Connector `.exe` **was** rebuilt this time (`sha=6214ba3 dirty=False`) — this
+is the first outbound Tally *master* write (`create_ledger`), not just a backend wiring
+change, so the connector genuinely needed new code. Verified end-to-end: prod logs show
+the WS accepted, the connector registered, and auto-sync `sync_masters` ran for
+Vighnaharta (`32a51be2-13f5-4b75-a67e-0f1d77b3121f`) right after reconnect.
+
+**What it does.** `POST /api/v1/ledgers/` always tags the new row
+`created_via_mobile=true`; the connector pushes it to Tally in the background
+(`ledger_dispatcher.py`, same eager/Celery dispatch shape and `wrong_company_open`
+guard as `voucher_dispatcher.py`). Until Tally confirms (`confirmed_in_tally_at`), any
+voucher referencing the ledger is forced Optional regardless of confidence, and is
+exempt from the BUG-005 unsynced-ledger hard block (which still applies unchanged to
+every other ledger). `POST /ledgers/{id}/retry-tally-sync` mirrors the voucher retry
+endpoint — no auto-retry sweep for ledgers, by design (manual gesture only).
+
+**Real bug found and fixed via live testing before deploy, live-verified 2026-10-07/09
+against the real Vighnaharta TallyPrime:** unlike `VOUCHER` Create (REMOTEID honored,
+live-verified separately — BUG-004 Layer C), **Tally does NOT honor `REMOTEID` on a
+`LEDGER` Create** — it silently assigns its own auto-generated GUID instead. The
+connector's `create_ledger()` originally just echoed the REMOTEID back as
+`tally_master_id`; shipped as-is, that would have permanently orphaned every
+mobile-created ledger from future `sync_masters` reconciliation (`upsert_from_sync`
+Case C: name collision with a different GUID, skip forever, never merge). Fix:
+`create_ledger()` now does a confirming read-back via the already-proven
+`get_all_ledgers()` by exact name and returns Tally's real GUID; raises
+`TallyAmbiguousResponse` (retryable) if the read-back can't find exactly one match
+rather than guessing. The backend dispatcher no longer falls back to a made-up id
+either — same class of bug, one layer up.
+
+**v1 is deliberately minimal — do not assume more than this is wired:**
+- Only `NAME`/`PARENT`/`OPENINGBALANCE` are sent to Tally. GSTIN/PAN/phone/email/
+  address stay backend-only — their exact Tally master tag names were never
+  confirmed live, and a wrong guess risks a malformed master rather than a silent
+  no-op.
+- A non-zero opening balance uses the same Dr-positive sign convention as a voucher's
+  ledger entries, but only `opening_balance == 0` has actually been live-tested.
+- No Tally-side ledger Alter or Delete capability exists at all (see the incident
+  below for exactly why that gap is being left alone, not filled casually).
+
+**Incident during this work, hard rule for all future sessions: never send an ad hoc,
+untested write to live Tally — Create, Alter, or Delete — outside a reviewed,
+committed code path, not even "to clean up my own test data."** While live-testing the
+Create above, a disposable test ledger was created successfully, then an improvised
+one-off `<LEDGER ACTION="Delete">` request (never reviewed, never tested, typed
+straight into a one-shot script) **crashed TallyPrime outright** (`tally.exe` gone
+from the process list, not just unresponsive). Gaurav relaunched it manually; the
+company opened cleanly, the undeleted test ledger was still present, a known balance
+checked out — no data damage. Work resumed only after that explicit confirmation, with
+a second live test using only the already-proven Create + read path (no Delete). Full
+story: memory `tally_ledger_delete_crash_incident.md`. Two harmless disposable test
+ledgers (`ZZZ TAXMIND TEST DELETE ME`, `ZZZ TAXMIND TEST 2 DELETE ME`) are now sitting
+in both Tally and the backend DB (picked up by the post-deploy auto-sync) — delete them
+directly in TallyPrime whenever convenient; the app's own delete is DB-only soft-delete
+and won't touch Tally.

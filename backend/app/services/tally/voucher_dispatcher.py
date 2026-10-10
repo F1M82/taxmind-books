@@ -400,6 +400,14 @@ async def dispatch_voucher_to_tally(
     if target_identifier is not None:
         args["target_tally_company_identifier"] = target_identifier
 
+    # v1.3 item 8 (attribution): which connector/PC is handling this post.
+    # Same duck-typed lookup as _resolve_target_company_identifier -- see
+    # its docstring for why `.get()` may be absent (test fakes) or return
+    # None (no live connection; send_command raises ConnectorOffline next).
+    get_conn = getattr(registry, "get", None)
+    conn = get_conn(company_id) if callable(get_conn) else None
+    posting_connector_id = conn.connector_id if conn is not None else None
+
     audit = AuditEmitter(
         db,
         AuditContext(
@@ -532,6 +540,7 @@ async def dispatch_voucher_to_tally(
         result.get("result", {}).get("tally_voucher_guid")
     )
     voucher.tally_last_error = None
+    voucher.posted_by_connector_id = posting_connector_id
     # P0.46d: dispatcher is the only place that flips status to
     # `posted`. Idempotent — vouchers seeded directly as `posted`
     # (Optional flow re-approval, tests, backfills) stay that way.
@@ -551,6 +560,9 @@ async def dispatch_voucher_to_tally(
             "tally_voucher_guid": voucher.tally_voucher_guid,
             "duration_ms": result.get("duration_ms"),
             "as_optional": posted_as_optional,
+            "posted_by_connector_id": str(posting_connector_id)
+            if posting_connector_id
+            else None,
         },
         actor_user_id=user_id,
         company_id_override=company_id,

@@ -479,6 +479,86 @@ async def test_dispatch_sends_target_tally_company_identifier(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_success_stamps_posted_by_connector_id(
+    db_session: Session,
+) -> None:
+    """v1.3 item 8 (attribution): a successful post records which
+    connector/PC handled it, on both the voucher row and the audit row."""
+    user, company, bank, party = _setup(db_session)
+    v = _seed_voucher(
+        db_session,
+        company=company,
+        bank=bank,
+        party=party,
+        status_=VoucherStatus.pending_tally_post,
+    )
+    connector_id = _bind_connector(db_session, company, identifier="10000")
+    reg = _FakeRegistry(
+        reply={
+            "command": "post_voucher",
+            "status": "success",
+            "result": {"tally_voucher_guid": "g-1"},
+            "duration_ms": 10,
+        }
+    )
+    _attach_connection(reg, company.id, connector_id)
+
+    await dispatch_voucher_to_tally(
+        db=db_session,
+        voucher_id=v.id,
+        company_id=company.id,
+        user_id=user.id,
+        request_id=uuid4(),
+        registry=reg,
+    )
+    db_session.commit()
+    db_session.refresh(v)
+
+    assert v.posted_by_connector_id == connector_id
+    audit = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.entity_type == "voucher",
+            AuditLog.entity_id == v.id,
+            AuditLog.action == "voucher.posted_to_tally",
+        )
+        .one()
+    )
+    assert audit.new_value["posted_by_connector_id"] == str(connector_id)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_success_without_live_connection_leaves_attribution_null(
+    db_session: Session,
+) -> None:
+    """No live connection in the registry (duck-typed test fakes, or a
+    legacy GUID-only mapping) -> attribution is omitted, not guessed."""
+    user, company, bank, party = _setup(db_session)
+    v = _seed_voucher(db_session, company=company, bank=bank, party=party)
+    reg = _FakeRegistry(
+        reply={
+            "command": "post_voucher",
+            "status": "success",
+            "result": {"tally_voucher_guid": "g-1"},
+            "duration_ms": 10,
+        }
+    )
+
+    await dispatch_voucher_to_tally(
+        db=db_session,
+        voucher_id=v.id,
+        company_id=company.id,
+        user_id=user.id,
+        request_id=uuid4(),
+        registry=reg,
+    )
+    db_session.commit()
+    db_session.refresh(v)
+
+    assert v.posted_by_connector_id is None
+
+
+@pytest.mark.asyncio
 async def test_dispatch_omits_target_identifier_without_binding(
     db_session: Session,
 ) -> None:

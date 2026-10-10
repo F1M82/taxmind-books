@@ -196,6 +196,13 @@ class Voucher(Base, TenantScopedMixin):
     tally_post_queued_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # v1.3 item 8: which connector (which PC) actually posted this voucher.
+    # No FK -- connectors come and go; the connector_id is also captured on
+    # the audit row for the posting event. NULL for vouchers never posted
+    # (or posted before this column existed).
+    posted_by_connector_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=True
+    )
 
     # P3.7 Tally native identity. `tally_guid` carries Tally's own GUID
     # and is the durable identity for imported Tally vouchers (confirmed

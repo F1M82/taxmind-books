@@ -64,6 +64,7 @@ def test_voucher_columns_match_schema() -> None:
         "tally_post_attempts",
         "tally_last_error",
         "tally_post_queued_at",
+        "posted_by_connector_id",
         "is_optional_in_tally",
         "approved_to_regular_at",
         "approved_to_regular_by",

@@ -524,6 +524,33 @@ does nothing.
 `VoucherListScreen.tsx` is built but needs a new EAS build to reach the phone —
 cosmetic, not blocking.
 
+## v1.3 item 8: connector attribution (2026-10-10)
+
+The last open piece of `AMENDMENTS_v1.3.md` — all items now closed. Migration
+`0024` adds `vouchers.posted_by_connector_id` (no FK, same convention as
+`source_ingestion_id`); `voucher_dispatcher.dispatch_voucher_to_tally` stamps it
+on a successful post (resolved from `registry.get(company_id).connector_id`,
+the same duck-typed lookup `_resolve_target_company_identifier` already uses)
+and includes it in the `voucher.posted_to_tally`/`voucher.posted_as_optional`
+audit row's `new_value`. NULL when there's no live connection at dispatch time
+(legacy GUID-only mappings, test fakes without `.get()`) — never guessed.
+
+**Scope note:** the amendment's item 8 also describes "idempotency keys
+prevent double-post when both connectors try the same voucher" — that part
+needs no new code. `ConnectorRegistry._by_company` (`connector_registry.py`)
+holds exactly one live connection per `company_id`; a second connector
+registering for the same company **supersedes** the first (closes it with
+code 4429) rather than coexisting, so two connectors can never race to post
+the same voucher today. Only attribution (which connector posted it, for
+audit/display) was missing and is what this migration adds. True concurrent
+multi-connector dispatch is a separate, larger architectural change — not
+needed unless a CMA firm actually runs two connectors live against one
+company at the same time.
+
+Not yet deployed to prod — local only (migration run + 838/838 tests green,
+including 2 new tests in `test_posting_task.py`). Needs the usual scp +
+`alembic upgrade head` + rebuild/restart `taxmind-api` cycle before it's live.
+
 ## Ledger creation from mobile, synced to Tally (v1.3 item 7, 2026-10-09)
 
 The last outstanding gap in `AMENDMENTS_v1.3.md` — all four are now closed. Commits

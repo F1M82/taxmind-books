@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # contract's Claude/GPT-4o choice is the paid-tier upgrade path once
     # volume or accuracy demands it, same pluggable-model pattern).
     GEMINI_API_KEY: SecretStr | None = None
-    INVOICE_EXTRACTION_MODEL: str = Field(default="gemini-2.0-flash")
+    INVOICE_EXTRACTION_MODEL: str = Field(default="gemini-3.8-flash")
 
     # ---------------- Optional: object storage (Phase 1) ----------------
     # S3_* unused until a future deploy needs multi-server storage; local

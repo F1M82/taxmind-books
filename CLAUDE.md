@@ -619,10 +619,27 @@ invoice_extractor, validator, party_matcher, extraction_pipeline), `POST/GET
 /api/v1/ingestions/`. Runs on **Gemini** (`GEMINI_API_KEY`, free tier covers pilot
 volume) instead of the contract's Claude/GPT-4o pair, and **local disk**
 (`STORAGE_DIR`) instead of S3 — no bucket provisioned yet; both are swappable later
-behind the same interfaces. 894/894 backend tests pass. **Not deployed anywhere** —
-no `GEMINI_API_KEY` is set in `backend/.env` yet (empty placeholder), so extraction
-can't actually run end-to-end until that's added. LOCAL ONLY, migration `0025` not
-run on prod.
+behind the same interfaces. 894/894 backend tests pass. LOCAL ONLY, migration `0025`
+not run on prod.
+
+**Live-verified end-to-end 2026-10-12** against the real Gemini API (key added to
+`backend/.env` same day) and the real dev DB (`taxmind_books`, not just the test DB):
+a synthetic GST invoice image, run through `storage` → `image_prep` →
+`invoice_extractor` → `validator` → `party_matcher` → `Ingestion` row, correctly
+extracted vendor name/GSTIN/invoice number/date/subtotal/CGST/SGST/total, derived
+PAN + state code from the GSTIN, flagged `new_party` (no matching ledger) and landed
+at `status=review` with `posted_voucher_id=null` exactly as designed. Disposable
+test company/ingestion rows cleaned up afterward (no lasting DB state).
+
+**Model name note:** the contract/code originally defaulted
+`INVOICE_EXTRACTION_MODEL` to `gemini-2.0-flash`, which the live API now rejects
+with `404 This model ... is no longer available`. Bumped the default to
+`gemini-3.8-flash` (`app/config.py`) after the live key confirmed it. **Gemini's
+free tier also throws transient `503 UNAVAILABLE` ("high demand") fairly often** —
+already handled correctly by the existing retry policy (`ExtractionHardFailure` →
+Celery backoff in worker mode; in eager mode it's logged and left in `extracting`
+for a manual retry, per the pipeline's documented eager-mode trade-off). Don't
+mistake a 503 for a real extraction bug — retry before investigating further.
 
 **Deliberately stops short of auto-creating the Voucher.** The contract's Flow B
 ("voucher created with `is_optional_in_tally=true`...") assumes a 2-line Dr/Cr entry

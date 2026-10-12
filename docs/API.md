@@ -1134,7 +1134,7 @@ Get the status of an ingestion.
   "failed_at": null,
   "failure_reason": null,
   "posted_voucher_id": null,
-  "parsed_data": { "vendor_name": "Sharma Traders", "total_amount": "11800.00", "suggested_party_ledger_id": null, "suggested_voucher_type": "Purchase", "_meta": { "prompt_version": "1.0", "model": "gemini-2.0-flash" } },
+  "parsed_data": { "vendor_name": "Sharma Traders", "total_amount": "11800.00", "suggested_party_ledger_id": null, "suggested_voucher_type": "Purchase", "_meta": { "prompt_version": "1.0", "model": "gemini-3.8-flash" } },
   "extraction_confidence": "0.920",
   "extraction_flags": ["new_party"],
   "created_at": "2026-10-10T10:00:00+05:30"

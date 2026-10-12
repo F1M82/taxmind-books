@@ -1,8 +1,8 @@
-"""Unit tests for invoice_extractor, mocking the Gemini client entirely.
+"""Unit tests for invoice_extractor, mocking both LLM clients entirely.
 
-No network call ever happens here -- `_client()` is monkeypatched to
-return a fake with a canned `.text` response, per the retry policy in
-docs/EXTRACTION_CONTRACT.md.
+No network call ever happens here -- `_gemini_client()`/`_openai_client()`
+are monkeypatched to return fakes with canned responses, per the retry
+and failover policy in docs/EXTRACTION_CONTRACT.md.
 """
 
 from __future__ import annotations
@@ -23,6 +23,13 @@ VALID_JSON = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _reset_failover_state() -> None:
+    # Module-level failover state is a singleton -- tests must not
+    # leak consecutive-failure counts into each other.
+    invoice_extractor.reset_failover()
+
+
 class _FakeModels:
     def __init__(self, replies: list[str | Exception]) -> None:
         self._replies = list(replies)
@@ -36,14 +43,37 @@ class _FakeModels:
         return SimpleNamespace(text=reply)
 
 
-class _FakeClient:
+class _FakeGeminiClient:
     def __init__(self, replies: list[str | Exception]) -> None:
         self.models = _FakeModels(replies)
 
 
-def _patch_client(monkeypatch, replies: list[str | Exception]) -> _FakeClient:  # type: ignore[no-untyped-def]
-    client = _FakeClient(replies)
-    monkeypatch.setattr(invoice_extractor, "_client", lambda: client)
+class _FakeOpenAIClient:
+    def __init__(self, replies: list[str | Exception]) -> None:
+        self._replies = list(replies)
+        self.calls: list[dict] = []
+        self.chat = SimpleNamespace(
+            completions=SimpleNamespace(create=self._create)
+        )
+
+    def _create(self, *, model, messages):  # type: ignore[no-untyped-def]
+        self.calls.append({"model": model, "messages": messages})
+        reply = self._replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        message = SimpleNamespace(content=reply)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+def _patch_client(monkeypatch, replies: list[str | Exception]) -> _FakeGeminiClient:  # type: ignore[no-untyped-def]
+    client = _FakeGeminiClient(replies)
+    monkeypatch.setattr(invoice_extractor, "_gemini_client", lambda: client)
+    return client
+
+
+def _patch_openai(monkeypatch, replies: list[str | Exception]) -> _FakeOpenAIClient:  # type: ignore[no-untyped-def]
+    client = _FakeOpenAIClient(replies)
+    monkeypatch.setattr(invoice_extractor, "_openai_client", lambda: client)
     return client
 
 
@@ -101,3 +131,72 @@ def test_missing_api_key_raises_hard_failure(
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     with pytest.raises(ExtractionHardFailure):
         extract_invoice([b"fake"])
+
+
+# ---------------- failover to OpenAI (EXTRACTION_CONTRACT.md "LLM choice") ----------------
+
+
+def test_below_threshold_does_not_fail_over(monkeypatch: pytest.MonkeyPatch) -> None:
+    """2 consecutive Gemini failures (threshold is 3) must NOT touch OpenAI."""
+    _patch_client(monkeypatch, [ConnectionError("down"), ConnectionError("down")])
+    openai_client = _patch_openai(monkeypatch, [])
+    for _ in range(2):
+        with pytest.raises(ExtractionHardFailure):
+            extract_invoice([b"fake"])
+    assert openai_client.calls == []
+
+
+def test_third_consecutive_failure_fails_over_to_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_client(
+        monkeypatch,
+        [ConnectionError("down"), ConnectionError("down"), ConnectionError("down")],
+    )
+    openai_client = _patch_openai(monkeypatch, [VALID_JSON])
+
+    for _ in range(2):
+        with pytest.raises(ExtractionHardFailure):
+            extract_invoice([b"fake"])
+
+    extracted, meta = extract_invoice([b"fake"])
+    assert extracted.vendor_name == "Sharma Traders"
+    assert meta["model"] == "gpt-4o-mini"
+    assert len(openai_client.calls) == 1
+
+
+def test_subsequent_calls_during_outage_skip_gemini_entirely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gemini_client = _patch_client(
+        monkeypatch,
+        [ConnectionError("down"), ConnectionError("down"), ConnectionError("down")],
+    )
+    openai_client = _patch_openai(monkeypatch, [VALID_JSON, VALID_JSON])
+
+    for _ in range(2):
+        with pytest.raises(ExtractionHardFailure):
+            extract_invoice([b"fake"])
+    extract_invoice([b"fake"])  # trips failover, 1st OpenAI call
+    extract_invoice([b"fake"])  # still within window, 2nd OpenAI call
+
+    assert len(gemini_client.models.calls) == 3  # no 4th attempt at Gemini
+    assert len(openai_client.calls) == 2
+
+
+def test_success_resets_failure_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    """2 failures then a success must not carry over into a later run."""
+    _patch_client(
+        monkeypatch, [ConnectionError("down"), ConnectionError("down"), VALID_JSON]
+    )
+    openai_client = _patch_openai(monkeypatch, [])
+    for _ in range(2):
+        with pytest.raises(ExtractionHardFailure):
+            extract_invoice([b"fake"])
+    extract_invoice([b"fake"])  # succeeds, resets counter
+
+    # One more failure afterward is back to count=1, well under threshold.
+    _patch_client(monkeypatch, [ConnectionError("down")])
+    with pytest.raises(ExtractionHardFailure):
+        extract_invoice([b"fake"])
+    assert openai_client.calls == []

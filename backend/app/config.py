@@ -46,10 +46,12 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: SecretStr | None = None
     # Gemini is the pilot's primary extraction model (free API tier covers
     # pilot volume; see docs/EXTRACTION_CONTRACT.md "LLM choice" — the
-    # contract's Claude/GPT-4o choice is the paid-tier upgrade path once
-    # volume or accuracy demands it, same pluggable-model pattern).
+    # contract's Claude-primary/GPT-4o-fallback pair is mirrored here as
+    # Gemini-primary/GPT-4o-mini-fallback, same swap-after-outage shape,
+    # just with cheaper models since this is the pilot not the paid tier).
     GEMINI_API_KEY: SecretStr | None = None
     INVOICE_EXTRACTION_MODEL: str = Field(default="gemini-3.8-flash")
+    OPENAI_EXTRACTION_MODEL: str = Field(default="gpt-4o-mini")
 
     # ---------------- Optional: object storage (Phase 1) ----------------
     # S3_* unused until a future deploy needs multi-server storage; local

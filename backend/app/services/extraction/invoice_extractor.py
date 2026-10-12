@@ -1,19 +1,24 @@
 """LLM call: images -> ExtractedInvoice.
 
 Per docs/EXTRACTION_CONTRACT.md "LLM choice" / "Retry policy". The
-contract's primary (Claude)/fallback (GPT-4o) pair is the paid-tier
-upgrade path; the pilot runs on Gemini's free tier (see CLAUDE.md
-"Phase 1 scope") via the same swappable-model shape
-(`INVOICE_EXTRACTION_MODEL`).
+contract's primary (Claude)/fallback (GPT-4o) pair is mirrored here as
+Gemini (free tier, pilot default) primary / GPT-4o-mini fallback,
+switched in automatically after 3 consecutive primary failures within
+a 5-minute window -- the contract's own outage-detection rule, just
+with cheaper models (see CLAUDE.md "Phase 1 scope").
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
+import openai
 from google import genai
 from google.genai import types
 from pydantic import ValidationError
@@ -35,6 +40,13 @@ _SIMPLIFIED_SUFFIX = (
     "code fences, no prose before or after, no trailing commas."
 )
 
+# Outage-detection failover, per EXTRACTION_CONTRACT.md "LLM choice":
+# "used only if primary fails 3 consecutive times within a 5-minute
+# window". Module-level state is fine here -- same process-local
+# acceptance as connector_registry; a restart just re-tries primary.
+FAILOVER_THRESHOLD = 3
+FAILOVER_WINDOW = timedelta(minutes=5)
+
 
 class ExtractionHardFailure(Exception):
     """The LLM call itself failed (network/5xx/timeout). Retryable by
@@ -46,12 +58,50 @@ class ExtractionMalformedOutput(Exception):
     after one simplified-prompt retry. Not retryable automatically."""
 
 
+@dataclass
+class _FailoverState:
+    consecutive_failures: int = 0
+    first_failure_at: datetime | None = None
+
+
+_failover = _FailoverState()
+
+
+def _primary_is_down() -> bool:
+    if _failover.consecutive_failures < FAILOVER_THRESHOLD:
+        return False
+    assert _failover.first_failure_at is not None
+    if datetime.now(UTC) - _failover.first_failure_at > FAILOVER_WINDOW:
+        reset_failover()
+        return False
+    return True
+
+
+def _record_primary_failure() -> None:
+    now = datetime.now(UTC)
+    if (
+        _failover.first_failure_at is None
+        or now - _failover.first_failure_at > FAILOVER_WINDOW
+    ):
+        _failover.first_failure_at = now
+        _failover.consecutive_failures = 1
+    else:
+        _failover.consecutive_failures += 1
+
+
+def reset_failover() -> None:
+    """Clear failover state. Exposed for tests -- the state is a
+    module-level singleton so tests must reset it between runs."""
+    _failover.consecutive_failures = 0
+    _failover.first_failure_at = None
+
+
 @lru_cache(maxsize=1)
 def _prompt_text() -> str:
     return _PROMPT_PATH.read_text(encoding="utf-8")
 
 
-def _client() -> genai.Client:
+def _gemini_client() -> genai.Client:
     settings = get_settings()
     if settings.GEMINI_API_KEY is None:
         raise ExtractionHardFailure(
@@ -59,6 +109,16 @@ def _client() -> genai.Client:
             "extraction model."
         )
     return genai.Client(api_key=settings.GEMINI_API_KEY.get_secret_value())
+
+
+def _openai_client() -> openai.OpenAI:
+    settings = get_settings()
+    if settings.OPENAI_API_KEY is None:
+        raise ExtractionHardFailure(
+            "OPENAI_API_KEY is not configured; cannot call the "
+            "fallback extraction model."
+        )
+    return openai.OpenAI(api_key=settings.OPENAI_API_KEY.get_secret_value())
 
 
 def _strip_fences(text: str) -> str:
@@ -72,9 +132,8 @@ def _strip_fences(text: str) -> str:
     return text.strip()
 
 
-def _call_model(image_jpegs: list[bytes], prompt: str) -> str:
-    client = _client()
-    model = get_settings().INVOICE_EXTRACTION_MODEL
+def _call_gemini(image_jpegs: list[bytes], prompt: str, model: str) -> str:
+    client = _gemini_client()
     parts: list[types.Part | str] = [prompt]
     for jpeg in image_jpegs:
         parts.append(types.Part.from_bytes(data=jpeg, mime_type="image/jpeg"))
@@ -91,6 +150,62 @@ def _call_model(image_jpegs: list[bytes], prompt: str) -> str:
     return text
 
 
+def _call_openai(image_jpegs: list[bytes], prompt: str, model: str) -> str:
+    client = _openai_client()
+    content: list[dict[str, object]] = [{"type": "text", "text": prompt}]
+    for jpeg in image_jpegs:
+        b64 = base64.b64encode(jpeg).decode("ascii")
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+            }
+        )
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": content}],  # type: ignore[list-item]
+        )
+    except Exception as exc:  # network / API error -- transport failure
+        raise ExtractionHardFailure(str(exc)) from exc
+    text = response.choices[0].message.content
+    if not text:
+        raise ExtractionMalformedOutput("empty response from model")
+    return text
+
+
+def _call_model(image_jpegs: list[bytes], prompt: str) -> tuple[str, str]:
+    """Call the primary model, failing over to OpenAI after an outage.
+
+    Returns (raw_text, model_actually_used).
+    """
+    settings = get_settings()
+    if not _primary_is_down():
+        try:
+            text = _call_gemini(
+                image_jpegs, prompt, settings.INVOICE_EXTRACTION_MODEL
+            )
+        except ExtractionHardFailure:
+            _record_primary_failure()
+            if not _primary_is_down():
+                raise
+            logger.warning(
+                "primary extraction model failed %d times within %s; "
+                "failing over to %s",
+                _failover.consecutive_failures,
+                FAILOVER_WINDOW,
+                settings.OPENAI_EXTRACTION_MODEL,
+            )
+        else:
+            reset_failover()
+            return text, settings.INVOICE_EXTRACTION_MODEL
+
+    return (
+        _call_openai(image_jpegs, prompt, settings.OPENAI_EXTRACTION_MODEL),
+        settings.OPENAI_EXTRACTION_MODEL,
+    )
+
+
 def extract_invoice(
     image_jpegs: list[bytes],
 ) -> tuple[ExtractedInvoice, dict[str, str]]:
@@ -103,7 +218,7 @@ def extract_invoice(
     retry with a simplified prompt).
     """
     base_prompt = _prompt_text()
-    raw_text = _call_model(image_jpegs, base_prompt)
+    raw_text, model_used = _call_model(image_jpegs, base_prompt)
 
     extracted = _try_parse(raw_text)
     if extracted is None:
@@ -111,7 +226,9 @@ def extract_invoice(
             "extraction returned malformed output, retrying with "
             "simplified prompt"
         )
-        raw_text = _call_model(image_jpegs, base_prompt + _SIMPLIFIED_SUFFIX)
+        raw_text, model_used = _call_model(
+            image_jpegs, base_prompt + _SIMPLIFIED_SUFFIX
+        )
         extracted = _try_parse(raw_text)
     if extracted is None:
         raise ExtractionMalformedOutput(
@@ -122,7 +239,7 @@ def extract_invoice(
     meta = {
         "prompt_version": _PROMPT_VERSION,
         "schema_version": SCHEMA_VERSION,
-        "model": get_settings().INVOICE_EXTRACTION_MODEL,
+        "model": model_used,
     }
     return extracted, meta
 

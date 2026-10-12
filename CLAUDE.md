@@ -641,6 +641,25 @@ Celery backoff in worker mode; in eager mode it's logged and left in `extracting
 for a manual retry, per the pipeline's documented eager-mode trade-off). Don't
 mistake a 503 for a real extraction bug — retry before investigating further.
 
+**Primary/fallback failover added same day, also live-verified.** The contract's
+"LLM choice" section always specified a primary/fallback pair (Claude primary,
+GPT-4o fallback, switched after 3 consecutive failures within 5 minutes — see
+EXTRACTION_CONTRACT.md); this was built for real once the user added an
+`OPENAI_API_KEY` too, mirroring the same shape on the pilot's cheaper models:
+**Gemini primary, `gpt-4o-mini` fallback.** `invoice_extractor.py`'s
+`_call_model()` tracks consecutive-failure count + first-failure timestamp as
+module-level state (same process-local acceptance as `connector_registry`); once
+3 failures land inside the 5-minute window, that *same* call transparently serves
+via OpenAI instead of raising — not a 4th retry, immediate failover within the
+call that crosses the threshold. A success on either provider resets the counter.
+Live-verified 2026-10-12: forced 2 real Gemini failures, 3rd call failed over to
+the real OpenAI API and extracted the test invoice correctly
+(`meta["model"] == "gpt-4o-mini"`). `OPENAI_EXTRACTION_MODEL` defaults
+`gpt-4o-mini` in `app/config.py`. 4 new unit tests in
+`test_invoice_extractor.py` cover below-threshold/at-threshold/during-outage/
+reset-on-success — all mocked, no real API calls in the test suite despite both
+keys now being live in `backend/.env`.
+
 **Deliberately stops short of auto-creating the Voucher.** The contract's Flow B
 ("voucher created with `is_optional_in_tally=true`...") assumes a 2-line Dr/Cr entry
 can be built straight from extracted invoice JSON, but nothing in the architecture

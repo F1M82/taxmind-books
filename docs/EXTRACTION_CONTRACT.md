@@ -90,6 +90,15 @@ The prepared images are stored in S3 alongside the original (key suffix `_proces
 
 **Fallback:** GPT-4o or GPT-4-Turbo via OpenAI Vision (used only if primary fails 3 consecutive times within a 5-minute window, indicating an Anthropic outage).
 
+**Pilot implementation (2026-10-12):** the pair above is the paid-tier design; the
+pilot runs the identical shape on cheaper models — **Gemini** (`GEMINI_API_KEY`,
+free tier) as primary, **GPT-4o-mini** (`OPENAI_API_KEY`) as fallback, same
+3-failures/5-minutes outage trigger. Live-verified both the happy path and a
+forced failover against the real APIs. See `app/services/extraction/invoice_extractor.py`
+and CLAUDE.md "Phase 1 wedge" for the as-built detail; swap to the paid pair later
+by changing `INVOICE_EXTRACTION_MODEL`/`OPENAI_EXTRACTION_MODEL` and adding an
+Anthropic call path alongside the Gemini/OpenAI ones.
+
 **Model selection rationale:**
 - Vision-capable model required (must accept images).
 - Strong structured output capability (JSON mode or tool use).

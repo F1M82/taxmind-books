@@ -1071,32 +1071,47 @@ Readiness probe — checks DB (`SELECT 1`) and Redis (`PING`, 2 s timeout). Does
 
 ### Ingestions
 
+**Built 2026-10-10/12 — photo/pdf only.** `whatsapp`/`email`/`csv`/`voice` sources are
+still just enum placeholders on `Ingestion.source` (no handler); this endpoint rejects
+anything that isn't a `photo` or `pdf` file upload. There is no `text` field — a
+non-binary source has nothing to extract from an uploaded file, so it's out of scope
+until a messaging-webhook integration is actually built. There is no separate
+`draft_voucher_id`/`draft_vouchers` table either (removed in v1.2, Flow B) — the
+closest thing is `posted_voucher_id`, which stays `null` through this version: the
+pipeline extracts, validates, and party-matches the invoice, but deliberately stops
+short of auto-constructing a double-entry `Voucher` (see "What's NOT built yet" below).
+
 #### `POST /api/v1/ingestions/`
 
-Submit a capture (image, PDF, message text) for processing. Requires auth, `X-Company-ID`, **Idempotency-Key required**.
+Upload an invoice photo/PDF for extraction. Requires auth, `X-Company-ID`,
+**Idempotency-Key required**.
 
 **Request:** multipart/form-data:
-- `source`: one of `photo`, `pdf`, `whatsapp`, `email`, `csv`, `voice`, `manual`
-- `file`: file upload (for binary sources)
-- `text`: text content (for non-binary sources like whatsapp/sms)
-- `sender_identifier?`: optional source identifier (phone, email)
+- `file`: the image (`image/jpeg`, `image/png`, `image/heic`) or `application/pdf`, ≤10MB
+- `source`: `photo` or `pdf` (default `photo`)
 
-**Response 202:**
-```json
-{
-  "id": "uuid",
-  "company_id": "uuid",
-  "source": "photo",
-  "status": "received",
-  "received_at": "2026-05-08T10:00:00+05:30"
-}
-```
+**Response 202:** an `IngestionOut` body — see `GET /api/v1/ingestions/{ingestion_id}`
+below for the shape. `status` is `received` on the happy path (extraction runs
+out-of-band immediately after); it can already be `extracting`/`extracted`/`review` by
+the time the response is serialized if dispatch was fast (`CELERY_TASK_ALWAYS_EAGER`,
+the only mode built so far — see "What's NOT built yet").
 
-**Side effects:** an `extract_invoice` (or other source-appropriate) Celery task is enqueued.
+**Side effects:** the extraction pipeline (`app/services/extraction/extraction_pipeline.py`)
+runs out-of-band — download → HEIC/PDF→JPEG prep → Gemini vision call → validator
+(Rules V1-V9) → party matcher. No Celery broker required yet (eager in-process, same
+pattern as `voucher_dispatcher.enqueue_voucher_post`).
+
+**Idempotency differs from the rest of the API.** A multipart upload can't go through
+the generic `Idempotency-Key` + body-hash `IdempotencyHandler` every other
+state-changing endpoint uses: FastAPI's own form parser drains the request stream to
+resolve `file`/`source` before the handler runs, so a later `request.body()` call
+raises (`Stream consumed`). This endpoint instead relies on the table's own
+`uq_ingestions_company_idempotency` unique constraint — a resubmission with the same
+key gets back the **already-created** row (still `202`, not `409`) rather than a
+replay-conflict error; nothing is re-uploaded or re-enqueued.
 
 **Errors:**
-- `400 idempotency_key_required`
-- `409 idempotency_replay`
+- `400 idempotency_key_required` / `idempotency_key_invalid`
 - `413 file_too_large` — file exceeds 10MB
 - `415 unsupported_media_type`
 - `422 validation_error`
@@ -1109,22 +1124,58 @@ Get the status of an ingestion.
 ```json
 {
   "id": "uuid",
+  "company_id": "uuid",
   "source": "photo",
-  "status": "extracted",
-  "received_at": "...",
-  "extracted_at": "...",
-  "draft_voucher_id": "uuid",
-  "failure_reason": null
+  "status": "review",
+  "content_type": "image/jpeg",
+  "content_size": 48213,
+  "received_at": "2026-10-10T10:00:00+05:30",
+  "extracted_at": "2026-10-10T10:00:08+05:30",
+  "failed_at": null,
+  "failure_reason": null,
+  "posted_voucher_id": null,
+  "parsed_data": { "vendor_name": "Sharma Traders", "total_amount": "11800.00", "suggested_party_ledger_id": null, "suggested_voucher_type": "Purchase", "_meta": { "prompt_version": "1.0", "model": "gemini-2.0-flash" } },
+  "extraction_confidence": "0.920",
+  "extraction_flags": ["new_party"],
+  "created_at": "2026-10-10T10:00:00+05:30"
 }
 ```
 
+`status` values actually used: `received` → `extracting` → `extracted` → (`matched` |
+`review` | `discarded` | `failed`). `matched`/`review`/`discarded`/`failed` are
+terminal for this version — there is no re-extraction or approval endpoint yet.
+
 #### `GET /api/v1/ingestions/`
 
-List ingestions.
+List ingestions for the active company, newest-received first.
 
-**Query parameters:** `status?`, `source?`, `from?`, `to?`, `limit?`, `cursor?`.
+**Query parameters:** `status?` (exact match), `limit?` (1-200, default 50).
 
-**Response 200:** paginated list.
+**Response 200:** `{"items": [...], "meta": {"next_cursor": null, "total": N}}`. Each
+item is a trimmed view: `id`, `source`, `status`, `content_type`,
+`extraction_confidence`, `extraction_flags`, `received_at`.
+
+**What's NOT built yet (deliberately, see CLAUDE.md "Phase 1 scope"):**
+- **Auto-voucher construction.** The contract's original Flow-B wording ("Voucher
+  created with `is_optional_in_tally=true`...") assumed a 2-line Dr/Cr voucher can be
+  built straight from an extracted invoice. Nothing in the architecture docs says
+  *which* ledger is the non-party side (a default "Purchases"/"Sales" ledger? a
+  per-category mapping?) — that's a real product decision, not a coding gap, and is
+  intentionally left for the next session. Until it's made, `matched`/`review`
+  ingestions sit with `posted_voucher_id=null`; a human has to turn the parsed data
+  into a voucher by hand (mobile review-queue UI for this also doesn't exist yet).
+- **S3 storage.** Files live on local disk (`STORAGE_DIR`, see `app/services/extraction/storage.py`)
+  instead of S3 — no bucket is provisioned for the pilot. Swapping later only touches
+  that one module (same key-based interface).
+- **Claude/GPT-4o vision.** Runs on Gemini (free tier covers pilot volume) instead of
+  the contract's Anthropic-primary/OpenAI-fallback pair — same swappable-model shape
+  (`INVOICE_EXTRACTION_MODEL`), upgrade later if volume/accuracy demands it.
+- **Celery worker mode.** Only the eager in-process path
+  (`extraction_pipeline._enqueue_in_process`) is exercised; a real multi-process
+  Celery deploy needs the registry-is-process-local constraint resolved first, same
+  as `voucher_dispatcher`/`ledger_dispatcher`.
+- **WhatsApp/SMS/email ingestion**, the `GET /ingestions/?from=&to=` date-range
+  filters, and `cursor`-based pagination — not built, only `status`/`limit` exist.
 
 ---
 

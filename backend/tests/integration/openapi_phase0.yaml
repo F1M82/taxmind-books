@@ -128,6 +128,12 @@ endpoints:
   - path: /api/v1/companies/{company_id}/tally-mapping
     methods: [POST]
 
+  # ---- Ingestions (Phase 1 wedge: invoice scan) ----
+  - path: /api/v1/ingestions/
+    methods: [GET, POST]
+  - path: /api/v1/ingestions/{ingestion_id}
+    methods: [GET]
+
   # ---- Liveness / placeholder ----
   - path: /
     methods: [GET]

@@ -79,6 +79,7 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset(
         "data_export.completed",
         "device.registered",
         "device.unregistered",
+        "ingestion.created",
     }
 )
 

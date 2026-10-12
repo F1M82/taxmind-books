@@ -18,6 +18,7 @@ from app.models.connector import Connector, ConnectorCompanyBinding, TallyCompan
 from app.models.connector_enrollment import ConnectorEnrollmentCode
 from app.models.device_token import DevicePlatform, DeviceToken
 from app.models.idempotency_key import IdempotencyKey
+from app.models.ingestion import Ingestion, IngestionSource, IngestionStatus
 from app.models.ledger import BalanceType, Ledger
 from app.models.stock_valuation import StockValuation
 from app.models.user import User
@@ -45,6 +46,9 @@ __all__ = [
     "DeviceToken",
     "EntryType",
     "IdempotencyKey",
+    "Ingestion",
+    "IngestionSource",
+    "IngestionStatus",
     "Ledger",
     "LedgerEntry",
     "TenantScopedMixin",

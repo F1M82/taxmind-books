@@ -47,6 +47,7 @@ def migrated_db(db_or_skip: str) -> str:
     """Drop everything, run all migrations to head."""
     engine = create_engine(db_or_skip)
     with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS ingestions CASCADE"))
         conn.execute(
             text("DROP TABLE IF EXISTS account_deletion_requests CASCADE")
         )
@@ -72,6 +73,8 @@ def migrated_db(db_or_skip: str) -> str:
         conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS alembic_version CASCADE"))
+        conn.execute(text("DROP TYPE IF EXISTS ingestion_status CASCADE"))
+        conn.execute(text("DROP TYPE IF EXISTS ingestion_source CASCADE"))
         conn.execute(
             text("DROP TYPE IF EXISTS account_deletion_status CASCADE")
         )

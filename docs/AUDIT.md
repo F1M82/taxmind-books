@@ -110,6 +110,7 @@ Actions follow a strict `entity.verb` naming convention. The full v1 vocabulary:
 | `company.tally_mapping_cleared` | (v1.3) Mapping removed (admin action) |
 | `ledger.confirmed_in_tally` | (v1.3) Mobile-created ledger confirmed present on next Tally sync |
 | `connector.tally_companies_discovered` | (v1.3) Connector reported the Tally company list to the backend |
+| `ingestion.created` | (Phase 1) Invoice photo/PDF uploaded, extraction enqueued |
 
 New actions added in later phases extend this list. Coder Claude does not invent new action names; they are added to this document first.
 

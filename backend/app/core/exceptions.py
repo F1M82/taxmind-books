@@ -153,6 +153,28 @@ class LedgerNotFound(NotFound):
     code = "ledger_not_found"
 
 
+class IngestionNotFound(NotFound):
+    code = "ingestion_not_found"
+
+
+class UnsupportedIngestionFile(DomainException):
+    status_code = 415
+    code = "unsupported_media_type"
+
+
+class IngestionFileTooLarge(DomainException):
+    status_code = 413
+    code = "file_too_large"
+
+
+class IdempotencyKeyRequired(BadRequest):
+    code = "idempotency_key_required"
+
+
+class IdempotencyKeyInvalid(BadRequest):
+    code = "idempotency_key_invalid"
+
+
 class EmailAlreadyRegistered(Conflict):
     code = "email_already_registered"
 

@@ -18,6 +18,7 @@ from app.api.v1 import (
     dashboard,
     devices,
     health,
+    ingestions,
     ledgers,
     onboarding,
     reports,
@@ -40,3 +41,4 @@ api_v1.include_router(connector.router)
 api_v1.include_router(connector_ws.router)
 api_v1.include_router(health.router)
 api_v1.include_router(stock_valuations.router)
+api_v1.include_router(ingestions.router)

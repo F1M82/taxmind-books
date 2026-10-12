@@ -63,6 +63,7 @@ def migrated_engine() -> Generator[str, None, None]:
     # tests/integration/test_alembic_roundtrip.py for the same rule.
     e = create_engine(url)
     with e.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS ingestions CASCADE"))
         conn.execute(
             text("DROP TABLE IF EXISTS account_deletion_requests CASCADE")
         )
@@ -84,6 +85,8 @@ def migrated_engine() -> Generator[str, None, None]:
         conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
         conn.execute(text("DROP TYPE IF EXISTS alembic_version CASCADE"))
+        conn.execute(text("DROP TYPE IF EXISTS ingestion_status CASCADE"))
+        conn.execute(text("DROP TYPE IF EXISTS ingestion_source CASCADE"))
         conn.execute(
             text("DROP TYPE IF EXISTS account_deletion_status CASCADE")
         )

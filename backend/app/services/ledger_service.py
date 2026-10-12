@@ -22,7 +22,7 @@ from app.services.tally.company_mapping import CompanyMappingError
 logger = logging.getLogger("app.services.ledger_service")
 
 
-def _normalize(name: str) -> str:
+def normalize_ledger_name(name: str) -> str:
     return name.strip().lower()
 
 
@@ -99,7 +99,7 @@ class LedgerService:
         ledger = Ledger(
             company_id=self.company_id,
             name=data.name,
-            name_normalized=_normalize(data.name),
+            name_normalized=normalize_ledger_name(data.name),
             group_name=data.group_name,
             parent_ledger_id=data.parent_ledger_id,
             opening_balance=data.opening_balance,
@@ -232,7 +232,7 @@ class LedgerService:
         if group is not None:
             query = query.filter(Ledger.group_name == group)
         if q:
-            term = _normalize(q)
+            term = normalize_ledger_name(q)
             # gin_trgm_ops on name_normalized makes ILIKE %term% +
             # similarity threshold both indexable; we combine to keep
             # short-prefix lookups fast and also catch typo'd queries.
@@ -262,7 +262,7 @@ class LedgerService:
         diff = data.model_dump(exclude_unset=True)
         if "name" in diff and diff["name"] is not None:
             ledger.name = diff["name"]
-            ledger.name_normalized = _normalize(diff["name"])
+            ledger.name_normalized = normalize_ledger_name(diff["name"])
         for k, v in diff.items():
             if k == "name":
                 continue
@@ -368,7 +368,7 @@ class LedgerService:
                 skipped += 1
                 continue
 
-            norm = _normalize(name)
+            norm = normalize_ledger_name(name)
             group_name = raw.get("group_name") or None
             gstin = raw.get("gstin") or None
             payload_guid = _clean_guid(raw.get("master_id"))

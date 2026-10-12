@@ -41,16 +41,26 @@ class Settings(BaseSettings):
         ..., description="Secret for signing connector enrollment / session tokens"
     )
 
-    # ---------------- Optional: LLM providers (populated in Phase 1) ----------------
+    # ---------------- Optional: LLM providers (Phase 1 invoice extraction) ----------------
     ANTHROPIC_API_KEY: SecretStr | None = None
     OPENAI_API_KEY: SecretStr | None = None
+    # Gemini is the pilot's primary extraction model (free API tier covers
+    # pilot volume; see docs/EXTRACTION_CONTRACT.md "LLM choice" — the
+    # contract's Claude/GPT-4o choice is the paid-tier upgrade path once
+    # volume or accuracy demands it, same pluggable-model pattern).
+    GEMINI_API_KEY: SecretStr | None = None
+    INVOICE_EXTRACTION_MODEL: str = Field(default="gemini-2.0-flash")
 
-    # ---------------- Optional: object storage (populated in Phase 1) ----------------
+    # ---------------- Optional: object storage (Phase 1) ----------------
+    # S3_* unused until a future deploy needs multi-server storage; local
+    # disk under STORAGE_DIR is the pilot's object store (same key-based
+    # interface as S3 — see app/services/extraction/storage.py).
     S3_ENDPOINT_URL: str | None = None
     S3_REGION: str | None = None
     S3_BUCKET: str | None = None
     S3_ACCESS_KEY: SecretStr | None = None
     S3_SECRET_KEY: SecretStr | None = None
+    STORAGE_DIR: str = Field(default="./data/ingestions")
 
     # ---------------- Tally ----------------
     TALLY_HOST: str = Field(default="localhost")

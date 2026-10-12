@@ -610,3 +610,56 @@ ledgers (`ZZZ TAXMIND TEST DELETE ME`, `ZZZ TAXMIND TEST 2 DELETE ME`) are now s
 in both Tally and the backend DB (picked up by the post-deploy auto-sync) — delete them
 directly in TallyPrime whenever convenient; the app's own delete is DB-only soft-delete
 and won't touch Tally.
+
+## Phase 1 wedge: invoice-scan extraction pipeline (2026-10-10/12, commit `2f7631d`)
+
+Builds the backend half of `docs/EXTRACTION_CONTRACT.md` — migration `0025`
+(`ingestions` table), `app/services/extraction/` (storage, image_prep, extraction_schema,
+invoice_extractor, validator, party_matcher, extraction_pipeline), `POST/GET
+/api/v1/ingestions/`. Runs on **Gemini** (`GEMINI_API_KEY`, free tier covers pilot
+volume) instead of the contract's Claude/GPT-4o pair, and **local disk**
+(`STORAGE_DIR`) instead of S3 — no bucket provisioned yet; both are swappable later
+behind the same interfaces. 894/894 backend tests pass. **Not deployed anywhere** —
+no `GEMINI_API_KEY` is set in `backend/.env` yet (empty placeholder), so extraction
+can't actually run end-to-end until that's added. LOCAL ONLY, migration `0025` not
+run on prod.
+
+**Deliberately stops short of auto-creating the Voucher.** The contract's Flow B
+("voucher created with `is_optional_in_tally=true`...") assumes a 2-line Dr/Cr entry
+can be built straight from extracted invoice JSON, but nothing in the architecture
+docs says which ledger is the *non-party* side (a default "Purchases" ledger? per-
+category mapping? something else?) — no `Company.default_purchase_ledger_id` or
+equivalent exists anywhere in the schema. This is a real product decision, not a
+coding gap. Until it's made, a `matched`/`review` ingestion's `parsed_data` (including
+`suggested_party_ledger_id`/`suggested_voucher_type`) just sits there —
+`posted_voucher_id` stays NULL and nothing posts to Tally. See `docs/API.md`'s
+Ingestions section, "What's NOT built yet", for the full list of scope cuts (also:
+no mobile review-queue UI, no Celery-worker-mode test, no whatsapp/sms/email
+ingestion despite the enum having those values).
+
+**Real bug found and fixed along the way, worth remembering for the NEXT new
+migration too:** three independent test files each keep their own hardcoded
+"drop every table/type then `alembic upgrade head`" fixture
+(`tests/_db_fixtures.py::migrated_engine`, `tests/integration/test_alembic_roundtrip.py::clean_db`,
+`tests/integration/test_audit_log_append_only.py::migrated_db`) — a holdover from
+before there was one shared fixture. **All three must list every table a migration
+creates, or adding a new migration without touching all three silently corrupts the
+test DB for the rest of the suite**: alembic wraps the whole `upgrade head` call in
+ONE transaction (`alembic/env.py`'s `with context.begin_transaction(): context.run_migrations()`),
+so if the list is missing a table/type that's left over from the SESSION-scoped
+`migrated_engine`'s earlier setup, the one-of-these-three-files' own re-upgrade hits
+`DuplicateObject` on `CREATE TYPE`/`CREATE TABLE`, the ENTIRE transaction rolls back
+(not just that one migration), and every test running after it inherits a half-built
+schema missing columns from migrations that should have re-applied. Symptom looks
+like random unrelated test failures (`UndefinedColumn`, audit-log append-only ERRORs,
+tenancy test failures) with no obvious connection to what you just changed — the
+tell is `SELECT version_num FROM alembic_version` reporting something well below
+head. Fix: add the new table/types to all three lists (now done for `ingestions`/
+`ingestion_source`/`ingestion_status`); if a FOURTH copy ever appears, same rule.
+
+**This session also needed Docker Desktop started manually** (`taxmind-postgres`/
+`taxmind-redis` containers exist but Docker Desktop itself wasn't running after a
+session restart) — `Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"`,
+wait ~5-10s for the engine, then the containers come up on their own (they're not
+set to any particular restart policy that needed re-creating, just needed the
+daemon back).

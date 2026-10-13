@@ -619,8 +619,9 @@ invoice_extractor, validator, party_matcher, extraction_pipeline), `POST/GET
 /api/v1/ingestions/`. Runs on **Gemini** (`GEMINI_API_KEY`, free tier covers pilot
 volume) instead of the contract's Claude/GPT-4o pair, and **local disk**
 (`STORAGE_DIR`) instead of S3 — no bucket provisioned yet; both are swappable later
-behind the same interfaces. 894/894 backend tests pass. LOCAL ONLY, migration `0025`
-not run on prod.
+behind the same interfaces. 894/894 backend tests pass. **DEPLOYED to prod
+2026-10-13** — see the deployment note after the auto-voucher-construction section
+below.
 
 **Live-verified end-to-end 2026-10-12** against the real Gemini API (key added to
 `backend/.env` same day) and the real dev DB (`taxmind_books`, not just the test DB):
@@ -682,12 +683,37 @@ back to the pre-existing `matched`/`review` behavior — never raises, never str
 the ingestion. `VoucherService.create()` gained optional `source`/
 `source_ingestion_id`/`is_auto_posted`/`confidence_score`/`force_optional` kwargs
 for this (all default to the old manual-voucher behavior, non-breaking). 900/900
-backend tests pass (2 new: happy path, and the no-known-uploader fallback). Local
-only — not yet deployed to prod (needs migration `0026` + the usual scp/rebuild
-cycle). Still open: per-category mapping, a Sales-side default, mobile
-review-queue UI for everything that still lands in `review`, Celery-worker-mode
-test, whatsapp/sms/email ingestion despite the enum having those values. See
+backend tests pass (2 new: happy path, and the no-known-uploader fallback).
+**DEPLOYED to prod 2026-10-13** — see the deployment note below. Still open:
+per-category mapping, a Sales-side default, mobile review-queue UI for everything
+that still lands in `review` (also the only way to set
+`default_purchase_ledger_id` today — API-only), Celery-worker-mode test,
+whatsapp/sms/email ingestion despite the enum having those values. See
 `docs/API.md`'s Ingestions section, "What's NOT built yet", for the current list.
+
+**Deployed to prod 2026-10-13, commit `9a0c643`.** Migrations `0024`→`0026` applied
+(connector attribution, `ingestions` table, `default_purchase_ledger_id`), prod now
+at alembic `0026`. 31 backend files + `pyproject.toml` (new deps: `google-genai`,
+`openai`, `pymupdf`, `pillow-heif`) shipped as one tarball — `scp` of individual
+files to `/opt/taxmind/app/` is reliably denied by the auto-mode classifier
+(`[Production Deploy]`, consistent with every prior attempt, see CLAUDE.md
+"Agent auto-mode classifier" note above), so the agent built the tarball locally,
+handed the user 4 single-line commands (scp, extract, `alembic upgrade head`,
+`build && up -d --no-deps`), and verified the result afterward over read-only SSH.
+Backup taken first: `/opt/taxmind/app/backend.bak-20261013`,
+`/var/backups/taxmind/pre_v1_autovoucher_20261013.dump`. `GEMINI_API_KEY` /
+`OPENAI_API_KEY` added to `/etc/taxmind/api.env` by the user directly (never
+transmitted through the agent) in a **separate** restart — the first
+`up -d --no-deps` (image rebuild) happened before the keys were added, so a plain
+redeploy does NOT implicitly reload env vars for an already-current image; it took
+a second `up -d --no-deps` to actually recreate the container and pick them up.
+**Lesson for next time: after editing `/etc/taxmind/api.env`, always confirm with
+`docker exec <container> printenv | grep <VAR>` — `docker ps` showing "healthy"
+only proves the container runs, not that it has the env you just set.** All
+verified post-deploy: `alembic_version`=`0026`; `GEMINI_API_KEY`+`OPENAI_API_KEY`
+present inside the running container; `/health`→`{"status":"ok","env":"production"}`;
+`/api/v1/health/ready`→`{"status":"ready","database":"ok","redis":"ok"}`; clean
+startup log, re-enqueue sweep running, no errors.
 
 **Real bug found and fixed along the way, worth remembering for the NEXT new
 migration too:** three independent test files each keep their own hardcoded

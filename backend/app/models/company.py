@@ -140,6 +140,17 @@ class Company(Base):
         nullable=True,
     )
 
+    # Phase 1 wedge: the non-party (Dr) side of an auto-posted Purchase
+    # voucher built from an extracted invoice (see
+    # app/services/extraction/extraction_pipeline.py). NULL = auto-voucher
+    # construction stays off for this company; ingestions keep landing in
+    # `matched`/`review` for a human to post by hand.
+    default_purchase_ledger_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("ledgers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = created_at_col()
     updated_at: Mapped[datetime] = updated_at_col()
 

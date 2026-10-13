@@ -100,6 +100,7 @@ def _to_company_out(company, role: str) -> CompanyOut:  # type: ignore[no-untype
         state_code=company.state_code,
         pincode=company.pincode,
         accounting_source=company.accounting_source,
+        default_purchase_ledger_id=company.default_purchase_ledger_id,
         created_at=company.created_at,
         your_role=role,
     )

@@ -13,10 +13,12 @@ from app.core.exceptions import (
     CompanyNotFound,
     GstinAlreadyRegistered,
     InsufficientRole,
+    LedgerNotFound,
     OwnershipTransferRequired,
     UserNotFound,
 )
 from app.models.company import Company, CompanyRole, CompanyStatus, UserCompany
+from app.models.ledger import Ledger
 from app.models.user import User
 from app.schemas.company import CompanyCreate, CompanyUpdate
 
@@ -34,6 +36,9 @@ def _company_snapshot(c: Company) -> dict[str, Any]:
         "state_code": c.state_code,
         "pincode": c.pincode,
         "accounting_source": c.accounting_source,
+        "default_purchase_ledger_id": str(c.default_purchase_ledger_id)
+        if c.default_purchase_ledger_id
+        else None,
     }
 
 
@@ -140,6 +145,19 @@ class CompanyService:
                 raise GstinAlreadyRegistered(
                     "GSTIN already registered.",
                     details={"gstin": diff["gstin"]},
+                )
+        if diff.get("default_purchase_ledger_id") is not None:
+            ledger = (
+                self.db.query(Ledger)
+                .filter(
+                    Ledger.id == diff["default_purchase_ledger_id"],
+                    Ledger.company_id == company.id,
+                )
+                .first()
+            )
+            if ledger is None:
+                raise LedgerNotFound(
+                    "default_purchase_ledger_id does not belong to this company."
                 )
         for k, v in diff.items():
             setattr(company, k, v)

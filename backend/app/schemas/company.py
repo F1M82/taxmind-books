@@ -57,6 +57,7 @@ class CompanyUpdate(TaxMindBooksBase):
     state_code: StateCodeStr | None = None
     pincode: PincodeStr | None = None
     accounting_source: AccountingSourceStr | None = None
+    default_purchase_ledger_id: UUID | None = None
 
 
 class CompanyOut(TaxMindBooksBase):
@@ -71,6 +72,7 @@ class CompanyOut(TaxMindBooksBase):
     state_code: str | None = None
     pincode: str | None = None
     accounting_source: str
+    default_purchase_ledger_id: UUID | None = None
     created_at: datetime
     your_role: str = Field(description="Caller's role on this company")
 

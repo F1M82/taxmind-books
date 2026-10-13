@@ -35,6 +35,7 @@ def test_company_has_expected_columns() -> None:
         "opening_balance_anchor_date",
         "opening_balance_seeded_at",
         "timezone",
+        "default_purchase_ledger_id",
         "created_by",
         "created_at",
         "updated_at",

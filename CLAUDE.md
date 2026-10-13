@@ -660,18 +660,34 @@ the real OpenAI API and extracted the test invoice correctly
 reset-on-success — all mocked, no real API calls in the test suite despite both
 keys now being live in `backend/.env`.
 
-**Deliberately stops short of auto-creating the Voucher.** The contract's Flow B
-("voucher created with `is_optional_in_tally=true`...") assumes a 2-line Dr/Cr entry
-can be built straight from extracted invoice JSON, but nothing in the architecture
-docs says which ledger is the *non-party* side (a default "Purchases" ledger? per-
-category mapping? something else?) — no `Company.default_purchase_ledger_id` or
-equivalent exists anywhere in the schema. This is a real product decision, not a
-coding gap. Until it's made, a `matched`/`review` ingestion's `parsed_data` (including
-`suggested_party_ledger_id`/`suggested_voucher_type`) just sits there —
-`posted_voucher_id` stays NULL and nothing posts to Tally. See `docs/API.md`'s
-Ingestions section, "What's NOT built yet", for the full list of scope cuts (also:
-no mobile review-queue UI, no Celery-worker-mode test, no whatsapp/sms/email
-ingestion despite the enum having those values).
+**Auto-creating the Voucher — decided and SHIPPED 2026-10-12.** The contract's
+Flow B ("voucher created with `is_optional_in_tally=true`...") assumes a 2-line
+Dr/Cr entry can be built straight from extracted invoice JSON, but nothing in the
+architecture docs said which ledger is the *non-party* side. Asked the user
+directly (not guessed, per the standing rule below): **per-company single default
+Purchase ledger**, not a per-category mapping — smallest build, wrong only for a
+company that splits purchases across multiple expense ledgers (can grow into
+per-category later if that turns out to matter). Migration `0026` adds
+`companies.default_purchase_ledger_id` (nullable FK to `ledgers.id`, settable via
+`PATCH /companies/{id}`, owner/admin only, validated same-company). When a
+`matched` ingestion has the default ledger set and a known `created_by`,
+`extraction_pipeline._try_auto_post` builds a 2-line Purchase voucher (Dr default
+ledger, Cr the matched party ledger, header GST fields from the extraction) via
+`VoucherService.create(..., force_optional=True)` — forced Optional regardless of
+confidence, same as Flow B always specified — and the ingestion flips straight to
+`posted`. Anything that doesn't fit the minimal v1 shape (self-invoice/Sales,
+default ledger not configured, no uploader, GST-applicable with no derivable state
+code, matched ledger not Sundry Creditors, a malformed amount) is caught and falls
+back to the pre-existing `matched`/`review` behavior — never raises, never strands
+the ingestion. `VoucherService.create()` gained optional `source`/
+`source_ingestion_id`/`is_auto_posted`/`confidence_score`/`force_optional` kwargs
+for this (all default to the old manual-voucher behavior, non-breaking). 900/900
+backend tests pass (2 new: happy path, and the no-known-uploader fallback). Local
+only — not yet deployed to prod (needs migration `0026` + the usual scp/rebuild
+cycle). Still open: per-category mapping, a Sales-side default, mobile
+review-queue UI for everything that still lands in `review`, Celery-worker-mode
+test, whatsapp/sms/email ingestion despite the enum having those values. See
+`docs/API.md`'s Ingestions section, "What's NOT built yet", for the current list.
 
 **Real bug found and fixed along the way, worth remembering for the NEXT new
 migration too:** three independent test files each keep their own hardcoded

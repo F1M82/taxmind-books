@@ -1156,14 +1156,20 @@ item is a trimmed view: `id`, `source`, `status`, `content_type`,
 `extraction_confidence`, `extraction_flags`, `received_at`.
 
 **What's NOT built yet (deliberately, see CLAUDE.md "Phase 1 scope"):**
-- **Auto-voucher construction.** The contract's original Flow-B wording ("Voucher
-  created with `is_optional_in_tally=true`...") assumed a 2-line Dr/Cr voucher can be
-  built straight from an extracted invoice. Nothing in the architecture docs says
-  *which* ledger is the non-party side (a default "Purchases"/"Sales" ledger? a
-  per-category mapping?) — that's a real product decision, not a coding gap, and is
-  intentionally left for the next session. Until it's made, `matched`/`review`
-  ingestions sit with `posted_voucher_id=null`; a human has to turn the parsed data
-  into a voucher by hand (mobile review-queue UI for this also doesn't exist yet).
+- **Auto-voucher construction — SHIPPED 2026-10-12** (`company.default_purchase_ledger_id`,
+  `app/services/extraction/extraction_pipeline._try_auto_post`). Decision made: a single
+  per-company default Purchase ledger (not per-category), set via
+  `PATCH /companies/{id}` by an owner/admin. A `matched` ingestion (confidence ≥ 0.90,
+  no critical flags, party ledger found) with the default ledger configured and a known
+  uploader (`ingestion.created_by`) auto-builds a 2-line Purchase voucher — Dr the
+  default ledger, Cr the matched party ledger, header `gst_applicable`/`cgst`/`sgst`/
+  `igst` from the extraction — via `VoucherService.create(..., force_optional=True)`,
+  same Optional-until-approved guarantee as Flow B always specified. The ingestion
+  flips straight to `posted` with `posted_voucher_id` set. Self-invoice (`Sales`)
+  extractions and ingestions with no `default_purchase_ledger_id` or no `created_by`
+  still just land in `matched`/`review` with `posted_voucher_id=null`, same as before —
+  no per-category mapping or Sales default exists yet, and the mobile review-queue UI
+  for the manual path still doesn't exist either.
 - **S3 storage.** Files live on local disk (`STORAGE_DIR`, see `app/services/extraction/storage.py`)
   instead of S3 — no bucket is provisioned for the pilot. Swapping later only touches
   that one module (same key-based interface).

@@ -15,28 +15,149 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.core.audit import AuditContext, AuditEmitter
+from app.core.exceptions import (
+    LedgerNotFound,
+    LedgerNotSyncedToTally,
+    ValidationFailed,
+    VoucherEntriesUnbalanced,
+    VoucherTypeRuleViolation,
+)
 from app.models.company import Company
 from app.models.ingestion import Ingestion, IngestionStatus
+from app.models.user import User
+from app.schemas.voucher import VoucherCreate, VoucherEntryCreate
 from app.services.extraction import image_prep, party_matcher, storage
+from app.services.extraction.extraction_schema import ExtractedInvoice
 from app.services.extraction.invoice_extractor import (
     ExtractionHardFailure,
     ExtractionMalformedOutput,
     extract_invoice,
 )
-from app.services.extraction.validator import NotAnInvoice, validate
+from app.services.extraction.validator import NotAnInvoice, ValidationResult, validate
+from app.services.voucher_service import VoucherService
 
 logger = logging.getLogger("app.services.extraction.extraction_pipeline")
 
 LOW_CONFIDENCE_THRESHOLD = 0.40
 
+# Errors that mean "this invoice doesn't fit the minimal v1 auto-voucher
+# shape" -- never a pipeline bug. Caught so a weird invoice falls back to
+# the pre-existing behavior (ingestion stays `matched`/`review`,
+# posted_voucher_id stays NULL, a human posts it by hand) instead of
+# failing the whole extraction.
+_AUTO_POST_SKIP_ERRORS = (
+    VoucherTypeRuleViolation,
+    LedgerNotFound,
+    LedgerNotSyncedToTally,
+    VoucherEntriesUnbalanced,
+    ValidationFailed,
+)
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _try_auto_post(
+    db: Session,
+    *,
+    ingestion: Ingestion,
+    company: Company,
+    extracted: ExtractedInvoice,
+    result: ValidationResult,
+    party_ledger_id: UUID,
+) -> UUID | None:
+    """Build and create the 2-line Purchase voucher for a clean
+    extraction, per the per-company default-ledger decision (CLAUDE.md
+    "Phase 1 wedge"). Returns the new voucher's id, or None if this
+    invoice doesn't fit the minimal v1 shape -- never raises; the caller
+    leaves the ingestion exactly as before this feature existed.
+    """
+    if result.suggested_voucher_type != "Purchase":
+        return None  # self-invoice (Sales) case: no default sales ledger yet
+    if company.default_purchase_ledger_id is None:
+        return None  # owner/admin hasn't configured one (PATCH /companies/{id})
+    if extracted.total_amount is None or extracted.total_amount <= 0:
+        return None
+
+    gst_applicable = bool(
+        (extracted.cgst or Decimal("0"))
+        + (extracted.sgst or Decimal("0"))
+        + (extracted.igst or Decimal("0"))
+    )
+    place_of_supply = result.vendor_state_code if gst_applicable else None
+    if gst_applicable and place_of_supply is None:
+        return None  # VoucherCreate requires it; we have no state code to offer
+
+    actor = db.query(User).filter(User.id == ingestion.created_by).first()
+    if actor is None:
+        return None  # no known uploader to attribute the voucher to
+
+    audit = AuditEmitter(
+        db,
+        AuditContext(
+            company=company,
+            user=actor,
+            ip_address=None,
+            user_agent="extraction-pipeline/1.0",
+            request_id=uuid4(),
+            source="worker",
+        ),
+    )
+    service = VoucherService(db, audit, company.id)
+    try:
+        data = VoucherCreate(
+            voucher_type="Purchase",
+            date=extracted.invoice_date or ingestion.received_at.date(),
+            narration=(
+                f"Auto-extracted from {ingestion.source.value} invoice"
+                + (f" #{extracted.invoice_number}" if extracted.invoice_number else "")
+            ),
+            reference=extracted.invoice_number,
+            total_amount=extracted.total_amount,
+            entries=[
+                VoucherEntryCreate(
+                    ledger_id=company.default_purchase_ledger_id,
+                    amount=extracted.total_amount,
+                    entry_type="Dr",
+                ),
+                VoucherEntryCreate(
+                    ledger_id=party_ledger_id,
+                    amount=extracted.total_amount,
+                    entry_type="Cr",
+                ),
+            ],
+            gst_applicable=gst_applicable,
+            place_of_supply=place_of_supply,
+            cgst=extracted.cgst or Decimal("0"),
+            sgst=extracted.sgst or Decimal("0"),
+            igst=extracted.igst or Decimal("0"),
+        )
+        voucher = service.create(
+            data,
+            actor,
+            source=ingestion.source.value,
+            source_ingestion_id=ingestion.id,
+            is_auto_posted=True,
+            confidence_score=Decimal(str(round(result.confidence, 3))),
+            force_optional=True,
+        )
+    except (*_AUTO_POST_SKIP_ERRORS, PydanticValidationError):
+        logger.info(
+            "ingestion %s: extraction matched but auto-voucher-construction "
+            "skipped (invoice doesn't fit the minimal v1 shape)",
+            ingestion.id,
+            exc_info=True,
+        )
+        return None
+    return voucher.id
 
 
 def _fail(
@@ -134,11 +255,25 @@ def run_extraction(
     ingestion.extraction_confidence = Decimal(str(round(result.confidence, 3)))
     ingestion.extraction_flags = all_flags
     ingestion.extracted_at = _now()
+    is_matched = not (result.needs_review or party.ledger_id is None)
     ingestion.status = (
-        IngestionStatus.review
-        if (result.needs_review or party.ledger_id is None)
-        else IngestionStatus.matched
+        IngestionStatus.matched if is_matched else IngestionStatus.review
     )
+
+    if is_matched and company is not None:
+        assert party.ledger_id is not None  # guaranteed by is_matched above
+        voucher_id = _try_auto_post(
+            db,
+            ingestion=ingestion,
+            company=company,
+            extracted=extracted,
+            result=result,
+            party_ledger_id=party.ledger_id,
+        )
+        if voucher_id is not None:
+            ingestion.posted_voucher_id = voucher_id
+            ingestion.status = IngestionStatus.posted
+
     db.commit()
 
 

@@ -132,6 +132,11 @@ class VoucherService:
         actor: User,
         *,
         client_channel: str | None = None,
+        source: str = "manual",
+        source_ingestion_id: UUID | None = None,
+        is_auto_posted: bool = False,
+        confidence_score: Decimal | None = None,
+        force_optional: bool = False,
     ) -> Voucher:
         self._validate_entries(data)
         self._validate_gst(data)
@@ -164,17 +169,21 @@ class VoucherService:
             # "live in the books"; tally_posted_at is "mirrored to Tally").
             status=VoucherStatus.pending_tally_post,
             tally_post_queued_at=datetime.now(UTC),
-            # v1.3 item 7: manual voucher creation has no caller-supplied
-            # is_optional_in_tally field at all (that's an OCR/Flow-B
-            # concept, see EXTRACTION_CONTRACT.md) -- it is forced True
-            # here, regardless of anything else, when any referenced
-            # ledger is still unconfirmed-in-Tally (`created_via_mobile
-            # AND confirmed_in_tally_at IS NULL`). See
+            # v1.3 item 7: the API never takes a caller-supplied
+            # is_optional_in_tally field -- it is forced True here,
+            # regardless of anything else, when any referenced ledger is
+            # still unconfirmed-in-Tally (`created_via_mobile AND
+            # confirmed_in_tally_at IS NULL`), OR when the caller is the
+            # extraction pipeline (`force_optional`, Phase 1 wedge --
+            # EXTRACTION_CONTRACT.md Flow B: every AI-extracted voucher is
+            # Optional until a human approves it, no exceptions). See
             # `_validate_ledger_ownership` and AMENDMENTS_v1.3.md.
-            is_optional_in_tally=self._pending_optional_taint,
-            source="manual",
+            is_optional_in_tally=self._pending_optional_taint or force_optional,
+            source=source,
+            source_ingestion_id=source_ingestion_id,
             client_channel=client_channel,
-            is_auto_posted=False,
+            is_auto_posted=is_auto_posted,
+            confidence_score=confidence_score,
             gst_applicable=data.gst_applicable,
             place_of_supply=data.place_of_supply,
             cgst=data.cgst,

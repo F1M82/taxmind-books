@@ -133,6 +133,10 @@ endpoints:
     methods: [GET, POST]
   - path: /api/v1/ingestions/{ingestion_id}
     methods: [GET]
+  - path: /api/v1/ingestions/{ingestion_id}/discard
+    methods: [POST]
+  - path: /api/v1/ingestions/{ingestion_id}/link-voucher
+    methods: [POST]
 
   # ---- Liveness / placeholder ----
   - path: /

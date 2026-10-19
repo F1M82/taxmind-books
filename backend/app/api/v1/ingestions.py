@@ -32,6 +32,8 @@ from app.core.idempotency import is_valid_key
 from app.models.company import Company
 from app.models.user import User
 from app.schemas.ingestion import (
+    IngestionDiscardRequest,
+    IngestionLinkVoucherRequest,
     IngestionListItem,
     IngestionListResponse,
     IngestionOut,
@@ -174,3 +176,50 @@ def get_ingestion(
 ) -> IngestionOut:
     service = IngestionService(db, audit=None, company_id=company.id)  # type: ignore[arg-type]
     return _to_out(service.get(ingestion_id))
+
+
+@router.post("/{ingestion_id}/discard", response_model=IngestionOut)
+def discard_ingestion(
+    ingestion_id: UUID,
+    data: IngestionDiscardRequest,
+    request: Request,
+    company: Company = Depends(get_active_company),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_scoped_session),
+) -> IngestionOut:
+    """Mobile review queue: dismiss an ingestion that needs no voucher
+    (duplicate, junk scan, handled elsewhere)."""
+    audit = _user_audit_emitter(request, db, user, company=company)
+    service = IngestionService(db, audit, company_id=company.id)
+    ingestion = service.discard(ingestion_id, reason=data.reason)
+    db.commit()
+    db.refresh(ingestion)
+    return _to_out(ingestion)
+
+
+@router.post("/{ingestion_id}/link-voucher", response_model=IngestionOut)
+def link_ingestion_voucher(
+    ingestion_id: UUID,
+    data: IngestionLinkVoucherRequest,
+    request: Request,
+    company: Company = Depends(get_active_company),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_scoped_session),
+) -> IngestionOut:
+    """Mobile review queue: record that `voucher_id` (created by hand
+    through the normal voucher-create flow) resolves this ingestion."""
+    from app.services.voucher_service import VoucherService
+
+    # Raises voucher_not_found (404) if it doesn't exist or belongs to
+    # a different company -- same tenancy guarantee as every other
+    # cross-entity reference in this API.
+    VoucherService(db, audit=None, company_id=company.id).get(  # type: ignore[arg-type]
+        data.voucher_id
+    )
+
+    audit = _user_audit_emitter(request, db, user, company=company)
+    service = IngestionService(db, audit, company_id=company.id)
+    ingestion = service.link_voucher(ingestion_id, voucher_id=data.voucher_id)
+    db.commit()
+    db.refresh(ingestion)
+    return _to_out(ingestion)

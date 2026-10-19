@@ -17,6 +17,7 @@ import VoucherEntryScreen from "../../src/screens/vouchers/VoucherEntryScreen";
 
 const mockCreateVoucher = jest.fn();
 const mockListLedgers = jest.fn();
+const mockLinkVoucherToIngestion = jest.fn();
 
 jest.mock("../../src/api/vouchers", () => ({
   createVoucher: (...args: unknown[]) => mockCreateVoucher(...args),
@@ -24,6 +25,11 @@ jest.mock("../../src/api/vouchers", () => ({
 
 jest.mock("../../src/api/ledgers", () => ({
   listLedgers: (...args: unknown[]) => mockListLedgers(...args),
+}));
+
+jest.mock("../../src/api/ingestions", () => ({
+  linkVoucherToIngestion: (...args: unknown[]) =>
+    mockLinkVoucherToIngestion(...args),
 }));
 
 // crypto.getRandomValues isn't there by default in Jest's jsdom env;
@@ -44,6 +50,7 @@ beforeAll(() => {
 beforeEach(() => {
   mockCreateVoucher.mockReset();
   mockListLedgers.mockReset();
+  mockLinkVoucherToIngestion.mockReset();
 });
 
 
@@ -222,4 +229,136 @@ test("type selector switches the voucher_type sent to the API", async () => {
   });
   const [body] = mockCreateVoucher.mock.calls[0];
   expect(body.voucher_type).toBe("Purchase");
+});
+
+
+test("with sourceIngestionId, links the created voucher back to the ingestion", async () => {
+  mockListLedgers.mockResolvedValue({
+    items: [
+      {
+        id: "led-bank",
+        name: "Bank",
+        group_name: "Bank Accounts",
+        opening_balance: "0.00",
+        balance_type: "Dr",
+        gstin: null,
+        is_active: true,
+      },
+      {
+        id: "led-party",
+        name: "Sharma Traders",
+        group_name: "Sundry Debtors",
+        opening_balance: "0.00",
+        balance_type: "Dr",
+        gstin: null,
+        is_active: true,
+      },
+    ],
+    meta: { next_cursor: null, total: 2 },
+  });
+  mockCreateVoucher.mockResolvedValue({ id: "v-linked" });
+  mockLinkVoucherToIngestion.mockResolvedValue({});
+
+  const onCreated = jest.fn();
+  const { getByLabelText, findByLabelText, findByText } = render(
+    <VoucherEntryScreen
+      onCreated={onCreated}
+      onCancel={jest.fn()}
+      sourceIngestionId="ing-1"
+    />,
+  );
+
+  await findByText(
+    "This voucher will be linked back to the scanned invoice on save.",
+  );
+
+  await act(async () => {
+    fireEvent.press(getByLabelText("pick-ledger-0"));
+  });
+  await act(async () => {
+    fireEvent.press(await findByLabelText("pick-led-bank"));
+  });
+  await act(async () => {
+    fireEvent.press(getByLabelText("pick-ledger-1"));
+  });
+  await act(async () => {
+    fireEvent.press(await findByLabelText("pick-led-party"));
+  });
+
+  fireEvent.changeText(getByLabelText("entry-amount-0"), "1500");
+  fireEvent.changeText(getByLabelText("entry-amount-1"), "1500");
+
+  await act(async () => {
+    fireEvent.press(getByLabelText("post"));
+  });
+
+  await waitFor(() => {
+    expect(mockLinkVoucherToIngestion).toHaveBeenCalledWith(
+      "ing-1",
+      "v-linked",
+    );
+  });
+  expect(onCreated).toHaveBeenCalled();
+});
+
+
+test("a failed link does not block onCreated (voucher is already live)", async () => {
+  mockListLedgers.mockResolvedValue({
+    items: [
+      {
+        id: "led-bank",
+        name: "Bank",
+        group_name: "Bank Accounts",
+        opening_balance: "0.00",
+        balance_type: "Dr",
+        gstin: null,
+        is_active: true,
+      },
+      {
+        id: "led-party",
+        name: "Sharma Traders",
+        group_name: "Sundry Debtors",
+        opening_balance: "0.00",
+        balance_type: "Dr",
+        gstin: null,
+        is_active: true,
+      },
+    ],
+    meta: { next_cursor: null, total: 2 },
+  });
+  mockCreateVoucher.mockResolvedValue({ id: "v-linked" });
+  mockLinkVoucherToIngestion.mockRejectedValue(new Error("boom"));
+
+  const onCreated = jest.fn();
+  const { getByLabelText, findByLabelText } = render(
+    <VoucherEntryScreen
+      onCreated={onCreated}
+      onCancel={jest.fn()}
+      sourceIngestionId="ing-1"
+    />,
+  );
+
+  await act(async () => {
+    fireEvent.press(getByLabelText("pick-ledger-0"));
+  });
+  await act(async () => {
+    fireEvent.press(await findByLabelText("pick-led-bank"));
+  });
+  await act(async () => {
+    fireEvent.press(getByLabelText("pick-ledger-1"));
+  });
+  await act(async () => {
+    fireEvent.press(await findByLabelText("pick-led-party"));
+  });
+
+  fireEvent.changeText(getByLabelText("entry-amount-0"), "1500");
+  fireEvent.changeText(getByLabelText("entry-amount-1"), "1500");
+
+  await act(async () => {
+    fireEvent.press(getByLabelText("post"));
+  });
+
+  await waitFor(() => {
+    expect(onCreated).toHaveBeenCalled();
+  });
 });

@@ -80,6 +80,8 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset(
         "device.registered",
         "device.unregistered",
         "ingestion.created",
+        "ingestion.discarded",
+        "ingestion.voucher_linked",
     }
 )
 

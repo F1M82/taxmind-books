@@ -111,6 +111,8 @@ Actions follow a strict `entity.verb` naming convention. The full v1 vocabulary:
 | `ledger.confirmed_in_tally` | (v1.3) Mobile-created ledger confirmed present on next Tally sync |
 | `connector.tally_companies_discovered` | (v1.3) Connector reported the Tally company list to the backend |
 | `ingestion.created` | (Phase 1) Invoice photo/PDF uploaded, extraction enqueued |
+| `ingestion.discarded` | (Phase 1 wedge, mobile review queue) Operator dismissed a stuck ingestion |
+| `ingestion.voucher_linked` | (Phase 1 wedge, mobile review queue) Operator linked a manually-created voucher to resolve an ingestion |
 
 New actions added in later phases extend this list. Coder Claude does not invent new action names; they are added to this document first.
 

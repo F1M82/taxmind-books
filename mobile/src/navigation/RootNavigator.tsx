@@ -14,9 +14,12 @@ import AuditLogScreen from "../screens/admin/AuditLogScreen";
 import MembersScreen from "../screens/admin/MembersScreen";
 import LoginScreen from "../screens/auth/LoginScreen";
 import RegisterScreen from "../screens/auth/RegisterScreen";
+import CompanySettingsScreen from "../screens/admin/CompanySettingsScreen";
 import CompanyCreateScreen from "../screens/companies/CompanyCreateScreen";
 import CompanyListScreen from "../screens/companies/CompanyListScreen";
 import DashboardScreen from "../screens/dashboard/DashboardScreen";
+import IngestionDetailScreen from "../screens/ingestions/IngestionDetailScreen";
+import IngestionListScreen from "../screens/ingestions/IngestionListScreen";
 import LedgerCreateScreen from "../screens/ledgers/LedgerCreateScreen";
 import LedgerListScreen from "../screens/ledgers/LedgerListScreen";
 import OnboardingScreen from "../screens/onboarding/OnboardingScreen";
@@ -40,7 +43,7 @@ type AppStackParamList = {
   Ledgers: undefined;
   NewLedger: undefined;
   Vouchers: undefined;
-  NewVoucher: undefined;
+  NewVoucher: { sourceIngestionId?: string } | undefined;
   TrialBalance: undefined;
   ProfitLoss: undefined;
   BalanceSheet: undefined;
@@ -51,6 +54,9 @@ type AppStackParamList = {
   AuditLog: undefined;
   AddDevice: undefined;
   StockValuation: undefined;
+  Ingestions: undefined;
+  IngestionDetail: { ingestionId: string };
+  CompanySettings: undefined;
 };
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -105,6 +111,10 @@ function AppFlow(): React.ReactElement {
             onOpenAddDevice={() => props.navigation.navigate("AddDevice")}
             onOpenStockValuation={() =>
               props.navigation.navigate("StockValuation")
+            }
+            onOpenIngestions={() => props.navigation.navigate("Ingestions")}
+            onOpenCompanySettings={() =>
+              props.navigation.navigate("CompanySettings")
             }
           />
         )}
@@ -170,16 +180,60 @@ function AppFlow(): React.ReactElement {
       <AppStack.Screen name="NewVoucher" options={{ title: "New voucher" }}>
         {(props: NativeStackScreenProps<AppStackParamList, "NewVoucher">) => (
           <VoucherEntryScreen
+            sourceIngestionId={props.route.params?.sourceIngestionId}
             onCreated={() =>
-              props.navigation.reset({
-                index: 1,
-                routes: [{ name: "Dashboard" }, { name: "Vouchers" }],
-              })
+              props.route.params?.sourceIngestionId
+                ? props.navigation.reset({
+                    index: 1,
+                    routes: [{ name: "Dashboard" }, { name: "Ingestions" }],
+                  })
+                : props.navigation.reset({
+                    index: 1,
+                    routes: [{ name: "Dashboard" }, { name: "Vouchers" }],
+                  })
             }
             onCancel={() => props.navigation.goBack()}
           />
         )}
       </AppStack.Screen>
+      <AppStack.Screen name="Ingestions" options={{ title: "Review queue" }}>
+        {(props: NativeStackScreenProps<AppStackParamList, "Ingestions">) => (
+          <IngestionListScreen
+            onOpenDetail={(ingestionId) =>
+              props.navigation.navigate("IngestionDetail", { ingestionId })
+            }
+          />
+        )}
+      </AppStack.Screen>
+      <AppStack.Screen
+        name="IngestionDetail"
+        options={{ title: "Scanned invoice" }}
+      >
+        {(
+          props: NativeStackScreenProps<AppStackParamList, "IngestionDetail">,
+        ) => (
+          <IngestionDetailScreen
+            ingestionId={props.route.params.ingestionId}
+            onCreateVoucher={(ingestionId) =>
+              props.navigation.navigate("NewVoucher", {
+                sourceIngestionId: ingestionId,
+              })
+            }
+            onResolved={() =>
+              props.navigation.reset({
+                index: 1,
+                routes: [{ name: "Dashboard" }, { name: "Ingestions" }],
+              })
+            }
+            onBack={() => props.navigation.goBack()}
+          />
+        )}
+      </AppStack.Screen>
+      <AppStack.Screen
+        name="CompanySettings"
+        component={CompanySettingsScreen}
+        options={{ title: "Company settings" }}
+      />
       <AppStack.Screen
         name="TrialBalance"
         component={TrialBalanceScreen}

@@ -37,6 +37,8 @@ export default function DashboardScreen({
   onOpenAuditLog,
   onOpenAddDevice,
   onOpenStockValuation,
+  onOpenIngestions,
+  onOpenCompanySettings,
 }: {
   onOpenCompanies: () => void;
   onOpenLedgers: () => void;
@@ -50,6 +52,8 @@ export default function DashboardScreen({
   onOpenAuditLog: () => void;
   onOpenAddDevice: () => void;
   onOpenStockValuation: () => void;
+  onOpenIngestions: () => void;
+  onOpenCompanySettings: () => void;
 }): React.ReactElement {
   const { user, signOut } = useAuth();
   const { activeCompanyId, loading: companyLoading } = useActiveCompany();
@@ -234,6 +238,18 @@ export default function DashboardScreen({
                 Create + Tally status
               </Text>
             </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="open-ingestions"
+              onPress={onOpenIngestions}
+              style={({ pressed }) => [
+                styles.shortcut,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text style={styles.shortcutTitle}>Review queue</Text>
+              <Text style={styles.shortcutSubtitle}>Scanned invoices</Text>
+            </Pressable>
           </View>
 
           <Text style={styles.sectionLabel}>REPORTS</Text>
@@ -306,6 +322,20 @@ export default function DashboardScreen({
                   <Text style={styles.shortcutTitle}>Stock valuation</Text>
                   <Text style={styles.shortcutSubtitle}>
                     Opening / closing stock per year
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="open-company-settings"
+                  onPress={onOpenCompanySettings}
+                  style={({ pressed }) => [
+                    styles.shortcut,
+                    pressed && { opacity: 0.85 },
+                  ]}
+                >
+                  <Text style={styles.shortcutTitle}>Company settings</Text>
+                  <Text style={styles.shortcutSubtitle}>
+                    Default purchase ledger
                   </Text>
                 </Pressable>
                 {isOwner && (

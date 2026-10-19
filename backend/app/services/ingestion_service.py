@@ -12,12 +12,20 @@ from uuid import UUID, uuid4
 from sqlalchemy.orm import Session
 
 from app.core.audit import AuditEmitter
-from app.core.exceptions import IngestionNotFound
-from app.models.ingestion import Ingestion, IngestionSource
+from app.core.exceptions import IngestionAlreadyResolved, IngestionNotFound
+from app.models.ingestion import Ingestion, IngestionSource, IngestionStatus
 
 MAX_CONTENT_SIZE = 10 * 1024 * 1024  # 10 MB, per EXTRACTION_CONTRACT.md
 ALLOWED_CONTENT_TYPES = frozenset(
     {"image/jpeg", "image/png", "image/heic", "application/pdf"}
+)
+
+# Statuses from which a human can manually resolve an ingestion (the
+# mobile review queue). `posted`/`discarded` are terminal; `received`/
+# `extracting`/`extracted`/`matching` are mid-pipeline and not shown in
+# the queue, but are excluded here too in case of a slow/stuck row.
+RESOLVABLE_STATUSES = frozenset(
+    {IngestionStatus.review, IngestionStatus.matched, IngestionStatus.failed}
 )
 
 
@@ -118,3 +126,48 @@ class IngestionService:
         total = query.count()
         rows = query.limit(limit).all()
         return rows, total
+
+    def discard(self, ingestion_id: UUID, *, reason: str | None) -> Ingestion:
+        """Manually dismiss a stuck ingestion (duplicate, junk scan, etc.)."""
+        ingestion = self.get(ingestion_id)
+        if ingestion.status not in RESOLVABLE_STATUSES:
+            raise IngestionAlreadyResolved(
+                f"Ingestion is already {ingestion.status.value}; "
+                "nothing to discard."
+            )
+        before = _snapshot(ingestion)
+        ingestion.status = IngestionStatus.discarded
+        self.db.flush()
+        self.audit.emit(
+            action="ingestion.discarded",
+            entity_type="ingestion",
+            entity_id=ingestion.id,
+            old_value=before,
+            new_value=_snapshot(ingestion) | {"reason": reason},
+        )
+        return ingestion
+
+    def link_voucher(self, ingestion_id: UUID, *, voucher_id: UUID) -> Ingestion:
+        """Record that a human manually created `voucher_id` for this
+        ingestion (the extraction pipeline couldn't auto-post it). The
+        caller is responsible for confirming the voucher exists and
+        belongs to this company before calling this.
+        """
+        ingestion = self.get(ingestion_id)
+        if ingestion.status not in RESOLVABLE_STATUSES:
+            raise IngestionAlreadyResolved(
+                f"Ingestion is already {ingestion.status.value}; "
+                "cannot link a voucher."
+            )
+        before = _snapshot(ingestion)
+        ingestion.status = IngestionStatus.posted
+        ingestion.posted_voucher_id = voucher_id
+        self.db.flush()
+        self.audit.emit(
+            action="ingestion.voucher_linked",
+            entity_type="ingestion",
+            entity_id=ingestion.id,
+            old_value=before,
+            new_value=_snapshot(ingestion),
+        )
+        return ingestion

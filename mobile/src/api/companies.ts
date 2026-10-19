@@ -21,6 +21,7 @@ export interface CompanyOut {
   state_code: string | null;
   pincode: string | null;
   accounting_source: string;
+  default_purchase_ledger_id: string | null;
   created_at: string;
   your_role: string;
 }
@@ -46,10 +47,21 @@ export async function listCompanies(): Promise<CompanyListResponse> {
   return api.get<CompanyListResponse>("/api/v1/companies/");
 }
 
+export async function getCompany(companyId: string): Promise<CompanyOut> {
+  return api.get<CompanyOut>(`/api/v1/companies/${companyId}`);
+}
+
 export async function createCompany(
   req: CompanyCreateRequest,
 ): Promise<CompanyOut> {
   return api.post<CompanyOut>("/api/v1/companies/", req);
+}
+
+export async function updateCompany(
+  companyId: string,
+  patch: { default_purchase_ledger_id?: string | null },
+): Promise<CompanyOut> {
+  return api.patch<CompanyOut>(`/api/v1/companies/${companyId}`, patch);
 }
 
 // ---- Members (admin surface) ----

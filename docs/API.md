@@ -1142,8 +1142,40 @@ Get the status of an ingestion.
 ```
 
 `status` values actually used: `received` → `extracting` → `extracted` → (`matched` |
-`review` | `discarded` | `failed`). `matched`/`review`/`discarded`/`failed` are
-terminal for this version — there is no re-extraction or approval endpoint yet.
+`review` | `discarded` | `failed`). `discarded`/`posted` are terminal; a `review`,
+`matched`, or `failed` row can still be manually resolved — see the two endpoints
+below (mobile review queue, shipped 2026-10-19). There is still no re-extraction
+endpoint.
+
+#### `POST /api/v1/ingestions/{ingestion_id}/discard`
+
+Mobile review queue: dismiss an ingestion that needs no voucher (duplicate, junk
+scan, handled elsewhere). Requires auth, `X-Company-ID`. No Idempotency-Key — a
+pure local status flip, same class as `reject-optional`.
+
+**Request:** `{"reason": "duplicate scan"}` (`reason` optional, ≤500 chars).
+
+**Response 200:** the updated `IngestionOut`, `status="discarded"`.
+
+**Errors:**
+- `404 ingestion_not_found`
+- `409 ingestion_already_resolved` — already `posted` or `discarded`
+
+#### `POST /api/v1/ingestions/{ingestion_id}/link-voucher`
+
+Mobile review queue: record that `voucher_id` — created by hand through the normal
+`POST /vouchers/` flow, using the extracted fields on this ingestion as a reference —
+resolves it. There is no automatic prefill or linking at voucher-create time; the
+operator creates the voucher first, then links it here.
+
+**Request:** `{"voucher_id": "uuid"}`.
+
+**Response 200:** the updated `IngestionOut`, `status="posted"`, `posted_voucher_id` set.
+
+**Errors:**
+- `404 ingestion_not_found`
+- `404 voucher_not_found` — doesn't exist, or belongs to a different company
+- `409 ingestion_already_resolved` — already `posted` or `discarded`
 
 #### `GET /api/v1/ingestions/`
 
@@ -1168,8 +1200,17 @@ item is a trimmed view: `id`, `source`, `status`, `content_type`,
   flips straight to `posted` with `posted_voucher_id` set. Self-invoice (`Sales`)
   extractions and ingestions with no `default_purchase_ledger_id` or no `created_by`
   still just land in `matched`/`review` with `posted_voucher_id=null`, same as before —
-  no per-category mapping or Sales default exists yet, and the mobile review-queue UI
-  for the manual path still doesn't exist either.
+  no per-category mapping or Sales default exists yet.
+- **Mobile review-queue UI — SHIPPED 2026-10-19.** `IngestionListScreen`/
+  `IngestionDetailScreen` (mirrors the voucher list/detail pattern) plus a
+  `CompanySettingsScreen` for `default_purchase_ledger_id` (previously API-only).
+  Manual resolution flow: the operator reads the extracted fields on the detail
+  screen, creates the voucher by hand through the normal flow (`sourceIngestionId`
+  passed through so `VoucherEntryScreen` auto-links it on success via
+  `POST /ingestions/{id}/link-voucher`), or discards the ingestion outright via
+  `POST /ingestions/{id}/discard` if no voucher is needed. There is still no
+  automatic field-prefill into the voucher form — the operator re-types what the
+  detail screen shows.
 - **S3 storage.** Files live on local disk (`STORAGE_DIR`, see `app/services/extraction/storage.py`)
   instead of S3 — no bucket is provisioned for the pilot. Swapping later only touches
   that one module (same key-based interface).
@@ -1622,6 +1663,8 @@ The following `error.code` values are stable v1 contracts. Clients depend on the
 | `voucher_import_before_anchor` | 422 | (Phase B) Voucher import range starts before the opening-balance anchor (or `to_date` < `from_date`) |
 | `voucher_import_run_not_found` | 404 | (Phase B) Unknown voucher-import task id, or it belongs to another company |
 | `opening_balance_anchor_mismatch` | 409 | (P3.2) Opening-balance seed called with an anchor date different from the company's already-locked `opening_balance_anchor_date` |
+| `ingestion_not_found` | 404 | (Phase 1) Ingestion doesn't exist OR belongs to another company |
+| `ingestion_already_resolved` | 409 | (Phase 1, mobile review queue) Discard/link-voucher called on an ingestion already `posted` or `discarded` |
 
 New error codes added in later phases extend this table; existing codes are not renamed.
 

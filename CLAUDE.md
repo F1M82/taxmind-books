@@ -759,3 +759,39 @@ The supervising GPT/OpenClaw agent must verify the entry against git status, tes
 - Verification: Ruff reduced from 8 errors to 1 remaining PLR0915 warning in extraction_pipeline.run_extraction.
 - Limitation: the remaining complexity warning requires a deliberate helper extraction; no deployment.
 - Rollback: revert the uncommitted backend diff for these files.
+
+### Task log — 2026-10-19 — Mobile review-queue UI (Phase 1 wedge gap)
+- Objective: close the "mobile review-queue UI doesn't exist" gap from the Phase 1
+  invoice-scan wedge — a human needs a way to resolve `review`/`matched` ingestions
+  and to set `default_purchase_ledger_id` without raw API calls.
+- Scope decided with the user up front: backend needed a small addition too, since
+  there was no way to ever clear an ingestion out of the queue (no discard, no
+  resolve-by-linking-a-voucher endpoint existed before this task).
+- Files changed (backend): `app/core/exceptions.py` (+`IngestionAlreadyResolved`),
+  `app/core/audit.py` (+2 allowed actions), `app/schemas/ingestion.py` (+2 request
+  schemas), `app/services/ingestion_service.py` (+`discard`/`link_voucher`),
+  `app/api/v1/ingestions.py` (+`POST /{id}/discard`, `POST /{id}/link-voucher`),
+  `tests/integration/api/test_ingestions_api.py` (+5 tests),
+  `tests/integration/openapi_phase0.yaml` (+2 routes), `docs/API.md`, `docs/AUDIT.md`.
+- Files changed (mobile): new `src/api/ingestions.ts`; `src/api/companies.ts`
+  (+`default_purchase_ledger_id`, +`getCompany`, +`updateCompany`); new
+  `src/screens/ingestions/{IngestionListScreen,IngestionDetailScreen}.tsx`; new
+  `src/screens/admin/CompanySettingsScreen.tsx` (owner/admin, reuses the existing
+  `LedgerListScreen` picker-modal pattern); `src/screens/vouchers/VoucherEntryScreen.tsx`
+  (+`sourceIngestionId` prop, auto-links the created voucher on success, best-effort —
+  a failed link leaves the item in the queue rather than losing the voucher);
+  `src/navigation/RootNavigator.tsx` + `src/screens/dashboard/DashboardScreen.tsx`
+  wiring; 3 new test files + extended `VoucherEntry.test.tsx`/`Dashboard.test.tsx`.
+- Acceptance criteria and results: backend 905/905 tests pass (full suite, confirmed
+  after fixing the openapi_phase0.yaml reference-spec drift the new routes triggered);
+  mobile 95/95 jest tests pass, `tsc --noEmit` clean. `ruff check` clean on all touched
+  backend files. No migration needed (reuses existing `Ingestion.status`/
+  `posted_voucher_id` columns and the already-shipped `default_purchase_ledger_id`
+  column + `PATCH /companies/{id}` endpoint from the 2026-10-12 auto-voucher work).
+- Known limitation: still no automatic field-prefill from the ingestion's extracted
+  data into the voucher-create form — the operator reads the detail screen and
+  re-types the amounts/ledger choice by hand. `eslint` could not be run locally
+  (not installed in this environment); `tsc` + `jest` were relied on instead.
+- Deployment: NOT deployed. Local only — committed to git, not yet shipped to the VPS.
+  Needs no new migration, just the usual backend file copy + rebuild/restart cycle
+  before mobile needs a new EAS build to actually reach a phone.

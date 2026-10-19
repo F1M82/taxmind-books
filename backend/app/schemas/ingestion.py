@@ -47,3 +47,11 @@ class IngestionListItem(TaxMindBooksBase):
 class IngestionListResponse(TaxMindBooksBase):
     items: list[IngestionListItem]
     meta: dict[str, Any]
+
+
+class IngestionDiscardRequest(TaxMindBooksBase):
+    reason: Annotated[str, StringConstraints(max_length=500)] | None = None
+
+
+class IngestionLinkVoucherRequest(TaxMindBooksBase):
+    voucher_id: UUID

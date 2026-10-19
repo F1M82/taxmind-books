@@ -167,6 +167,10 @@ class IngestionFileTooLarge(DomainException):
     code = "file_too_large"
 
 
+class IngestionAlreadyResolved(Conflict):
+    code = "ingestion_already_resolved"
+
+
 class IdempotencyKeyRequired(BadRequest):
     code = "idempotency_key_required"
 

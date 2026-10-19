@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import { ApiError } from "../../api/client";
+import { linkVoucherToIngestion } from "../../api/ingestions";
 import { LedgerListItem } from "../../api/ledgers";
 import { createVoucher, VoucherType } from "../../api/vouchers";
 import { formatINR, normalizeMoneyInput } from "../../utils/money";
@@ -63,9 +64,12 @@ function _uuid(): string {
 export default function VoucherEntryScreen({
   onCreated,
   onCancel,
+  sourceIngestionId,
 }: {
   onCreated: () => void;
   onCancel: () => void;
+  /** Review-queue flow: link the created voucher back to this ingestion. */
+  sourceIngestionId?: string;
 }): React.ReactElement {
   const [voucherType, setVoucherType] = useState<VoucherType>("Receipt");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -109,7 +113,7 @@ export default function VoucherEntryScreen({
         entry_type: e.entry_type,
       }));
       const total = normalizeMoneyInput(String(sumDr.toFixed(2)))!;
-      await createVoucher(
+      const created = await createVoucher(
         {
           voucher_type: voucherType,
           date,
@@ -121,6 +125,16 @@ export default function VoucherEntryScreen({
         },
         _uuid(),
       );
+      if (sourceIngestionId !== undefined) {
+        // Best-effort: the voucher is already live either way; a failed
+        // link just leaves the ingestion in the review queue for a
+        // manual retry instead of disappearing silently.
+        try {
+          await linkVoucherToIngestion(sourceIngestionId, created.id);
+        } catch {
+          // ignore -- see comment above
+        }
+      }
       onCreated();
     } catch (exc) {
       if (exc instanceof ApiError) {
@@ -146,6 +160,11 @@ export default function VoucherEntryScreen({
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>New {voucherType}</Text>
+      {sourceIngestionId !== undefined && (
+        <Text style={styles.hint}>
+          This voucher will be linked back to the scanned invoice on save.
+        </Text>
+      )}
 
       <ScrollView
         horizontal

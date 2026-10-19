@@ -52,6 +52,8 @@ const HANDLERS = {
   onOpenAuditLog: jest.fn(),
   onOpenAddDevice: jest.fn(),
   onOpenStockValuation: jest.fn(),
+  onOpenIngestions: jest.fn(),
+  onOpenCompanySettings: jest.fn(),
 };
 
 beforeEach(() => {

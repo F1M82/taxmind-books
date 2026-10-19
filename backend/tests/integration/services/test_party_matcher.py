@@ -10,12 +10,12 @@ from tests._db_fixtures import make_company
 
 
 def _ledger(company, **overrides):  # type: ignore[no-untyped-def]
-    base = dict(
-        company_id=company.id,
-        name="Sharma Traders",
-        name_normalized="sharma traders",
-        group_name="Sundry Creditors",
-    )
+    base = {
+        "company_id": company.id,
+        "name": "Sharma Traders",
+        "name_normalized": "sharma traders",
+        "group_name": "Sundry Creditors",
+    }
     base.update(overrides)
     return Ledger(**base)
 

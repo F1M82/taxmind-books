@@ -18,9 +18,9 @@ import time
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import app.api.v1.connector_ws as connector_ws_mod
 import jwt
 import pytest
-import app.api.v1.connector_ws as connector_ws_mod
 from app.config import get_settings
 from app.core.security import (
     CONNECTOR_TOKEN_KIND,

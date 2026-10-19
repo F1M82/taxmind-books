@@ -741,3 +741,21 @@ session restart) — `Start-Process "C:\Program Files\Docker\Docker\Docker Deskt
 wait ~5-10s for the engine, then the containers come up on their own (they're not
 set to any particular restart policy that needed re-creating, just needed the
 daemon back).
+
+## Per-task execution log (added 2026-10-17)
+
+After every atomic task, update this file before starting the next task. Each entry must record:
+- task ID and objective;
+- files changed and commit hash (if committed);
+- acceptance criteria and verification results;
+- known limitations, blockers, and rollback notes;
+- whether deployment occurred (deployment requires all acceptance gates).
+
+The supervising GPT/OpenClaw agent must verify the entry against git status, tests, migrations, tenant-isolation checks, audit checks, and deployment evidence. Do not claim a task complete from a running process alone.
+
+### Task log — 2026-10-17 — Ruff cleanup
+- Objective: remove safe, non-semantic Ruff violations from the backend test surface.
+- Files changed: Ruff auto-fixed six import/unused-import issues; backend/tests/integration/services/test_party_matcher.py changed dict(...) to a literal.
+- Verification: Ruff reduced from 8 errors to 1 remaining PLR0915 warning in extraction_pipeline.run_extraction.
+- Limitation: the remaining complexity warning requires a deliberate helper extraction; no deployment.
+- Rollback: revert the uncommitted backend diff for these files.

@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
 
+import pytest
 from app.services.extraction.extraction_schema import ExtractedInvoice
 from app.services.extraction.validator import NotAnInvoice, validate
-import pytest
 
 
 def _invoice(**overrides) -> ExtractedInvoice:  # type: ignore[no-untyped-def]

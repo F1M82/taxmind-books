@@ -32,7 +32,6 @@ from datetime import date
 from uuid import UUID
 
 import pytest
-
 from app.models.ledger import Ledger
 from app.models.voucher import Voucher
 from app.services.tally.voucher_import import (

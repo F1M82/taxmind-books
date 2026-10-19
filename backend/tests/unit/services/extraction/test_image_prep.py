@@ -7,8 +7,8 @@ import io
 import pymupdf
 import pytest
 from app.services.extraction.image_prep import (
-    CorruptFile,
     MAX_LONG_EDGE,
+    CorruptFile,
     UnsupportedContentType,
     prepare_images,
 )
